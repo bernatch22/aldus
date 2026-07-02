@@ -1,216 +1,95 @@
+@import 'tailwindcss';
+
+/*
+ * Aldus — design tokens (paleta estilo Acrobat: gris neutro, acento azul).
+ * El editor usa clases utilitarias de Tailwind. El OVERLAY de nodos sobre el
+ * canvas usa clases dedicadas (NodeOverlay compone strings dinámicos), así que
+ * viven acá como CSS plano — restyled coherente con los tokens.
+ */
+
 :root {
-  --accent: #4f46e5;
-  --ink: #1c1c28;
-  --muted: #71717a;
-  --line: #e4e4e7;
-  --bg: #fafafa;
-  --edited: #b45309;
+  --accent: #2563eb;        /* blue-600  — selección */
+  --accent-soft: #eff6ff;   /* blue-50 */
+  --edited: #d97706;        /* amber-600 — edición pendiente */
+  --edited-soft: #fffbeb;
+  --field: #0d9488;         /* teal-600  — form fields */
+  --danger: #dc2626;        /* red-600 */
+  --line: #e4e4e7;          /* neutral-200 */
+  --ink: #27272a;           /* neutral-800 */
+  --muted: #71717a;         /* neutral-500 */
 }
 
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; height: 100%; }
 body {
-  font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   color: var(--ink);
-  background: var(--bg);
+  background: #fafafa;
+  -webkit-font-smoothing: antialiased;
 }
-button {
-  font: inherit;
-  border: 1px solid var(--line);
-  background: #fff;
-  border-radius: 6px;
-  padding: 4px 10px;
-  cursor: pointer;
-}
-button:disabled { opacity: 0.45; cursor: default; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.muted { color: var(--muted); }
-.error { color: #b91c1c; }
-.mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
 
-/* ── Home ── */
-.home { max-width: 640px; margin: 0 auto; padding: 48px 24px; }
-.home-head h1 { margin: 0; font-size: 32px; letter-spacing: -0.5px; }
-.home-head p { color: var(--muted); margin-top: 4px; }
-.dropzone {
-  margin-top: 24px;
-  border: 2px dashed var(--line);
-  border-radius: 12px;
-  padding: 48px 24px;
-  text-align: center;
-  color: var(--muted);
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
-}
-.dropzone:hover, .dropzone.dragging { border-color: var(--accent); background: #f5f4ff; }
-.doc-list { list-style: none; margin: 24px 0 0; padding: 0; }
-.doc-list li a {
-  display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
-  padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px;
-  margin-bottom: 8px; text-decoration: none; color: inherit; background: #fff;
-}
-.doc-list li a:hover { border-color: var(--accent); }
-.doc-name { font-weight: 500; }
-.doc-meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
-
-/* ── Editor shell ── */
-.editor-shell { display: flex; flex-direction: column; height: 100%; }
-.toolbar {
-  display: flex; align-items: center; gap: 16px;
-  padding: 8px 14px; background: #fff; border-bottom: 1px solid var(--line);
-}
-.brand { font-weight: 700; color: var(--accent); text-decoration: none; }
-.toolbar-group { display: flex; align-items: center; gap: 8px; }
-.toolbar-group.grow { flex: 1; }
-.editor-body { display: flex; flex: 1; min-height: 0; }
-.page-area { flex: 1; overflow: auto; padding: 24px; display: flex; justify-content: center; align-items: flex-start; }
-.center { margin: auto; }
-
-/* ── La página + overlay ── */
-.pdf-stage { position: relative; box-shadow: 0 1px 8px rgba(0, 0, 0, 0.18); background: #fff; }
+/* ── El lienzo: página + overlay de nodos ─────────────────────────────────── */
+.pdf-stage { position: relative; box-shadow: 0 1px 3px rgba(0,0,0,.1), 0 8px 24px rgba(0,0,0,.08); background: #fff; }
 .pdf-stage canvas { display: block; }
 .node-overlay { position: absolute; inset: 0; }
 .node-overlay.placing { cursor: crosshair; }
 .node-overlay.placing > * { pointer-events: none; }
 
-/* Nodo BLOQUEADO: invisible al mouse — ni hover, ni click, ni drag. Solo se
-   ve (y desbloquea) desde el panel/lista. */
+/* Nodo BLOQUEADO: invisible al mouse. */
 .node-overlay .locked { pointer-events: none; }
-.node-overlay .locked:hover { outline-color: transparent; background: transparent; }
-.node-overlay .locked.selected { outline: 1.5px dashed #a1a1aa; }
+.node-overlay .locked:hover { outline-color: transparent !important; background: transparent !important; }
+.node-overlay .locked.selected { outline: 1.5px dashed #a1a1aa !important; }
 
+/* Segmentos de texto */
 .seg-box {
   position: absolute;
   cursor: pointer;
   border-radius: 2px;
   outline: 1px solid transparent;
   outline-offset: 1px;
+  transition: background .1s, outline-color .1s;
 }
-.seg-box:hover { outline-color: rgba(79, 70, 229, 0.55); background: rgba(79, 70, 229, 0.06); }
-.seg-box.selected { outline-color: var(--accent); background: rgba(79, 70, 229, 0.08); }
+.seg-box:hover { outline-color: color-mix(in srgb, var(--accent) 55%, transparent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.seg-box.selected { outline-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.seg-box.selected:not(.editing) { cursor: move; }
+.seg-box.editing { cursor: text; }
 .seg-box.masked { background: #fff; cursor: text; }
 .seg-box.masked:hover { background: #fff; }
 .seg-box.edited { outline-color: var(--edited); }
-.seg-box.selected:not(.editing) { cursor: move; }
-.seg-box.editing { cursor: text; }
+.seg-text { white-space: pre; outline: none; min-height: 100%; width: max-content; color: #000; }
 .seg-mask { position: absolute; background: #fff; }
-/* ── Imágenes ── */
-.img-box {
-  position: absolute;
-  cursor: pointer;
-  outline: 1px solid transparent;
-  outline-offset: 1px;
-  border-radius: 2px;
+
+/* Handle de resize compartido */
+.seg-grip {
+  position: absolute; right: -5px; bottom: -5px; width: 10px; height: 10px;
+  background: #fff; border: 2px solid var(--accent); border-radius: 3px; cursor: nwse-resize;
 }
-.img-box:hover { outline-color: rgba(79, 70, 229, 0.55); background: rgba(79, 70, 229, 0.05); }
+
+/* Imágenes */
+.img-box { position: absolute; cursor: pointer; outline: 1px solid transparent; outline-offset: 1px; border-radius: 2px; }
+.img-box:hover { outline-color: color-mix(in srgb, var(--accent) 55%, transparent); background: color-mix(in srgb, var(--accent) 5%, transparent); }
 .img-box.selected { outline-color: var(--accent); cursor: move; }
 .img-box.edited { outline-color: var(--edited); }
-.img-box.ghost { outline: 2px dashed var(--edited); background: rgba(180, 83, 9, 0.06); }
-.ghost-label {
-  position: absolute;
-  top: -18px;
-  left: 0;
-  font-size: 10px;
-  color: var(--edited);
-  white-space: nowrap;
-}
-/* ── Campos de formulario (widgets) ── */
+.img-box.ghost { outline: 2px dashed var(--edited); background: color-mix(in srgb, var(--edited) 6%, transparent); }
+.ghost-label { position: absolute; top: -18px; left: 0; font-size: 10px; color: var(--edited); white-space: nowrap; }
+.img-removed { position: absolute; outline: 2px dashed var(--danger); background: color-mix(in srgb, var(--danger) 7%, transparent); cursor: pointer; }
+.img-removed.selected { outline-color: var(--accent); }
+.img-removed .ghost-label { color: var(--danger); top: 2px; left: 4px; }
+
+/* Campos de formulario */
 .widget-box {
-  position: absolute;
-  cursor: pointer;
-  outline: 1.5px dashed rgba(13, 148, 136, 0.55);
-  outline-offset: 1px;
-  border-radius: 3px;
-  background: rgba(13, 148, 136, 0.05);
+  position: absolute; cursor: pointer; outline: 1.5px dashed color-mix(in srgb, var(--field) 55%, transparent);
+  outline-offset: 1px; border-radius: 3px; background: color-mix(in srgb, var(--field) 5%, transparent);
 }
-.widget-box:hover { outline-color: #0d9488; background: rgba(13, 148, 136, 0.1); }
-.widget-box.selected { outline: 2px solid #0d9488; cursor: move; }
+.widget-box:hover { outline-color: var(--field); background: color-mix(in srgb, var(--field) 10%, transparent); }
+.widget-box.selected { outline: 2px solid var(--field); cursor: move; }
 .widget-box.edited { outline-color: var(--edited); }
 .widget-label {
-  position: absolute;
-  top: -18px;
-  left: 0;
-  font-size: 10px;
-  color: #0d9488;
-  white-space: nowrap;
-  background: #fff;
-  padding: 0 3px;
-  border-radius: 3px;
+  position: absolute; top: -18px; left: 0; font-size: 10px; color: var(--field);
+  white-space: nowrap; background: #fff; padding: 0 3px; border-radius: 3px;
 }
 
-.img-removed {
-  position: absolute;
-  outline: 2px dashed #b91c1c;
-  background: rgba(185, 28, 28, 0.07);
-  cursor: pointer;
-}
-.img-removed.selected { outline-color: var(--accent); }
-.img-removed .ghost-label { color: #b91c1c; top: 2px; left: 4px; }
-.prop-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.prop-cell { display: flex; align-items: center; gap: 6px; }
-.prop-cell .prop-input.num { flex: 1; width: auto; }
-
-.seg-grip {
-  position: absolute;
-  right: -6px;
-  bottom: -6px;
-  width: 10px;
-  height: 10px;
-  background: #fff;
-  border: 2px solid var(--accent);
-  border-radius: 3px;
-  cursor: nwse-resize;
-}
-
-.seg-text {
-  white-space: pre;
-  outline: none;
-  min-height: 100%;
-  width: max-content;
-  color: #000;
-}
-
-/* ── Inspector ── */
-.inspector {
-  width: 320px; flex-shrink: 0; overflow-y: auto;
-  background: #fff; border-left: 1px solid var(--line);
-  padding: 14px; font-size: 13px;
-}
-.insp-head { display: flex; justify-content: space-between; align-items: center; }
-.insp-head h3 { margin: 0; font-size: 14px; }
-
-/* ── Object Properties ── */
-.prop-label { display: block; margin: 12px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); }
-.prop-input { width: 100%; font: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
-.prop-input.num { width: 64px; }
-.prop-row { display: flex; align-items: center; gap: 6px; }
-.prop-row .prop-input { width: auto; flex: 1; min-width: 0; }
-.prop-row .prop-input.num { flex: 0 0 64px; }
-button.toggle { width: 30px; height: 30px; padding: 0; }
-button.toggle.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-button.toggle.mini { width: 22px; height: 22px; font-size: 11px; flex-shrink: 0; }
-.tramo-list { list-style: none; margin: 0; padding: 0; }
-.tramo-list li { display: flex; align-items: center; gap: 4px; padding: 3px 0; }
-.tramo-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-button.danger { margin-top: 12px; width: 100%; color: #b91c1c; border-color: #fecaca; }
-.page-input { width: 52px; text-align: center; font: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 4px 2px; }
-.toolbar-group.palette button { min-width: 30px; }
-button.tool-active { background: var(--accent); border-color: var(--accent); color: #fff; }
-.inspector > button { margin-top: 10px; width: 100%; }
-.prop-color { width: 30px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer; }
-.link-del { border: none; background: none; color: #b91c1c; padding: 0; text-decoration: underline; cursor: pointer; font-size: 11px; }
-.insp-props { display: grid; grid-template-columns: 72px 1fr; gap: 4px 8px; margin: 12px 0; }
-.insp-props dt { color: var(--muted); }
-.insp-props dd { margin: 0; overflow-wrap: anywhere; }
-.inspector h4 { margin: 16px 0 6px; font-size: 13px; }
-.run-list, .line-list { list-style: none; margin: 0; padding: 0; }
-.run-list li { padding: 6px 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
-.run-list .muted, .line-list .muted { font-size: 11px; }
-.line-list li.line-group { border-top: 1px solid var(--line); padding: 2px 0; }
-.seg-item {
-  padding: 4px 6px; border-radius: 6px; cursor: pointer;
-  display: flex; flex-direction: column; gap: 1px;
-}
-.seg-item:hover { background: #f4f4f5; }
-.seg-item.edited .mono { color: var(--edited); }
-.line-list .mono { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Scrollbars sutiles en los paneles */
+.thin-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.thin-scroll::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }
+.thin-scroll::-webkit-scrollbar-thumb:hover { background: #a1a1aa; background-clip: content-box; }

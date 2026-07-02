@@ -4,6 +4,19 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### feat(editor): REDISEÑO estilo Acrobat Pro — Tailwind + lucide-react, cero prompts
+Rediseño completo del shell y el panel de propiedades: Tailwind v4 (`@tailwindcss/vite`) +
+lucide-react, sin emojis. **Shell**: top bar minimalista (nav de página, zoom, Aplicar),
+**rail vertical de herramientas** a la izquierda (seleccionar / insertar texto·viñeta·campos·
+firma·imagen / marca de agua·enc-pie) con iconos y tooltips, área de página centrada con
+sombra, **panel de propiedades** derecho en secciones (CONTENIDO / FORMATO / POSICIÓN /
+ACCIONES / ESTADO) estilo Acrobat. **Se eliminaron TODOS los `window.prompt/confirm/alert`**
+(el desastre de Enc/Pie): ahora hay modales reales — HeaderFooterDialog (encabezado+pie+
+checkbox de numeración en un solo modal), WatermarkDialog y LinkDialog con validación. Los
+avisos son un Toast efímero. Primitivos reusables en `ui/primitives.tsx` (Button, Toggle,
+NumberInput, Select, ColorSwatch, Modal, Section, Toast). El overlay de nodos conserva sus
+clases (restyled coherente con los tokens: acento azul, ámbar=pendiente, teal=campos).
+
 ### feat: edición completa — texto nuevo, borrar todo, formato avanzado, highlight, links, watermark, enc/pie
 - **Insertar texto**: paleta ¶ (párrafo con wrap hasta el margen) y • (viñeta) — al re-extraer
   son segmentos normales del grafo, editables con todo lo existente.

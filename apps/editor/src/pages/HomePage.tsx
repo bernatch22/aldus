@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { UploadCloud, FileText, ChevronRight } from 'lucide-react';
 import { api, type DocMeta } from '../lib/api';
 
 const fmtSize = (n: number) => (n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`);
@@ -12,9 +13,7 @@ export function HomePage() {
   const fileRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
 
-  useEffect(() => {
-    api.list().then(setDocs).catch(e => setError(e.message));
-  }, []);
+  useEffect(() => { api.list().then(setDocs).catch(e => setError(e.message)); }, []);
 
   const uploadFile = useCallback(async (file: File) => {
     setBusy(true);
@@ -29,43 +28,40 @@ export function HomePage() {
   }, [navigate]);
 
   return (
-    <div className="home">
-      <header className="home-head">
-        <h1>Aldus</h1>
-        <p>Edición pixel-perfect del grafo de contenido de un PDF.</p>
+    <div className="mx-auto max-w-2xl px-6 py-16">
+      <header className="mb-8 flex items-center gap-3">
+        <span className="grid h-11 w-11 place-items-center rounded-xl bg-blue-600 text-lg font-bold text-white">A</span>
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-neutral-900">Aldus</h1>
+          <p className="text-[13px] text-neutral-500">Edición pixel-perfect del grafo de contenido de un PDF.</p>
+        </div>
       </header>
 
       <div
-        className={`dropzone${dragging ? ' dragging' : ''}`}
         onClick={() => fileRef.current?.click()}
         onDragOver={e => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
-        onDrop={e => {
-          e.preventDefault();
-          setDragging(false);
-          const f = e.dataTransfer.files[0];
-          if (f) void uploadFile(f);
-        }}
+        onDrop={e => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files[0]; if (f) void uploadFile(f); }}
+        className={`flex cursor-pointer flex-col items-center gap-3 rounded-2xl border-2 border-dashed px-6 py-14 text-center transition-colors ${dragging ? 'border-blue-500 bg-blue-50' : 'border-neutral-200 bg-white hover:border-blue-300 hover:bg-neutral-50'}`}
       >
-        {busy ? 'Subiendo…' : 'Arrastrá un PDF acá, o hacé click para elegirlo'}
-        <input
-          ref={fileRef}
-          type="file"
-          accept="application/pdf"
-          hidden
-          onChange={e => { const f = e.target.files?.[0]; if (f) void uploadFile(f); }}
-        />
+        <UploadCloud size={32} strokeWidth={1.6} className="text-neutral-400" />
+        <span className="text-[14px] font-medium text-neutral-600">{busy ? 'Subiendo…' : 'Arrastrá un PDF o hacé click para elegirlo'}</span>
+        <input ref={fileRef} type="file" accept="application/pdf" hidden onChange={e => { const f = e.target.files?.[0]; if (f) void uploadFile(f); }} />
       </div>
 
-      {error && <p className="error">{error}</p>}
+      {error && <p className="mt-4 text-[13px] text-red-600">{error}</p>}
 
       {docs.length > 0 && (
-        <ul className="doc-list">
+        <ul className="mt-8 space-y-2">
           {docs.map(d => (
             <li key={d.id}>
-              <Link to={`/doc/${d.id}`}>
-                <span className="doc-name">{d.name}</span>
-                <span className="doc-meta">{fmtSize(d.size)} · {new Date(d.uploadedAt).toLocaleString()}</span>
+              <Link to={`/doc/${d.id}`} className="group flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-4 py-3 transition-colors hover:border-blue-300 hover:bg-neutral-50">
+                <FileText size={18} className="shrink-0 text-neutral-400" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[14px] font-medium text-neutral-800">{d.name}</span>
+                  <span className="block text-[12px] text-neutral-400">{fmtSize(d.size)} · {new Date(d.uploadedAt).toLocaleString()}</span>
+                </span>
+                <ChevronRight size={16} className="shrink-0 text-neutral-300 group-hover:text-blue-500" />
               </Link>
             </li>
           ))}

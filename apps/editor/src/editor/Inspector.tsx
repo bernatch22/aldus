@@ -1,35 +1,26 @@
 /**
- * Inspector — dos modos:
- *  - Sin selección: el grafo de la página (líneas → segmentos, la vista
- *    "entender los grafos actuales del PDF").
- *  - Con selección: OBJECT PROPERTIES del segmento — texto, B/I, tamaño,
- *    familia, posición (x/baseline) — todo editable; los cambios se acumulan
- *    como overrides del SegmentEdit vía mergeSegmentEdit (core).
+ * Inspector — el panel de propiedades (derecha), estilo Acrobat.
+ *  - Sin selección: el esquema de la página (campos, links, imágenes, texto).
+ *  - Con selección: propiedades del nodo en secciones (FORMATO / OBJETO / ACCIONES).
+ * Toda la lógica de edición (mergeSegmentEdit, selectionStyle, por-tramo…) se
+ * conserva; solo cambió la presentación a Tailwind + lucide.
  */
 
 import {
-  effectiveImageRect,
-  effectiveWidgetRect,
-  mergeImageEdit,
-  mergeSegmentEdit,
-  mergeWidgetEdit,
-  originalStyledRuns,
-  type FontBucket,
-  type ImageEdit,
-  type ImageNode,
-  type ImagePatch,
-  type PageGraph,
-  type SegmentEdit,
-  type SegmentNode,
-  type SegmentPatch,
-  type StyledRun,
-  type WidgetEdit,
-  type WidgetNode,
-  type WidgetPatch,
+  effectiveImageRect, effectiveWidgetRect,
+  mergeImageEdit, mergeSegmentEdit, mergeWidgetEdit, originalStyledRuns,
+  type FontBucket, type ImageEdit, type ImageNode, type ImagePatch,
+  type PageGraph, type SegmentEdit, type SegmentNode, type SegmentPatch,
+  type StyledRun, type WidgetEdit, type WidgetNode, type WidgetPatch,
 } from '@aldus/core';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import {
+  X, Bold, Italic, Highlighter, Link2, Trash2, RotateCcw, Lock, Unlock,
+  SendToBack, BringToFront, Type, Image as ImageIcon, TextCursorInput, Link as LinkIcon,
+} from 'lucide-react';
 import type { EditAction, ImageEditAction, WidgetEditAction } from './NodeOverlay';
 import { activeEditingBox, selectionStyle, SELECTION_STYLE_EVENT } from './styledDom';
+import { Button, ColorSwatch, NumberInput, Select, TextInput, Toggle, cx } from '../ui/primitives';
 
 interface Props {
   graph: PageGraph | null;
@@ -43,552 +34,289 @@ interface Props {
   onWidgetEdit: (action: WidgetEditAction) => void;
   locked: Set<string>;
   onToggleLock: (nodeId: string) => void;
-  /** Operación de documento instantánea (highlight, addLink, removeLink…). */
   onDocOp: (action: string, params: Record<string, unknown>) => void;
-}
-
-/** Botón compartido de lock: un nodo bloqueado no responde al mouse en el
- *  lienzo; se administra desde acá. */
-function LockButton({ nodeId, locked, onToggleLock }: { nodeId: string; locked: Set<string>; onToggleLock: (id: string) => void }) {
-  const isLocked = locked.has(nodeId);
-  return (
-    <button className={isLocked ? 'tool-active' : ''} onClick={() => onToggleLock(nodeId)}>
-      {isLocked ? '🔓 Desbloquear' : '🔒 Bloquear'}
-    </button>
-  );
+  onRequestLink: (target: { page: number; x: number; y: number; width: number; height: number }) => void;
 }
 
 const WIDGET_TYPE_LABEL: Record<WidgetNode['widgetType'], string> = {
-  text: 'texto', checkbox: 'checkbox', radio: 'radio', select: 'select',
-  list: 'lista', button: 'botón', signature: 'firma',
+  text: 'Texto', checkbox: 'Checkbox', radio: 'Radio', select: 'Select',
+  list: 'Lista', button: 'Botón', signature: 'Firma',
 };
-
 const n1 = (v: number) => (Math.round(v * 10) / 10).toString();
+
+// ── átomos del panel ─────────────────────────────────────────────────────────
+function Panel({ children }: { children: ReactNode }) {
+  return <aside className="thin-scroll flex w-[300px] shrink-0 flex-col overflow-y-auto border-l border-neutral-200 bg-white">{children}</aside>;
+}
+function Header({ title, subtitle, onClose }: { title: string; subtitle?: string; onClose?: () => void }) {
+  return (
+    <div className="flex items-center justify-between border-b border-neutral-100 px-3 py-2.5">
+      <div className="min-w-0">
+        <div className="truncate text-[13px] font-semibold text-neutral-800">{title}</div>
+        {subtitle && <div className="truncate text-[11px] text-neutral-400">{subtitle}</div>}
+      </div>
+      {onClose && <button onClick={onClose} className="grid h-6 w-6 shrink-0 place-items-center rounded text-neutral-400 hover:bg-neutral-100"><X size={15} /></button>}
+    </div>
+  );
+}
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="border-b border-neutral-100 px-3 py-3">
+      <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-neutral-400">{title}</div>
+      <div className="space-y-2">{children}</div>
+    </div>
+  );
+}
+function Row({ children }: { children: ReactNode }) {
+  return <div className="flex items-center gap-2">{children}</div>;
+}
 
 /** Texto de un segmento con su estilo REAL por tramo (negritas visibles). */
 function StyledPreview({ seg, edit }: { seg: SegmentNode; edit: SegmentEdit | null }) {
   const styled = edit?.runs ?? originalStyledRuns(seg);
-  if (!edit?.runs && edit) return <span className="mono">{edit.text}</span>;
+  if (!edit?.runs && edit) return <span>{edit.text}</span>;
+  return <span>{styled.map((r, i) => <span key={i} style={{ fontWeight: r.bold ? 700 : 400, fontStyle: r.italic ? 'italic' : 'normal' }}>{r.text}</span>)}</span>;
+}
+
+/** Fila clickeable del esquema. */
+function OutlineItem({ icon, label, meta, active, edited, locked, onClick, right }:
+  { icon: ReactNode; label: ReactNode; meta?: string; active?: boolean; edited?: boolean; locked?: boolean; onClick?: () => void; right?: ReactNode }) {
   return (
-    <span className="mono">
-      {styled.map((r, i) => (
-        <span key={i} style={{ fontWeight: r.bold ? 700 : 400, fontStyle: r.italic ? 'italic' : 'normal' }}>
-          {r.text}
-        </span>
-      ))}
-    </span>
+    <button onClick={onClick} className={cx('group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors', active ? 'bg-blue-50' : 'hover:bg-neutral-50')}>
+      <span className={cx('shrink-0', edited ? 'text-amber-600' : 'text-neutral-400')}>{icon}</span>
+      <span className="min-w-0 flex-1">
+        <span className={cx('block truncate text-[12.5px]', edited ? 'text-amber-700' : 'text-neutral-700')}>{label}</span>
+        {meta && <span className="block truncate text-[10.5px] tabular-nums text-neutral-400">{meta}</span>}
+      </span>
+      {locked && <Lock size={12} className="shrink-0 text-neutral-400" />}
+      {right}
+    </button>
   );
 }
 
-export function Inspector({ graph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, onToggleLock, onDocOp }: Props) {
-  if (!graph) return <aside className="inspector" />;
-  const selected = graph.segments.find(s => s.id === selectedId) ?? null;
-  const selectedImage = graph.images.find(i => i.id === selectedId) ?? null;
-  const selectedWidget = graph.widgets.find(w => w.id === selectedId) ?? null;
+// ── panel raíz ───────────────────────────────────────────────────────────────
+export function Inspector(props: Props) {
+  const { graph, selectedId, onSelect, edits, imageEdits, widgetEdits, locked, onToggleLock } = props;
+  if (!graph) return <Panel />;
+  const seg = graph.segments.find(s => s.id === selectedId) ?? null;
+  const img = graph.images.find(i => i.id === selectedId) ?? null;
+  const wid = graph.widgets.find(w => w.id === selectedId) ?? null;
 
+  const lockRow = (nodeId: string) => (
+    <Section title="Estado">
+      <Button variant={locked.has(nodeId) ? 'primary' : 'default'} className="w-full" onClick={() => onToggleLock(nodeId)}>
+        {locked.has(nodeId) ? <><Unlock size={14} /> Desbloquear</> : <><Lock size={14} /> Bloquear</>}
+      </Button>
+    </Section>
+  );
+
+  if (wid) return (
+    <Panel>
+      <Header title={wid.fieldName || 'Campo'} subtitle={WIDGET_TYPE_LABEL[wid.widgetType]} onClose={() => onSelect(null)} />
+      <WidgetProps widget={wid} edit={widgetEdits.get(wid.id) ?? null} onWidgetEdit={props.onWidgetEdit} />
+      {lockRow(wid.id)}
+    </Panel>
+  );
+  if (img) return (
+    <Panel>
+      <Header title="Imagen" subtitle={`${Math.round(img.width)}×${Math.round(img.height)} pt`} onClose={() => onSelect(null)} />
+      <ImageProps img={img} edit={imageEdits.get(img.id) ?? null} onImageEdit={props.onImageEdit} />
+      {lockRow(img.id)}
+    </Panel>
+  );
+  if (seg) return (
+    <Panel>
+      <Header title="Texto" subtitle={`${n1(seg.fontSize)} pt`} onClose={() => onSelect(null)} />
+      <TextProps seg={seg} edit={edits.get(seg.id) ?? null} onEdit={props.onEdit} onDocOp={props.onDocOp} onRequestLink={props.onRequestLink} />
+      {lockRow(seg.id)}
+    </Panel>
+  );
+
+  // ── esquema de la página (sin selección) ──
   return (
-    <aside className="inspector">
-      {selectedWidget ? (
-        <>
-          <WidgetProperties
-            key={selectedWidget.id}
-            widget={selectedWidget}
-            edit={widgetEdits.get(selectedWidget.id) ?? null}
-            onClose={() => onSelect(null)}
-            onWidgetEdit={onWidgetEdit}
-          />
-          <LockButton nodeId={selectedWidget.id} locked={locked} onToggleLock={onToggleLock} />
-        </>
-      ) : selectedImage ? (
-        <>
-          <ImageProperties
-            key={selectedImage.id}
-            img={selectedImage}
-            edit={imageEdits.get(selectedImage.id) ?? null}
-            onClose={() => onSelect(null)}
-            onImageEdit={onImageEdit}
-          />
-          <LockButton nodeId={selectedImage.id} locked={locked} onToggleLock={onToggleLock} />
-        </>
-      ) : selected ? (
-        <>
-          <ObjectProperties
-            key={selected.id}
-            seg={selected}
-            edit={edits.get(selected.id) ?? null}
-            onClose={() => onSelect(null)}
-            onEdit={onEdit}
-            onDocOp={onDocOp}
-          />
-          <LockButton nodeId={selected.id} locked={locked} onToggleLock={onToggleLock} />
-        </>
-      ) : (
-        <>
-          <div className="insp-head">
-            <h3>Grafo — página {graph.page}</h3>
-          </div>
-          <p className="muted">
-            {graph.width.toFixed(0)}×{graph.height.toFixed(0)} pt · {graph.lines.length} líneas
-            · {graph.segments.length} segmentos · {graph.runs.length} runs
-            {graph.images.length > 0 && <> · {graph.images.length} imagen{graph.images.length > 1 ? 'es' : ''}</>}
-            {(edits.size + imageEdits.size) > 0 && <> · {edits.size + imageEdits.size} edición{edits.size + imageEdits.size > 1 ? 'es' : ''} pendiente{edits.size + imageEdits.size > 1 ? 's' : ''}</>}
-          </p>
-          {graph.widgets.length > 0 && (
-            <>
-              <h4>Campos</h4>
-              <ul className="line-list">
-                {graph.widgets.map(w => (
-                  <li key={w.id} className="line-group">
-                    <div
-                      className={`seg-item${widgetEdits.has(w.id) ? ' edited' : ''}`}
-                      onClick={() => onSelect(w.id)}
-                    >
-                      <span className="mono">{locked.has(w.id) ? '🔒 ' : ''}▭ {w.fieldName || '(sin nombre)'} · {WIDGET_TYPE_LABEL[w.widgetType]}</span>
-                      <span className="muted">x={n1(w.x)} · y={n1(w.y)} · {n1(w.width)}×{n1(w.height)}pt</span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-          {graph.links.length > 0 && (
-            <>
-              <h4>Links</h4>
-              <ul className="line-list">
-                {graph.links.map(l => (
-                  <li key={l.id} className="line-group">
-                    <div className="seg-item">
-                      <span className="mono">🔗 {l.url.slice(0, 42)}</span>
-                      <span className="muted">
-                        x={n1(l.x)} · y={n1(l.y)}
-                        {' · '}
-                        <button
-                          className="link-del"
-                          onClick={e => {
-                            e.stopPropagation();
-                            onDocOp('removeLink', { page: l.page, x: l.x, y: l.y, width: l.width, height: l.height });
-                          }}
-                        >borrar</button>
-                      </span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-          {graph.images.length > 0 && (
-            <>
-              <h4>Imágenes</h4>
-              <ul className="line-list">
-                {graph.images.map(img => (
-                  <li key={img.id} className="line-group">
-                    <div
-                      className={`seg-item${imageEdits.has(img.id) ? ' edited' : ''}`}
-                      onClick={() => onSelect(img.id)}
-                    >
-                      <span className="mono">{locked.has(img.id) ? '🔒 ' : ''}🖼 {Math.round(img.width)}×{Math.round(img.height)} pt{imageEdits.get(img.id)?.remove ? ' · eliminada' : ''}</span>
-                      <span className="muted">x={n1(img.x)} · y={n1(img.y)}{img.rotated ? ' · rotada' : ''}</span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-          <ul className="line-list">
-            {graph.lines.map(l => (
-              <li key={l.id} className="line-group">
-                {l.segments.map(s => (
-                  <div
-                    key={s.id}
-                    className={`seg-item${edits.has(s.id) ? ' edited' : ''}`}
-                    onClick={() => onSelect(s.id)}
-                  >
-                    <StyledPreview seg={s} edit={edits.get(s.id) ?? null} />
-                    <span className="muted">x={n1(s.x)} · y={n1(s.baseline)} · {n1(s.fontSize)}pt</span>
-                  </div>
-                ))}
-              </li>
-            ))}
-          </ul>
-        </>
+    <Panel>
+      <Header title={`Página ${graph.page}`} subtitle={`${graph.width.toFixed(0)}×${graph.height.toFixed(0)} pt`} />
+      {graph.widgets.length > 0 && (
+        <Section title={`Campos (${graph.widgets.length})`}>
+          {graph.widgets.map(w => (
+            <OutlineItem key={w.id} icon={<TextCursorInput size={14} />} onClick={() => onSelect(w.id)}
+              edited={widgetEdits.has(w.id)} locked={locked.has(w.id)}
+              label={w.fieldName || '(sin nombre)'} meta={`${WIDGET_TYPE_LABEL[w.widgetType]} · x ${n1(w.x)} · y ${n1(w.y)}`} />
+          ))}
+        </Section>
       )}
-    </aside>
-  );
-}
-
-interface WidgetPropsPanelProps {
-  widget: WidgetNode;
-  edit: WidgetEdit | null;
-  onClose: () => void;
-  onWidgetEdit: (action: WidgetEditAction) => void;
-}
-
-function WidgetProperties({ widget, edit, onClose, onWidgetEdit }: WidgetPropsPanelProps) {
-  const commit = (patch: WidgetPatch) => {
-    const merged = mergeWidgetEdit(widget, edit, patch);
-    onWidgetEdit(merged ?? { widgetId: widget.id, revert: true });
-  };
-  const eff = effectiveWidgetRect(widget, edit);
-
-  const numPatch = (key: 'x' | 'y' | 'width' | 'height', originalValue: number) => (raw: string) => {
-    const v = parseFloat(raw);
-    if (!Number.isFinite(v)) return;
-    const rounded = Math.round(v * 10) / 10;
-    commit({ [key]: rounded === Math.round(originalValue * 10) / 10 ? null : rounded });
-  };
-
-  const fields: Array<['x' | 'y' | 'width' | 'height', string, number, number]> = [
-    ['x', 'x', eff.x, widget.x],
-    ['y', 'y', eff.y, widget.y],
-    ['width', 'ancho', eff.width, widget.width],
-    ['height', 'alto', eff.height, widget.height],
-  ];
-
-  return (
-    <>
-      <div className="insp-head">
-        <h3>Campo — {widget.fieldName || widget.id}</h3>
-        <button onClick={onClose}>×</button>
-      </div>
-      <dl className="insp-props">
-        <dt>tipo</dt><dd>{WIDGET_TYPE_LABEL[widget.widgetType]}</dd>
-        <dt>nombre</dt><dd className="mono">{widget.fieldName || '(sin nombre)'}</dd>
-        {widget.readOnly && (<><dt>flags</dt><dd>read-only</dd></>)}
-      </dl>
-      <label className="prop-label">Geometría (pt)</label>
-      <div className="prop-grid2">
-        {fields.map(([key, label, value, original]) => (
-          <label key={key} className="prop-cell">
-            <span className="muted">{label}</span>
-            <input
-              className="prop-input num"
-              type="number"
-              step="0.5"
-              defaultValue={n1(value)}
-              onBlur={e => numPatch(key, original)(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-            />
-          </label>
-        ))}
-      </div>
-      <button className="danger" onClick={() => commit({ remove: true })}>
-        Eliminar campo
-      </button>
-    </>
-  );
-}
-
-interface ImagePropsPanelProps {
-  img: ImageNode;
-  edit: ImageEdit | null;
-  onClose: () => void;
-  onImageEdit: (action: ImageEditAction) => void;
-}
-
-function ImageProperties({ img, edit, onClose, onImageEdit }: ImagePropsPanelProps) {
-  const commit = (patch: ImagePatch) => {
-    const merged = mergeImageEdit(img, edit, patch);
-    onImageEdit(merged ?? { imageId: img.id, revert: true });
-  };
-  const eff = effectiveImageRect(img, edit);
-
-  const numPatch = (key: 'x' | 'y' | 'width' | 'height', originalValue: number) => (raw: string) => {
-    const v = parseFloat(raw);
-    if (!Number.isFinite(v)) return;
-    const rounded = Math.round(v * 10) / 10;
-    commit({ [key]: rounded === Math.round(originalValue * 10) / 10 ? null : rounded });
-  };
-
-  const fields: Array<['x' | 'y' | 'width' | 'height', string, number, number]> = [
-    ['x', 'x', eff.x, img.x],
-    ['y', 'y', eff.y, img.y],
-    ['width', 'ancho', eff.width, img.width],
-    ['height', 'alto', eff.height, img.height],
-  ];
-
-  return (
-    <>
-      <div className="insp-head">
-        <h3>Imagen — {img.id}</h3>
-        <button onClick={onClose}>×</button>
-      </div>
-      {img.rotated && <p className="muted">Imagen con rotación: mover/escalar aún no soportado en el bake.</p>}
-      <label className="prop-label">Geometría (pt)</label>
-      <div className="prop-grid2">
-        {fields.map(([key, label, value, original]) => (
-          <label key={key} className="prop-cell">
-            <span className="muted">{label}</span>
-            <input
-              className="prop-input num"
-              type="number"
-              step="0.5"
-              defaultValue={n1(value)}
-              disabled={eff.removed}
-              onBlur={e => numPatch(key, original)(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-            />
-          </label>
-        ))}
-      </div>
-      <label className="prop-label">Orden (z)</label>
-      <div className="prop-row">
-        <button onClick={() => commit({ zOrder: 'back' })}>Enviar al fondo</button>
-        <button onClick={() => commit({ zOrder: 'front' })}>Traer al frente</button>
-      </div>
-      <button
-        className="danger"
-        onClick={() => commit({ remove: eff.removed ? null : true })}
-      >
-        {eff.removed ? 'Restaurar imagen' : 'Eliminar imagen'}
-      </button>
-      {edit && (
-        <button className="danger" onClick={() => onImageEdit({ imageId: img.id, revert: true })}>
-          Revertir cambios
-        </button>
+      {graph.links.length > 0 && (
+        <Section title={`Links (${graph.links.length})`}>
+          {graph.links.map(l => (
+            <OutlineItem key={l.id} icon={<LinkIcon size={14} />} label={l.url} meta={`x ${n1(l.x)} · y ${n1(l.y)}`}
+              right={<button title="Borrar link" onClick={e => { e.stopPropagation(); props.onDocOp('removeLink', { page: l.page, x: l.x, y: l.y, width: l.width, height: l.height }); }}
+                className="grid h-6 w-6 shrink-0 place-items-center rounded text-neutral-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={13} /></button>} />
+          ))}
+        </Section>
       )}
-    </>
+      {graph.images.length > 0 && (
+        <Section title={`Imágenes (${graph.images.length})`}>
+          {graph.images.map(im => (
+            <OutlineItem key={im.id} icon={<ImageIcon size={14} />} onClick={() => onSelect(im.id)}
+              edited={imageEdits.has(im.id)} locked={locked.has(im.id)}
+              label={`${Math.round(im.width)}×${Math.round(im.height)} pt${imageEdits.get(im.id)?.remove ? ' · eliminada' : ''}`}
+              meta={`x ${n1(im.x)} · y ${n1(im.y)}${im.rotated ? ' · rotada' : ''}`} />
+          ))}
+        </Section>
+      )}
+      <Section title={`Texto (${graph.segments.length})`}>
+        {graph.lines.map(l => l.segments.map(s => (
+          <OutlineItem key={s.id} icon={<Type size={14} />} onClick={() => onSelect(s.id)} edited={edits.has(s.id)} locked={locked.has(s.id)}
+            label={<StyledPreview seg={s} edit={edits.get(s.id) ?? null} />} meta={`x ${n1(s.x)} · y ${n1(s.baseline)} · ${n1(s.fontSize)} pt`} />
+        )))}
+      </Section>
+    </Panel>
   );
 }
 
-interface PropsPanelProps {
-  seg: SegmentNode;
-  edit: SegmentEdit | null;
-  onClose: () => void;
-  onEdit: (action: EditAction) => void;
-  onDocOp: (action: string, params: Record<string, unknown>) => void;
-}
-
-function ObjectProperties({ seg, edit, onClose, onEdit, onDocOp }: PropsPanelProps) {
-  const commit = (patch: SegmentPatch) => {
-    const merged = mergeSegmentEdit(seg, edit, patch);
-    onEdit(merged ?? { segmentId: seg.id, revert: true });
-  };
-
+// ── propiedades de TEXTO (sección FORMATO estilo Acrobat) ────────────────────
+function TextProps({ seg, edit, onEdit, onDocOp, onRequestLink }:
+  { seg: SegmentNode; edit: SegmentEdit | null; onEdit: (a: EditAction) => void; onDocOp: (a: string, p: Record<string, unknown>) => void; onRequestLink: (t: { page: number; x: number; y: number; width: number; height: number }) => void }) {
+  const commit = (patch: SegmentPatch) => { const m = mergeSegmentEdit(seg, edit, patch); onEdit(m ?? { segmentId: seg.id, revert: true }); };
   const dom = seg.runs.reduce((a, b) => (b.width > a.width ? b : a));
-  // El estilo vive POR TRAMO: los toggles globales aplican a todos los tramos;
-  // cada tramo tiene además sus propios B/I (quitar la negrita a UNA parte no
-  // toca el resto).
   const styled: StyledRun[] = edit?.runs ?? originalStyledRuns(seg);
   const setRuns = (runs: StyledRun[]) => commit({ runs });
 
-  // Con un box en edición, los toggles se encienden según el estilo BAJO EL
-  // CURSOR/selección (recalculado en cada selectionchange); sin edición, según
-  // el estilo de todos los tramos del segmento.
+  // Estilo bajo el cursor/selección → enciende los toggles.
   const [selSty, setSelSty] = useState<{ bold: boolean; italic: boolean } | null>(null);
   useEffect(() => {
-    const update = () => {
-      const el = activeEditingBox();
-      setSelSty(el ? selectionStyle(el, seg, edit) : null);
-    };
+    const update = () => { const el = activeEditingBox(); setSelSty(el ? selectionStyle(el, seg, edit) : null); };
     update();
     document.addEventListener('selectionchange', update);
     return () => document.removeEventListener('selectionchange', update);
   }, [seg, edit]);
   const allBold = selSty ? selSty.bold : styled.length > 0 && styled.every(r => r.bold);
   const allItalic = selSty ? selSty.italic : styled.length > 0 && styled.every(r => r.italic);
-  /** Con un box EN EDICIÓN, el toggle va a la SELECCIÓN (el mousedown del botón
-   *  hace preventDefault, así el editable no pierde foco ni selección). */
   const toggleStyle = (key: 'bold' | 'italic', fallback: () => void) => {
-    if (activeEditingBox()) {
-      window.dispatchEvent(new CustomEvent(SELECTION_STYLE_EVENT, { detail: { key } }));
-      return;
-    }
+    if (activeEditingBox()) { window.dispatchEvent(new CustomEvent(SELECTION_STYLE_EVENT, { detail: { key } })); return; }
     fallback();
   };
+
   const curSize = edit?.fontSize ?? seg.fontSize;
   const curFont: FontBucket | 'original' = edit?.font ?? 'original';
-  const curX = edit?.x ?? seg.x;
-  const curBaseline = edit?.baseline ?? seg.baseline;
-
-  const numPatch = (key: 'fontSize' | 'x' | 'baseline', originalValue: number) => (raw: string) => {
-    const v = parseFloat(raw);
-    if (!Number.isFinite(v) || v <= 0) return;
-    const rounded = Math.round(v * 10) / 10;
-    commit({ [key]: rounded === Math.round(originalValue * 10) / 10 ? null : rounded });
+  const numOv = (key: 'fontSize' | 'x' | 'baseline', original: number) => (v: number) => {
+    if (key === 'fontSize' && v <= 0) return;
+    const r = Math.round(v * 10) / 10;
+    commit({ [key]: r === Math.round(original * 10) / 10 ? null : r });
   };
+  const isRemoved = edit?.remove === true;
 
   return (
     <>
-      <div className="insp-head">
-        <h3>Propiedades — {seg.id}</h3>
-        <button onClick={onClose}>×</button>
-      </div>
+      <Section title="Contenido">
+        <TextInput defaultValue={edit?.text ?? seg.text} onCommit={v => commit({ text: v })} />
+      </Section>
 
-      <label className="prop-label">Texto</label>
-      <input
-        className="prop-input"
-        defaultValue={edit?.text ?? seg.text}
-        onBlur={e => commit({ text: e.target.value })}
-        onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-      />
-
-      <label className="prop-label">Estilo</label>
-      <div className="prop-row">
-        <button
-          className={`toggle${allBold ? ' active' : ''}`}
-          title="Bold (a la selección si estás editando; si no, todo el segmento)"
-          onMouseDown={e => e.preventDefault()}
-          onClick={() => toggleStyle('bold', () => setRuns(styled.map(r => ({ ...r, bold: !allBold }))))}
-        ><strong>B</strong></button>
-        <button
-          className={`toggle${allItalic ? ' active' : ''}`}
-          title="Italic (a la selección si estás editando; si no, todo el segmento)"
-          onMouseDown={e => e.preventDefault()}
-          onClick={() => toggleStyle('italic', () => setRuns(styled.map(r => ({ ...r, italic: !allItalic }))))}
-        ><em>I</em></button>
-        <input
-          className="prop-input num"
-          type="number"
-          step="0.5"
-          min="4"
-          title="Tamaño (pt)"
-          defaultValue={n1(curSize)}
-          onBlur={e => numPatch('fontSize', seg.fontSize)(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-        />
-        <select
-          className="prop-input"
-          value={curFont}
-          title="Familia"
-          onChange={e => commit({ font: e.target.value === 'original' ? null : (e.target.value as FontBucket) })}
-        >
+      <Section title="Formato">
+        <Select value={curFont} onChange={v => commit({ font: v === 'original' ? null : (v as FontBucket) })}>
           <option value="original">{dom.font.postScriptName} (original)</option>
           <option value="sans">Sans</option>
           <option value="serif">Serif</option>
           <option value="mono">Mono</option>
-        </select>
-      </div>
+        </Select>
+        <Row>
+          <NumberInput label="pt" defaultValue={curSize} min={4} onCommit={numOv('fontSize', seg.fontSize)} />
+          <Toggle active={allBold} onToggle={() => toggleStyle('bold', () => setRuns(styled.map(r => ({ ...r, bold: !allBold }))))} label="Negrita"><Bold size={15} /></Toggle>
+          <Toggle active={allItalic} onToggle={() => toggleStyle('italic', () => setRuns(styled.map(r => ({ ...r, italic: !allItalic }))))} label="Itálica"><Italic size={15} /></Toggle>
+          <ColorSwatch title="Color del texto" value={edit?.color ?? '#000000'} onChange={v => commit({ color: v === '#000000' ? null : v })} />
+        </Row>
+        <Row>
+          <NumberInput label="AV" step={0.1} defaultValue={edit?.charSpacing ?? 0} onCommit={v => commit({ charSpacing: v === 0 ? null : v })} />
+          <NumberInput label="↔ %" step={1} min={10} defaultValue={edit?.hScale ?? 100} onCommit={v => commit({ hScale: v <= 0 || v === 100 ? null : v })} />
+        </Row>
+      </Section>
 
       {styled.length > 1 && (
-        <>
-          <label className="prop-label">Tramos (estilo por parte)</label>
-          <ul className="tramo-list">
-            {styled.map((r, i) => (
-              <li key={i}>
-                <span
-                  className="mono tramo-text"
-                  style={{ fontWeight: r.bold ? 700 : 400, fontStyle: r.italic ? 'italic' : 'normal' }}
-                >{r.text || '·'}</span>
-                <button
-                  className={`toggle mini${r.bold ? ' active' : ''}`}
-                  title="Bold de este tramo"
-                  onMouseDown={e => e.preventDefault()}
-                  onClick={() => setRuns(styled.map((s, j) => (j === i ? { ...s, bold: !s.bold } : s)))}
-                ><strong>B</strong></button>
-                <button
-                  className={`toggle mini${r.italic ? ' active' : ''}`}
-                  title="Italic de este tramo"
-                  onMouseDown={e => e.preventDefault()}
-                  onClick={() => setRuns(styled.map((s, j) => (j === i ? { ...s, italic: !s.italic } : s)))}
-                ><em>I</em></button>
-              </li>
-            ))}
-          </ul>
-        </>
+        <Section title="Estilo por tramo">
+          {styled.map((r, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 truncate text-[12px] text-neutral-600" style={{ fontWeight: r.bold ? 700 : 400, fontStyle: r.italic ? 'italic' : 'normal' }}>{r.text || '·'}</span>
+              <Toggle active={r.bold} onToggle={() => setRuns(styled.map((s, j) => (j === i ? { ...s, bold: !s.bold } : s)))} label="Negrita del tramo"><Bold size={13} /></Toggle>
+              <Toggle active={r.italic} onToggle={() => setRuns(styled.map((s, j) => (j === i ? { ...s, italic: !s.italic } : s)))} label="Itálica del tramo"><Italic size={13} /></Toggle>
+            </div>
+          ))}
+        </Section>
       )}
 
-      <label className="prop-label">Posición (pt)</label>
-      <div className="prop-row">
-        <span className="muted">x</span>
-        <input
-          className="prop-input num"
-          type="number"
-          step="0.5"
-          defaultValue={n1(curX)}
-          onBlur={e => numPatch('x', seg.x)(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-        />
-        <span className="muted">baseline</span>
-        <input
-          className="prop-input num"
-          type="number"
-          step="0.5"
-          defaultValue={n1(curBaseline)}
-          onBlur={e => numPatch('baseline', seg.baseline)(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-        />
-      </div>
+      <Section title="Posición (pt)">
+        <Row>
+          <NumberInput label="X" defaultValue={edit?.x ?? seg.x} onCommit={numOv('x', seg.x)} />
+          <NumberInput label="Y" defaultValue={edit?.baseline ?? seg.baseline} onCommit={numOv('baseline', seg.baseline)} />
+        </Row>
+      </Section>
 
-      <label className="prop-label">Avanzado</label>
-      <div className="prop-row">
-        <span className="muted" title="Tracking (AV) en pt">AV</span>
-        <input
-          className="prop-input num"
-          type="number"
-          step="0.1"
-          defaultValue={edit?.charSpacing ?? 0}
-          onBlur={e => {
-            const v = parseFloat(e.target.value);
-            if (Number.isFinite(v)) commit({ charSpacing: v === 0 ? null : v });
-          }}
-          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-        />
-        <span className="muted" title="Escala horizontal (%)">T↔</span>
-        <input
-          className="prop-input num"
-          type="number"
-          step="1"
-          min="10"
-          defaultValue={edit?.hScale ?? 100}
-          onBlur={e => {
-            const v = parseFloat(e.target.value);
-            if (Number.isFinite(v) && v > 0) commit({ hScale: v === 100 ? null : v });
-          }}
-          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-        />
-        <input
-          type="color"
-          className="prop-color"
-          title="Color del texto"
-          defaultValue={edit?.color ?? '#000000'}
-          onChange={e => commit({ color: e.target.value === '#000000' ? null : e.target.value })}
-        />
-      </div>
+      <Section title="Acciones">
+        <Row>
+          <Button className="flex-1" onClick={() => onDocOp('highlight', { page: seg.page, x: seg.x, y: seg.y, width: seg.width, height: seg.height })}><Highlighter size={14} /> Resaltar</Button>
+          <Button className="flex-1" onClick={() => onRequestLink({ page: seg.page, x: seg.x, y: seg.y, width: seg.width, height: seg.height })}><Link2 size={14} /> Link</Button>
+        </Row>
+        <Button variant="danger" className="w-full" onClick={() => commit({ remove: isRemoved ? null : true })}>
+          {isRemoved ? <><RotateCcw size={14} /> Restaurar</> : <><Trash2 size={14} /> Eliminar</>}
+        </Button>
+        {edit && <Button variant="ghost" className="w-full" onClick={() => onEdit({ segmentId: seg.id, revert: true })}><RotateCcw size={14} /> Revertir cambios</Button>}
+      </Section>
+    </>
+  );
+}
 
-      <label className="prop-label">Acciones</label>
-      <div className="prop-row">
-        <button
-          title="Resaltar este texto (amarillo)"
-          onClick={() => onDocOp('highlight', { page: seg.page, x: seg.x, y: seg.y, width: seg.width, height: seg.height })}
-        >Resaltar</button>
-        <button
-          title="Convertir en link"
-          onClick={() => {
-            const url = window.prompt('URL del link:', 'https://');
-            if (url && url !== 'https://') onDocOp('addLink', { page: seg.page, x: seg.x, y: seg.y, width: seg.width, height: seg.height, url });
-          }}
-        >Link</button>
-        <button
-          className="danger"
-          onClick={() => commit({ remove: edit?.remove ? null : true })}
-        >{edit?.remove ? 'Restaurar' : 'Eliminar'}</button>
-      </div>
+// ── propiedades de IMAGEN ────────────────────────────────────────────────────
+function ImageProps({ img, edit, onImageEdit }: { img: ImageNode; edit: ImageEdit | null; onImageEdit: (a: ImageEditAction) => void }) {
+  const commit = (patch: ImagePatch) => { const m = mergeImageEdit(img, edit, patch); onImageEdit(m ?? { imageId: img.id, revert: true }); };
+  const eff = effectiveImageRect(img, edit);
+  const num = (key: 'x' | 'y' | 'width' | 'height', original: number) => (v: number) => {
+    const r = Math.round(v * 10) / 10;
+    commit({ [key]: r === Math.round(original * 10) / 10 ? null : r });
+  };
+  return (
+    <>
+      {img.rotated && <div className="border-b border-neutral-100 bg-amber-50 px-3 py-2 text-[11px] text-amber-700">Imagen con rotación: mover/escalar no soportado aún.</div>}
+      <Section title="Geometría (pt)">
+        <Row><NumberInput label="X" defaultValue={eff.x} onCommit={num('x', img.x)} /><NumberInput label="Y" defaultValue={eff.y} onCommit={num('y', img.y)} /></Row>
+        <Row><NumberInput label="W" defaultValue={eff.width} onCommit={num('width', img.width)} /><NumberInput label="H" defaultValue={eff.height} onCommit={num('height', img.height)} /></Row>
+      </Section>
+      <Section title="Orden">
+        <Row>
+          <Button className="flex-1" onClick={() => commit({ zOrder: 'back' })}><SendToBack size={14} /> Al fondo</Button>
+          <Button className="flex-1" onClick={() => commit({ zOrder: 'front' })}><BringToFront size={14} /> Al frente</Button>
+        </Row>
+      </Section>
+      <Section title="Acciones">
+        <Button variant="danger" className="w-full" onClick={() => commit({ remove: eff.removed ? null : true })}>
+          {eff.removed ? <><RotateCcw size={14} /> Restaurar imagen</> : <><Trash2 size={14} /> Eliminar imagen</>}
+        </Button>
+        {edit && <Button variant="ghost" className="w-full" onClick={() => onImageEdit({ imageId: img.id, revert: true })}><RotateCcw size={14} /> Revertir</Button>}
+      </Section>
+    </>
+  );
+}
 
-      <dl className="insp-props">
-        <dt>ancho</dt><dd>{n1(seg.width)} pt</dd>
-        <dt>alto</dt><dd>{n1(seg.height)} pt</dd>
-        {edit && (<><dt>original</dt><dd className="mono muted">{seg.text}</dd></>)}
-      </dl>
-
-      {edit && (
-        <button className="danger" onClick={() => onEdit({ segmentId: seg.id, revert: true })}>
-          Revertir cambios
-        </button>
-      )}
-
-      <h4>Runs ({seg.runs.length})</h4>
-      <ul className="run-list">
-        {seg.runs.map(r => (
-          <li key={r.id}>
-            <span className="mono">“{r.text}”</span>
-            <span className="muted">
-              {r.font.postScriptName} · {n1(r.fontSize)}pt · x={n1(r.x)} w={n1(r.width)}
-              {r.font.embedded ? ' · embebida' : ' · estándar'}
-              {r.font.bold ? ' · bold' : ''}{r.font.italic ? ' · italic' : ''}
-            </span>
-          </li>
-        ))}
-      </ul>
+// ── propiedades de CAMPO ─────────────────────────────────────────────────────
+function WidgetProps({ widget, edit, onWidgetEdit }: { widget: WidgetNode; edit: WidgetEdit | null; onWidgetEdit: (a: WidgetEditAction) => void }) {
+  const commit = (patch: WidgetPatch) => { const m = mergeWidgetEdit(widget, edit, patch); onWidgetEdit(m ?? { widgetId: widget.id, revert: true }); };
+  const eff = effectiveWidgetRect(widget, edit);
+  const num = (key: 'x' | 'y' | 'width' | 'height', original: number) => (v: number) => {
+    const r = Math.round(v * 10) / 10;
+    commit({ [key]: r === Math.round(original * 10) / 10 ? null : r });
+  };
+  return (
+    <>
+      <Section title="Campo">
+        <div className="flex justify-between text-[12px]"><span className="text-neutral-400">Tipo</span><span className="text-neutral-700">{WIDGET_TYPE_LABEL[widget.widgetType]}</span></div>
+        <div className="flex justify-between text-[12px]"><span className="text-neutral-400">Nombre</span><span className="truncate pl-2 text-neutral-700">{widget.fieldName || '(sin nombre)'}</span></div>
+        {widget.readOnly && <div className="flex justify-between text-[12px]"><span className="text-neutral-400">Flags</span><span className="text-neutral-700">read-only</span></div>}
+      </Section>
+      <Section title="Geometría (pt)">
+        <Row><NumberInput label="X" defaultValue={eff.x} onCommit={num('x', widget.x)} /><NumberInput label="Y" defaultValue={eff.y} onCommit={num('y', widget.y)} /></Row>
+        <Row><NumberInput label="W" defaultValue={eff.width} onCommit={num('width', widget.width)} /><NumberInput label="H" defaultValue={eff.height} onCommit={num('height', widget.height)} /></Row>
+      </Section>
+      <Section title="Acciones">
+        <Button variant="danger" className="w-full" onClick={() => commit({ remove: true })}><Trash2 size={14} /> Eliminar campo</Button>
+      </Section>
     </>
   );
 }

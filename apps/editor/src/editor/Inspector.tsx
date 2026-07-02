@@ -11,16 +11,15 @@ import {
   mergeImageEdit, mergeSegmentEdit, mergeWidgetEdit, originalStyledRuns,
   type FontBucket, type ImageEdit, type ImageNode, type ImagePatch,
   type PageGraph, type SegmentEdit, type SegmentNode, type SegmentPatch,
-  type StyledRun, type WidgetEdit, type WidgetNode, type WidgetPatch,
+  type WidgetEdit, type WidgetNode, type WidgetPatch,
 } from '@aldus/core';
-import { useEffect, useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import {
-  X, Bold, Italic, Highlighter, Link2, Trash2, RotateCcw, Lock, Unlock,
+  X, Trash2, RotateCcw, Lock, Unlock,
   SendToBack, BringToFront, Type, Image as ImageIcon, TextCursorInput, Link as LinkIcon,
 } from 'lucide-react';
 import type { EditAction, ImageEditAction, WidgetEditAction } from './NodeOverlay';
-import { activeEditingBox, selectionStyle, SELECTION_STYLE_EVENT } from './styledDom';
-import { Button, ColorSwatch, NumberInput, Select, TextInput, Toggle, cx } from '../ui/primitives';
+import { Button, NumberInput, Select, TextInput, cx } from '../ui/primitives';
 
 interface Props {
   graph: PageGraph | null;
@@ -149,7 +148,7 @@ export function Inspector(props: Props) {
   if (seg) return (
     <Panel>
       <Header title="Texto" subtitle={`${n1(seg.fontSize)} pt`} onClose={() => onSelect(null)} />
-      <TextProps seg={seg} edit={edits.get(seg.id) ?? null} onEdit={props.onEdit} onDocOp={props.onDocOp} onRequestLink={props.onRequestLink} />
+      <TextProps seg={seg} edit={edits.get(seg.id) ?? null} onEdit={props.onEdit} />
       {lockRow(seg.id)}
     </Panel>
   );
@@ -200,45 +199,27 @@ export function Inspector(props: Props) {
 }
 
 // ── propiedades de TEXTO (sección FORMATO estilo Acrobat) ────────────────────
-function TextProps({ seg, edit, onEdit, onDocOp, onRequestLink }:
-  { seg: SegmentNode; edit: SegmentEdit | null; onEdit: (a: EditAction) => void; onDocOp: (a: string, p: Record<string, unknown>) => void; onRequestLink: (t: { page: number; x: number; y: number; width: number; height: number }) => void }) {
+function TextProps({ seg, edit, onEdit }:
+  { seg: SegmentNode; edit: SegmentEdit | null; onEdit: (a: EditAction) => void }) {
   const commit = (patch: SegmentPatch) => { const m = mergeSegmentEdit(seg, edit, patch); onEdit(m ?? { segmentId: seg.id, revert: true }); };
   const dom = seg.runs.reduce((a, b) => (b.width > a.width ? b : a));
-  const origColor = dom.color ?? '#000000';
-  const styled: StyledRun[] = edit?.runs ?? originalStyledRuns(seg);
-  const setRuns = (runs: StyledRun[]) => commit({ runs });
-
-  // Estilo bajo el cursor/selección → enciende los toggles.
-  const [selSty, setSelSty] = useState<{ bold: boolean; italic: boolean } | null>(null);
-  useEffect(() => {
-    const update = () => { const el = activeEditingBox(); setSelSty(el ? selectionStyle(el, seg, edit) : null); };
-    update();
-    document.addEventListener('selectionchange', update);
-    return () => document.removeEventListener('selectionchange', update);
-  }, [seg, edit]);
-  const allBold = selSty ? selSty.bold : styled.length > 0 && styled.every(r => r.bold);
-  const allItalic = selSty ? selSty.italic : styled.length > 0 && styled.every(r => r.italic);
-  const toggleStyle = (key: 'bold' | 'italic', fallback: () => void) => {
-    if (activeEditingBox()) { window.dispatchEvent(new CustomEvent(SELECTION_STYLE_EVENT, { detail: { key } })); return; }
-    fallback();
-  };
-
-  const curSize = edit?.fontSize ?? seg.fontSize;
   const curFont: FontBucket | 'original' = edit?.font ?? 'original';
-  const numOv = (key: 'fontSize' | 'x' | 'baseline', original: number) => (v: number) => {
-    if (key === 'fontSize' && v <= 0) return;
+  const numOv = (key: 'x' | 'baseline', original: number) => (v: number) => {
     const r = Math.round(v * 10) / 10;
     commit({ [key]: r === Math.round(original * 10) / 10 ? null : r });
   };
   const isRemoved = edit?.remove === true;
 
+  // El FORMATO (B/I, tamaño, color, resaltar, link, eliminar) vive en la
+  // toolbar flotante sobre el objeto — acá quedan contenido, familia,
+  // avanzado y posición.
   return (
     <>
       <Section title="Contenido">
         <TextInput defaultValue={edit?.text ?? seg.text} onCommit={v => commit({ text: v })} />
       </Section>
 
-      <Section title="Formato">
+      <Section title="Avanzado">
         <Select value={curFont} onChange={v => commit({ font: v === 'original' ? null : (v as FontBucket) })}>
           <option value="original">{dom.font.postScriptName} (original)</option>
           <option value="sans">Sans</option>
@@ -246,28 +227,10 @@ function TextProps({ seg, edit, onEdit, onDocOp, onRequestLink }:
           <option value="mono">Mono</option>
         </Select>
         <Row>
-          <NumberInput label="pt" defaultValue={curSize} min={4} onCommit={numOv('fontSize', seg.fontSize)} />
-          <Toggle active={allBold} onToggle={() => toggleStyle('bold', () => setRuns(styled.map(r => ({ ...r, bold: !allBold }))))} label="Negrita"><Bold size={15} /></Toggle>
-          <Toggle active={allItalic} onToggle={() => toggleStyle('italic', () => setRuns(styled.map(r => ({ ...r, italic: !allItalic }))))} label="Itálica"><Italic size={15} /></Toggle>
-          <ColorSwatch title="Color del texto" value={edit?.color ?? origColor} onChange={v => commit({ color: v.toLowerCase() === origColor.toLowerCase() ? null : v })} />
-        </Row>
-        <Row>
           <NumberInput label="AV" step={0.1} defaultValue={edit?.charSpacing ?? 0} onCommit={v => commit({ charSpacing: v === 0 ? null : v })} />
           <NumberInput label="↔ %" step={1} min={10} defaultValue={edit?.hScale ?? 100} onCommit={v => commit({ hScale: v <= 0 || v === 100 ? null : v })} />
         </Row>
       </Section>
-
-      {styled.length > 1 && (
-        <Section title="Estilo por tramo">
-          {styled.map((r, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <span className="min-w-0 flex-1 truncate text-[12px] text-neutral-600" style={{ fontWeight: r.bold ? 700 : 400, fontStyle: r.italic ? 'italic' : 'normal' }}>{r.text || '·'}</span>
-              <Toggle active={r.bold} onToggle={() => setRuns(styled.map((s, j) => (j === i ? { ...s, bold: !s.bold } : s)))} label="Negrita del tramo"><Bold size={13} /></Toggle>
-              <Toggle active={r.italic} onToggle={() => setRuns(styled.map((s, j) => (j === i ? { ...s, italic: !s.italic } : s)))} label="Itálica del tramo"><Italic size={13} /></Toggle>
-            </div>
-          ))}
-        </Section>
-      )}
 
       <Section title="Posición (pt)">
         <Row>
@@ -277,14 +240,13 @@ function TextProps({ seg, edit, onEdit, onDocOp, onRequestLink }:
       </Section>
 
       <Section title="Acciones">
-        <Row>
-          <Button className="flex-1" onClick={() => onDocOp('highlight', { page: seg.page, x: seg.x, y: seg.y, width: seg.width, height: seg.height })}><Highlighter size={14} /> Resaltar</Button>
-          <Button className="flex-1" onClick={() => onRequestLink({ page: seg.page, x: seg.x, y: seg.y, width: seg.width, height: seg.height })}><Link2 size={14} /> Link</Button>
-        </Row>
-        <Button variant="danger" className="w-full" onClick={() => commit({ remove: isRemoved ? null : true })}>
-          {isRemoved ? <><RotateCcw size={14} /> Restaurar</> : <><Trash2 size={14} /> Eliminar</>}
-        </Button>
+        {isRemoved && (
+          <Button variant="danger" className="w-full" onClick={() => commit({ remove: null })}>
+            <RotateCcw size={14} /> Restaurar
+          </Button>
+        )}
         {edit && <Button variant="ghost" className="w-full" onClick={() => onEdit({ segmentId: seg.id, revert: true })}><RotateCcw size={14} /> Revertir cambios</Button>}
+        {!edit && <div className="text-[11px] text-neutral-400">Formato y acciones: en la barra sobre el objeto.</div>}
       </Section>
     </>
   );

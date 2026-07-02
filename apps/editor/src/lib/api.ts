@@ -65,10 +65,16 @@ export const api = {
   },
 
   /** Aplica las ediciones AL PDF (bake del content stream + /Annots) y lo persiste. */
-  bake: (id: string, edits: SegmentEdit[], imageEdits: ImageEdit[] = [], widgetEdits: WidgetEdit[] = []): Promise<{ ok: boolean; applied: string[]; warnings: string[] }> =>
+  bake: (
+    id: string,
+    edits: SegmentEdit[],
+    imageEdits: ImageEdit[] = [],
+    widgetEdits: WidgetEdit[] = [],
+    highlights: Array<Record<string, unknown>> = [],
+  ): Promise<{ ok: boolean; applied: string[]; warnings: string[] }> =>
     fetch(`/api/documents/${id}/bake`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ edits, imageEdits, widgetEdits }),
+      body: JSON.stringify({ edits, imageEdits, widgetEdits, highlights }),
     }).then(r => ok<{ ok: boolean; applied: string[]; warnings: string[] }>(r)),
 };

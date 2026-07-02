@@ -4,6 +4,22 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### feat(editor): PREVIEW HORNEADO EN EL BROWSER — adiós duplicados/máscaras fantasma
+El cambio de arquitectura que mata la familia entera de bugs de preview (duplicados al
+mover, cajas blancas remanentes, "recién se ve al Aplicar"): las ediciones pendientes de
+IMÁGENES, CAMPOS y HIGHLIGHTS se hornean **localmente en el browser** (el mismo bake de
+core — pdf-lib es isomórfico, import dinámico code-split) sobre una copia de los bytes, y
+se renderiza ESO. WYSIWYG real: la imagen movida se ve movida (una sola), la borrada
+desaparece al instante, el input movido no deja caja blanca. El server no se toca hasta
+Aplicar. Durante el GESTO de drag se mantienen los píxeles viajando + máscara; al soltar,
+el preview re-renderiza la verdad. Ctrl+Z restaura (los nodos eliminados vuelven por undo).
+- **Highlight ahora ACUMULA** (preview local + se escribe con Aplicar, como pediste) — el
+  endpoint de bake acepta `highlights[]` y los aplica en cadena.
+- **Formato arriba, no en el sidebar**: la toolbar flotante del texto ahora tiene B/I,
+  tamaño (pt), color del texto, alineación, resaltador (+color), link y eliminar. El panel
+  derecho quedó minimal: contenido, familia/AV/escala (avanzado), posición y restaurar/
+  revertir — listo para volverse el panel de propiedades de CAMPOS (key/label/firma).
+
 ### fix(color): editar un nodo ya NO pierde el color (ni el bake ni el display)
 Editar el contenido de un texto cuya fuente embebida no cubre los caracteres nuevos (o no
 tiene /ToUnicode) cae al fallback de fuente estándar — que **pintaba todo en negro**,

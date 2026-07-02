@@ -103,12 +103,17 @@ app.post('/api/documents/:id/bake', async (req, res) => {
   const edits = Array.isArray(req.body?.edits) ? req.body.edits : [];
   const imageEdits = Array.isArray(req.body?.imageEdits) ? req.body.imageEdits : [];
   const widgetEdits = Array.isArray(req.body?.widgetEdits) ? req.body.widgetEdits : [];
-  if (edits.length === 0 && imageEdits.length === 0 && widgetEdits.length === 0) {
-    return res.status(400).json({ error: 'Body esperado: { edits, imageEdits, widgetEdits } con al menos una edición.' });
+  const highlights = Array.isArray(req.body?.highlights) ? req.body.highlights : [];
+  if (edits.length === 0 && imageEdits.length === 0 && widgetEdits.length === 0 && highlights.length === 0) {
+    return res.status(400).json({ error: 'Body esperado: { edits, imageEdits, widgetEdits, highlights } con al menos una edición.' });
   }
   try {
     const original = readFileSync(pdfPath(id));
-    const { pdf, applied, warnings } = await bakeSegmentEdits(new Uint8Array(original), edits, imageEdits, widgetEdits);
+    let { pdf, applied, warnings } = await bakeSegmentEdits(new Uint8Array(original), edits, imageEdits, widgetEdits);
+    for (const h of highlights) {
+      ({ pdf } = await addHighlight(pdf, h));
+      applied.push(`highlight en p${h.page}`);
+    }
     copyFileSync(pdfPath(id), `${pdfPath(id)}.bak`);
     writeFileSync(pdfPath(id), Buffer.from(pdf));
     res.json({ ok: true, applied, warnings });

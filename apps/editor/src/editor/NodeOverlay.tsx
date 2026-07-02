@@ -168,16 +168,39 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
   const alignTo = (x: number) => onPatch({ x: Math.abs(x - seg.x) < 0.05 ? null : round1(x) });
   const bbox = { page: seg.page, x: eff.x, y: eff.y, width: eff.width, height: eff.height };
 
+  const dom = dominantRun(seg);
+  const textColor = edit?.color ?? dom.color ?? '#000000';
+  const effSize = edit?.fontSize ?? seg.fontSize;
+
   return (
     <FloatingWrap rect={rect}>
+      <FbBtn label="Negrita" onClick={() => toggle('bold')} active={allBold}><Bold size={14} /></FbBtn>
+      <FbBtn label="Itálica" onClick={() => toggle('italic')} active={allItalic}><Italic size={14} /></FbBtn>
+      <input
+        className="fb-input"
+        type="number"
+        step={0.5}
+        min={4}
+        title="Tamaño (pt)"
+        key={`${seg.id}-${round1(effSize)}`}
+        defaultValue={round1(effSize)}
+        onMouseDown={e => e.stopPropagation()}
+        onClick={e => e.stopPropagation()}
+        onBlur={e => {
+          const v = parseFloat(e.target.value);
+          if (Number.isFinite(v) && v >= 4) onPatch({ fontSize: round1(v) === round1(seg.fontSize) ? null : round1(v) });
+        }}
+        onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+      />
+      <button className="fb-swatch" title="Color del texto" style={{ background: textColor }} onMouseDown={e => e.preventDefault()} onClick={e => e.stopPropagation()}>
+        <input type="color" value={textColor} onChange={e => onPatch({ color: e.target.value.toLowerCase() === (dom.color ?? '#000000').toLowerCase() ? null : e.target.value })} />
+      </button>
+      <FbSep />
       <FbBtn label="Alinear a la izquierda" onClick={() => alignTo(MARGIN)}><AlignLeft size={14} /></FbBtn>
       <FbBtn label="Centrar en la página" onClick={() => alignTo((pageWidth - eff.width) / 2)}><AlignCenter size={14} /></FbBtn>
       <FbBtn label="Alinear a la derecha" onClick={() => alignTo(pageWidth - MARGIN - eff.width)}><AlignRight size={14} /></FbBtn>
       <FbSep />
-      <FbBtn label="Negrita" onClick={() => toggle('bold')} active={allBold}><Bold size={14} /></FbBtn>
-      <FbBtn label="Itálica" onClick={() => toggle('italic')} active={allItalic}><Italic size={14} /></FbBtn>
-      <FbSep />
-      <FbBtn label="Resaltar" onClick={() => onDocOp('highlight', { ...bbox, color: highlightColor })}><Highlighter size={14} /></FbBtn>
+      <FbBtn label="Resaltar (acumula, se escribe con Aplicar)" onClick={() => onDocOp('highlight', { ...bbox, color: highlightColor })}><Highlighter size={14} /></FbBtn>
       <button className="fb-swatch" title="Color del resaltador" style={{ background: highlightColor }} onMouseDown={e => e.preventDefault()} onClick={e => e.stopPropagation()}>
         <input type="color" value={highlightColor} onChange={e => onHighlightColor(e.target.value)} />
       </button>
@@ -328,24 +351,14 @@ function WidgetBox({ widget, pageWidth, pageHeight, scale, selected, edit, isLoc
   const gripStart = useRef<{ px: number; py: number } | null>(null);
   const [gripDelta, setGripDelta] = useState<{ dx: number; dy: number } | null>(null);
 
-  if (eff.removed) {
-    return (
-      <div
-        className={`img-removed${selected ? ' selected' : ''}`}
-        style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height }}
-        title="Campo eliminado — se aplica con el botón Aplicar; restaurable desde el panel"
-        onClick={e => { e.stopPropagation(); onSelect(); }}
-      >
-        <span className="ghost-label">se elimina al Aplicar</span>
-      </div>
-    );
-  }
+  // Eliminado: el preview local ya lo removió del render — nada que dibujar
+  // (Ctrl+Z lo trae de vuelta).
+  if (eff.removed) return null;
 
-  // Mientras se arrastra o hay un move/resize pendiente: el box viaja con los
-  // PÍXELES reales del widget (crop del snapshot) y el lugar original se
-  // enmascara — sin esto se movía el frame teal y el input pintado quedaba.
-  const moved = edit != null && (edit.x !== undefined || edit.y !== undefined || edit.width !== undefined || edit.height !== undefined);
-  const showPixels = moved || drag != null;
+  // SOLO durante el gesto de drag: el box viaja con los píxeles reales y el
+  // origen se enmascara. Al soltar, el preview local re-renderiza el widget
+  // realmente movido — sin cajas blancas remanentes.
+  const showPixels = drag != null;
   const pixels = showPixels && snapshot && orig.width > 0 && orig.height > 0
     ? {
         backgroundImage: `url(${snapshot.url})`,
@@ -473,23 +486,13 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
   const gripStart = useRef<{ px: number; py: number } | null>(null);
   const [gripDelta, setGripDelta] = useState<{ dx: number; dy: number } | null>(null);
 
-  if (eff.removed) {
-    return (
-      <div
-        className={`img-removed${selected ? ' selected' : ''}`}
-        style={{ left: orig.left, top: orig.top, width: orig.width, height: orig.height }}
-        title="Imagen eliminada — se aplica con el botón Aplicar; restaurable desde el panel"
-        onClick={e => { e.stopPropagation(); onSelect(); }}
-      >
-        <span className="ghost-label">se elimina al Aplicar</span>
-      </div>
-    );
-  }
+  // Eliminada: el preview local ya la quitó del render (Ctrl+Z la restaura).
+  if (eff.removed) return null;
 
-  // Preview con PÍXELES reales (crop del snapshot) mientras se arrastra o hay
-  // una edición pendiente; el lugar original se enmascara en blanco — salvo
-  // que la imagen sea casi de página completa (taparía el texto de arriba).
-  const ghost = eff.moved || drag != null;
+  // SOLO durante el drag: píxeles reales viajando + máscara del origen (salvo
+  // imágenes casi full-page). Al soltar, el preview local re-renderiza la
+  // imagen realmente movida — sin duplicados.
+  const ghost = drag != null;
   const ghostPixels = ghost && snapshot && orig.width > 0 && orig.height > 0
     ? {
         backgroundImage: `url(${snapshot.url})`,

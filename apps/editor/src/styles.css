@@ -114,8 +114,16 @@ body {
 .fb-btn.active { background: var(--accent); color: #fff; }
 .fb-btn.danger:hover { background: #fee2e2; color: var(--danger); }
 .fb-sep { width: 1px; height: 16px; background: var(--line); margin: 0 2px; }
-.fb-swatch { width: 18px; height: 18px; border-radius: 4px; border: 1px solid rgba(0,0,0,.15); cursor: pointer; padding: 0; position: relative; }
+.fb-swatch { width: 18px; height: 18px; border-radius: 4px; border: 1px solid rgba(0,0,0,.15); cursor: pointer; padding: 0; position: relative; margin: 0 2px; }
 .fb-swatch input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.fb-input {
+  width: 46px; height: 24px; margin: 0 2px; padding: 0 4px;
+  border: 1px solid var(--line); border-radius: 5px;
+  font-size: 12px; text-align: center; outline: none;
+  appearance: textfield;
+}
+.fb-input::-webkit-inner-spin-button { appearance: none; }
+.fb-input:focus { border-color: var(--accent); }
 
 /* Scrollbars sutiles en los paneles */
 .thin-scroll::-webkit-scrollbar { width: 10px; height: 10px; }

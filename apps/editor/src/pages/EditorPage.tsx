@@ -31,6 +31,8 @@ type Dialog =
   | { kind: 'headerFooter' }
   | { kind: 'link'; target: { page: number; x: number; y: number; width: number; height: number } };
 
+interface PendingHighlight { page: number; x: number; y: number; width: number; height: number; color?: string }
+
 interface NavTool { id: string; icon: LucideIcon; label: string; placing: Placing }
 const NAV_GROUPS: Array<{ label: string; tools: NavTool[] }> = [
   {
@@ -66,6 +68,8 @@ export function EditorPage() {
   const [edits, setEdits] = useState<Map<string, SegmentEdit>>(new Map());
   const [imageEdits, setImageEdits] = useState<Map<string, ImageEdit>>(new Map());
   const [widgetEdits, setWidgetEdits] = useState<Map<string, WidgetEdit>>(new Map());
+  const [pendingHighlights, setPendingHighlights] = useState<PendingHighlight[]>([]);
+  const [baseBytes, setBaseBytes] = useState<Uint8Array | null>(null);
   const [baking, setBaking] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -138,38 +142,80 @@ export function EditorPage() {
       .catch(e => setError(e instanceof Error ? e.message : 'No se pudo agregar'));
   }, [id]);
 
-  // Operaciones de documento instantáneas (highlight, links, watermark…).
+  // Operaciones de documento. HIGHLIGHT acumula (preview local, se escribe con
+  // Aplicar); el resto (links, watermark, enc/pie, texto nuevo) son acciones
+  // deliberadas de diálogo y van directo.
   const docOp = useCallback((action: string, params: Record<string, unknown>) => {
+    if (action === 'highlight') {
+      pushHistory();
+      setPendingHighlights(prev => [...prev, params as unknown as PendingHighlight]);
+      return;
+    }
     setError('');
     api.docOp(id, action, params)
       .then(() => { setDocVersion(v => v + 1); setNotice('Aplicado'); })
       .catch(e => setError(e instanceof Error ? e.message : 'No se pudo aplicar'));
-  }, [id]);
+  }, [id, pushHistory]);
 
+  // Los BYTES base del documento (lo que el server tiene persistido).
   useEffect(() => {
     let cancelled = false;
-    const task = getDocument({ url: `${api.pdfUrl(id)}?v=${docVersion}` });
-    task.promise.then(
-      doc => { if (!cancelled) setPdf(doc); else void doc.destroy(); },
-      e => { if (!cancelled) setError(e instanceof Error ? e.message : 'No se pudo abrir el PDF'); },
-    );
-    return () => { cancelled = true; void task.destroy(); };
+    fetch(`${api.pdfUrl(id)}?v=${docVersion}`)
+      .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(String(r.status)))))
+      .then(buf => { if (!cancelled) setBaseBytes(new Uint8Array(buf)); })
+      .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'No se pudo abrir el PDF'); });
+    return () => { cancelled = true; };
   }, [id, docVersion]);
+
+  // ── PREVIEW HORNEADO LOCALMENTE: las ediciones pendientes de imágenes,
+  //    campos y highlights se aplican EN EL BROWSER (el mismo bake de core)
+  //    sobre una copia, y se renderiza ESO. WYSIWYG real, sin máscaras ni
+  //    duplicados, y el server no se toca hasta Aplicar. El texto sigue como
+  //    overlay editable aparte. ──
+  useEffect(() => {
+    if (!baseBytes) return;
+    let cancelled = false;
+    (async () => {
+      let bytes: Uint8Array = baseBytes;
+      if (imageEdits.size || widgetEdits.size || pendingHighlights.length) {
+        const { bakeSegmentEdits, addHighlight } = await import('@aldus/core/bake');
+        const r = await bakeSegmentEdits(baseBytes.slice(), [], [...imageEdits.values()], [...widgetEdits.values()]);
+        bytes = r.pdf;
+        for (const h of pendingHighlights) ({ pdf: bytes } = await addHighlight(bytes, h));
+      }
+      if (cancelled) return;
+      // pdf.js TRANSFIERE el buffer al worker → siempre una copia.
+      const task = getDocument({ data: bytes.slice() });
+      const doc = await task.promise;
+      if (cancelled) { void doc.destroy(); return; }
+      setPdf(prev => { void prev?.destroy(); return doc; });
+    })().catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'No se pudo generar el preview'); });
+    return () => { cancelled = true; };
+  }, [baseBytes, imageEdits, widgetEdits, pendingHighlights]);
 
   // ── Historial UNIFICADO (texto + imágenes + campos): Ctrl+Z deshace,
   //    Ctrl+Shift+Z / Ctrl+Y rehace. Snapshots de los tres maps. ──
-  interface Snap { e: Map<string, SegmentEdit>; i: Map<string, ImageEdit>; w: Map<string, WidgetEdit> }
+  interface Snap { e: Map<string, SegmentEdit>; i: Map<string, ImageEdit>; w: Map<string, WidgetEdit>; h: PendingHighlight[] }
   const editsRef = useRef(edits);
   const imageEditsRef = useRef(imageEdits);
   const widgetEditsRef = useRef(widgetEdits);
+  const highlightsRef = useRef(pendingHighlights);
   editsRef.current = edits;
   imageEditsRef.current = imageEdits;
   widgetEditsRef.current = widgetEdits;
+  highlightsRef.current = pendingHighlights;
+  const snapNow = (): Snap => ({ e: editsRef.current, i: imageEditsRef.current, w: widgetEditsRef.current, h: highlightsRef.current });
+  const restoreSnap = (s: Snap) => {
+    setEdits(s.e);
+    setImageEdits(s.i);
+    setWidgetEdits(s.w);
+    setPendingHighlights(s.h);
+  };
   const undoStack = useRef<Snap[]>([]);
   const redoStack = useRef<Snap[]>([]);
   const [histTick, setHistTick] = useState(0); // fuerza re-render para habilitar botones
   const pushHistory = useCallback(() => {
-    undoStack.current.push({ e: editsRef.current, i: imageEditsRef.current, w: widgetEditsRef.current });
+    undoStack.current.push(snapNow());
     if (undoStack.current.length > 100) undoStack.current.shift();
     redoStack.current = [];
     setHistTick(t => t + 1);
@@ -177,20 +223,16 @@ export function EditorPage() {
   const undo = useCallback(() => {
     const snap = undoStack.current.pop();
     if (!snap) return;
-    redoStack.current.push({ e: editsRef.current, i: imageEditsRef.current, w: widgetEditsRef.current });
-    setEdits(snap.e);
-    setImageEdits(snap.i);
-    setWidgetEdits(snap.w);
+    redoStack.current.push(snapNow());
+    restoreSnap(snap);
     setSelectedId(null);
     setHistTick(t => t + 1);
   }, []);
   const redo = useCallback(() => {
     const snap = redoStack.current.pop();
     if (!snap) return;
-    undoStack.current.push({ e: editsRef.current, i: imageEditsRef.current, w: widgetEditsRef.current });
-    setEdits(snap.e);
-    setImageEdits(snap.i);
-    setWidgetEdits(snap.w);
+    undoStack.current.push(snapNow());
+    restoreSnap(snap);
     setSelectedId(null);
     setHistTick(t => t + 1);
   }, []);
@@ -292,10 +334,11 @@ export function EditorPage() {
     setBaking(true);
     setError('');
     try {
-      const r = await api.bake(id, [...edits.values()], [...imageEdits.values()], [...widgetEdits.values()]);
+      const r = await api.bake(id, [...edits.values()], [...imageEdits.values()], [...widgetEdits.values()], pendingHighlights as unknown as Array<Record<string, unknown>>);
       setEdits(new Map());
       setImageEdits(new Map());
       setWidgetEdits(new Map());
+      setPendingHighlights([]);
       undoStack.current = [];
       redoStack.current = [];
       setSelectedId(null);
@@ -306,10 +349,10 @@ export function EditorPage() {
     } finally {
       setBaking(false);
     }
-  }, [id, edits, imageEdits, widgetEdits]);
+  }, [id, edits, imageEdits, widgetEdits, pendingHighlights]);
 
   const numPages = pdf?.numPages ?? 0;
-  const totalEdits = edits.size + imageEdits.size + widgetEdits.size;
+  const totalEdits = edits.size + imageEdits.size + widgetEdits.size + pendingHighlights.length;
   const pageEdits = useMemo(() => new Map([...edits].filter(([, e]) => e.page === pageNum)), [edits, pageNum]);
   const pageImageEdits = useMemo(() => new Map([...imageEdits].filter(([, e]) => e.page === pageNum)), [imageEdits, pageNum]);
   const pageWidgetEdits = useMemo(() => new Map([...widgetEdits].filter(([, e]) => e.page === pageNum)), [widgetEdits, pageNum]);

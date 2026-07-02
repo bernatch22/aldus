@@ -15,7 +15,7 @@ import {
   type PdfJsPage,
   type SegmentEdit,
 } from '../src/index.js';
-import { bakeSegmentEdits } from '../src/bake/index.js';
+import { addFormField, bakeSegmentEdits, insertImage } from '../src/bake/index.js';
 
 async function makePdf(): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
@@ -246,6 +246,38 @@ describe('widgets (AcroForm)', () => {
     const g2 = await graphOf(baked);
     expect(g2.widgets).toHaveLength(1);
     expect(g2.widgets[0].fieldName).toBe('cliente.nombre');
+  });
+});
+
+describe('crear nodos', () => {
+  it('crea campos nuevos (texto, checkbox, firma) con nombre único', async () => {
+    let pdf = await makePdf();
+    ({ pdf } = await addFormField(pdf, { type: 'text', page: 1, x: 72, y: 500 }));
+    ({ pdf } = await addFormField(pdf, { type: 'text', page: 1, x: 72, y: 470 }));
+    ({ pdf } = await addFormField(pdf, { type: 'checkbox', page: 1, x: 72, y: 440 }));
+    const sig = await addFormField(pdf, { type: 'signature', page: 1, x: 72, y: 380 });
+    pdf = sig.pdf;
+    expect(sig.name).toBe('firma_1');
+
+    const g = await graphOf(pdf);
+    const types = g.widgets.map(w => `${w.fieldName}:${w.widgetType}`).sort();
+    expect(types).toEqual(['check_1:checkbox', 'firma_1:signature', 'texto_1:text', 'texto_2:text']);
+    const firma = g.widgets.find(w => w.widgetType === 'signature');
+    expect(Math.abs((firma?.width ?? 0) - 200)).toBeLessThanOrEqual(2);
+  });
+
+  it('inserta una imagen en el punto clickeado (aspecto preservado)', async () => {
+    const PNG_1PX = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const pdf = await makePdf();
+    const { pdf: withImage, rect } = await insertImage(pdf, {
+      page: 1, x: 100, y: 600, bytes: Buffer.from(PNG_1PX, 'base64'), mime: 'image/png', maxWidth: 120,
+    });
+    expect(rect.width).toBeLessThanOrEqual(120);
+    const g = await graphOf(withImage);
+    expect(g.images).toHaveLength(1);
+    expect(g.images[0].x).toBeCloseTo(rect.x, 0);
+    // El texto original sigue ahí.
+    expect(segByText(g, 'Nombre:').x).toBeCloseTo(72, 0);
   });
 });
 

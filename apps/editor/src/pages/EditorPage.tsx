@@ -1,12 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { getDocument, type PDFDocumentProxy } from 'pdfjs-dist';
-import { effectiveGeometry, mergeSegmentEdit, type ImageEdit, type PageGraph, type SegmentEdit, type WidgetEdit } from '@aldus/core';
+import { effectiveGeometry, FIELD_DEFAULT_SIZE, mergeSegmentEdit, type ImageEdit, type PageGraph, type SegmentEdit, type WidgetEdit, type WidgetKind } from '@aldus/core';
 import { api } from '../lib/api';
 import { PdfCanvas } from '../editor/PdfCanvas';
 import { Inspector } from '../editor/Inspector';
 
 const r1 = (v: number) => Math.round(v * 10) / 10;
+
+type Placing = { kind: 'field'; type: WidgetKind } | { kind: 'image'; file: File } | null;
+
+const FIELD_TOOLS: Array<{ type: WidgetKind; icon: string; label: string }> = [
+  { type: 'text', icon: 'T', label: 'Campo de texto' },
+  { type: 'checkbox', icon: '☑', label: 'Checkbox' },
+  { type: 'radio', icon: '◉', label: 'Radio' },
+  { type: 'select', icon: '▾', label: 'Select' },
+  { type: 'signature', icon: '✍', label: 'Campo de firma' },
+];
 
 export function EditorPage() {
   const { id = '' } = useParams();
@@ -22,6 +32,45 @@ export function EditorPage() {
   const [edits, setEdits] = useState<Map<string, SegmentEdit>>(new Map());
   const [imageEdits, setImageEdits] = useState<Map<string, ImageEdit>>(new Map());
   const [widgetEdits, setWidgetEdits] = useState<Map<string, WidgetEdit>>(new Map());
+
+  // ── LOCKS: un nodo bloqueado es invisible al mouse (ni hover ni drag);
+  //    se desbloquea desde el panel/lista. Persistido por documento. ──
+  const [locked, setLocked] = useState<Set<string>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(`aldus-locks-${id}`) || '[]') as string[]);
+    } catch {
+      return new Set();
+    }
+  });
+  const toggleLock = useCallback((nodeId: string) => {
+    setLocked(prev => {
+      const next = new Set(prev);
+      if (next.has(nodeId)) next.delete(nodeId);
+      else next.add(nodeId);
+      localStorage.setItem(`aldus-locks-${id}`, JSON.stringify([...next]));
+      return next;
+    });
+  }, [id]);
+
+  // ── INSERTAR: paleta → modo colocación → click en la página crea el nodo. ──
+  const [placing, setPlacing] = useState<Placing>(null);
+  const imageFileRef = useRef<HTMLInputElement>(null);
+  const onPlace = useCallback((x: number, y: number) => {
+    if (!placing) return;
+    const p = placing;
+    setPlacing(null);
+    setError('');
+    setNotice('');
+    const run = p.kind === 'field'
+      ? api.createField(id, { type: p.type, page: pageNum, x: r1(x), y: r1(y - FIELD_DEFAULT_SIZE[p.type].height) })
+      : api.insertImage(id, p.file, { page: pageNum, x: r1(x), y: r1(y) });
+    run
+      .then(() => {
+        setDocVersion(v => v + 1);
+        setNotice(p.kind === 'field' ? 'Campo creado ✓' : 'Imagen insertada ✓');
+      })
+      .catch(e => setError(e instanceof Error ? e.message : 'No se pudo crear'));
+  }, [placing, id, pageNum]);
   const [baking, setBaking] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -116,6 +165,11 @@ export function EditorPage() {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName))) return;
+
+      if (e.key === 'Escape') {
+        setPlacing(null);
+        return;
+      }
 
       const seg = selectedId && graph ? graph.segments.find(s => s.id === selectedId) : null;
       if (seg && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
@@ -216,8 +270,36 @@ export function EditorPage() {
           <span>{Math.round(scale * 100)}%</span>
           <button onClick={() => setZoom(scale + 0.15)}>+</button>
         </div>
+        <div className="toolbar-group palette">
+          <span className="muted">Insertar:</span>
+          {FIELD_TOOLS.map(t => (
+            <button
+              key={t.type}
+              className={placing?.kind === 'field' && placing.type === t.type ? 'tool-active' : ''}
+              title={t.label}
+              onClick={() => setPlacing(p => (p?.kind === 'field' && p.type === t.type ? null : { kind: 'field', type: t.type }))}
+            >{t.icon}</button>
+          ))}
+          <button
+            className={placing?.kind === 'image' ? 'tool-active' : ''}
+            title="Insertar imagen (PNG/JPEG)"
+            onClick={() => imageFileRef.current?.click()}
+          >🖼</button>
+          <input
+            ref={imageFileRef}
+            type="file"
+            accept="image/png,image/jpeg"
+            hidden
+            onChange={e => {
+              const f = e.target.files?.[0];
+              if (f) setPlacing({ kind: 'image', file: f });
+              e.target.value = '';
+            }}
+          />
+          {placing && <span className="muted">click en la página (Esc cancela)</span>}
+        </div>
         <div className="toolbar-group grow">
-          {graph && <span className="muted">{graph.lines.length} líneas · {graph.segments.length} segmentos · {graph.runs.length} runs</span>}
+          {!placing && graph && <span className="muted">{graph.lines.length} líneas · {graph.segments.length} segmentos · {graph.runs.length} runs</span>}
         </div>
         <div className="toolbar-group">
           {error && <span className="error">{error}</span>}
@@ -245,6 +327,9 @@ export function EditorPage() {
               onImageEdit={onImageEdit}
               widgetEdits={pageWidgetEdits}
               onWidgetEdit={onWidgetEdit}
+              locked={locked}
+              placing={placing != null}
+              onPlace={onPlace}
             />
           ) : (
             <p className="muted center">{error || 'Abriendo el PDF…'}</p>
@@ -260,6 +345,8 @@ export function EditorPage() {
           onImageEdit={onImageEdit}
           widgetEdits={widgetEdits}
           onWidgetEdit={onWidgetEdit}
+          locked={locked}
+          onToggleLock={toggleLock}
         />
       </div>
     </div>

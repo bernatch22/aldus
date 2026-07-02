@@ -14,6 +14,7 @@ export type {
   WidgetEdit,
   WidgetKind,
 } from './model.js';
+export { FIELD_DEFAULT_SIZE } from './model.js';
 export { extractPageGraph, groupIntoLines } from './extractGraph.js';
 export type { PdfJsPage, PdfJsTextItem } from './extractGraph.js';
 export { classifyGap, avgCharWidth, splitSegments, segmentText } from './tokens.js';

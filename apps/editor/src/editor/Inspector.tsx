@@ -41,6 +41,19 @@ interface Props {
   onImageEdit: (action: ImageEditAction) => void;
   widgetEdits: Map<string, WidgetEdit>;
   onWidgetEdit: (action: WidgetEditAction) => void;
+  locked: Set<string>;
+  onToggleLock: (nodeId: string) => void;
+}
+
+/** Botón compartido de lock: un nodo bloqueado no responde al mouse en el
+ *  lienzo; se administra desde acá. */
+function LockButton({ nodeId, locked, onToggleLock }: { nodeId: string; locked: Set<string>; onToggleLock: (id: string) => void }) {
+  const isLocked = locked.has(nodeId);
+  return (
+    <button className={isLocked ? 'tool-active' : ''} onClick={() => onToggleLock(nodeId)}>
+      {isLocked ? '🔓 Desbloquear' : '🔒 Bloquear'}
+    </button>
+  );
 }
 
 const WIDGET_TYPE_LABEL: Record<WidgetNode['widgetType'], string> = {
@@ -65,7 +78,7 @@ function StyledPreview({ seg, edit }: { seg: SegmentNode; edit: SegmentEdit | nu
   );
 }
 
-export function Inspector({ graph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit }: Props) {
+export function Inspector({ graph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, onToggleLock }: Props) {
   if (!graph) return <aside className="inspector" />;
   const selected = graph.segments.find(s => s.id === selectedId) ?? null;
   const selectedImage = graph.images.find(i => i.id === selectedId) ?? null;
@@ -74,29 +87,38 @@ export function Inspector({ graph, selectedId, onSelect, edits, onEdit, imageEdi
   return (
     <aside className="inspector">
       {selectedWidget ? (
-        <WidgetProperties
-          key={selectedWidget.id}
-          widget={selectedWidget}
-          edit={widgetEdits.get(selectedWidget.id) ?? null}
-          onClose={() => onSelect(null)}
-          onWidgetEdit={onWidgetEdit}
-        />
+        <>
+          <WidgetProperties
+            key={selectedWidget.id}
+            widget={selectedWidget}
+            edit={widgetEdits.get(selectedWidget.id) ?? null}
+            onClose={() => onSelect(null)}
+            onWidgetEdit={onWidgetEdit}
+          />
+          <LockButton nodeId={selectedWidget.id} locked={locked} onToggleLock={onToggleLock} />
+        </>
       ) : selectedImage ? (
-        <ImageProperties
-          key={selectedImage.id}
-          img={selectedImage}
-          edit={imageEdits.get(selectedImage.id) ?? null}
-          onClose={() => onSelect(null)}
-          onImageEdit={onImageEdit}
-        />
+        <>
+          <ImageProperties
+            key={selectedImage.id}
+            img={selectedImage}
+            edit={imageEdits.get(selectedImage.id) ?? null}
+            onClose={() => onSelect(null)}
+            onImageEdit={onImageEdit}
+          />
+          <LockButton nodeId={selectedImage.id} locked={locked} onToggleLock={onToggleLock} />
+        </>
       ) : selected ? (
-        <ObjectProperties
-          key={selected.id}
-          seg={selected}
-          edit={edits.get(selected.id) ?? null}
-          onClose={() => onSelect(null)}
-          onEdit={onEdit}
-        />
+        <>
+          <ObjectProperties
+            key={selected.id}
+            seg={selected}
+            edit={edits.get(selected.id) ?? null}
+            onClose={() => onSelect(null)}
+            onEdit={onEdit}
+          />
+          <LockButton nodeId={selected.id} locked={locked} onToggleLock={onToggleLock} />
+        </>
       ) : (
         <>
           <div className="insp-head">
@@ -118,7 +140,7 @@ export function Inspector({ graph, selectedId, onSelect, edits, onEdit, imageEdi
                       className={`seg-item${widgetEdits.has(w.id) ? ' edited' : ''}`}
                       onClick={() => onSelect(w.id)}
                     >
-                      <span className="mono">▭ {w.fieldName || '(sin nombre)'} · {WIDGET_TYPE_LABEL[w.widgetType]}</span>
+                      <span className="mono">{locked.has(w.id) ? '🔒 ' : ''}▭ {w.fieldName || '(sin nombre)'} · {WIDGET_TYPE_LABEL[w.widgetType]}</span>
                       <span className="muted">x={n1(w.x)} · y={n1(w.y)} · {n1(w.width)}×{n1(w.height)}pt</span>
                     </div>
                   </li>
@@ -136,7 +158,7 @@ export function Inspector({ graph, selectedId, onSelect, edits, onEdit, imageEdi
                       className={`seg-item${imageEdits.has(img.id) ? ' edited' : ''}`}
                       onClick={() => onSelect(img.id)}
                     >
-                      <span className="mono">🖼 {Math.round(img.width)}×{Math.round(img.height)} pt{imageEdits.get(img.id)?.remove ? ' · eliminada' : ''}</span>
+                      <span className="mono">{locked.has(img.id) ? '🔒 ' : ''}🖼 {Math.round(img.width)}×{Math.round(img.height)} pt{imageEdits.get(img.id)?.remove ? ' · eliminada' : ''}</span>
                       <span className="muted">x={n1(img.x)} · y={n1(img.y)}{img.rotated ? ' · rotada' : ''}</span>
                     </div>
                   </li>

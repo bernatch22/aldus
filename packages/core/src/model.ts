@@ -120,6 +120,16 @@ export interface ImageEdit {
 
 export type WidgetKind = 'text' | 'checkbox' | 'radio' | 'select' | 'list' | 'button' | 'signature';
 
+export const FIELD_DEFAULT_SIZE: Record<WidgetKind, { width: number; height: number }> = {
+  text: { width: 160, height: 20 },
+  checkbox: { width: 14, height: 14 },
+  radio: { width: 14, height: 14 },
+  select: { width: 140, height: 20 },
+  list: { width: 140, height: 60 },
+  button: { width: 90, height: 24 },
+  signature: { width: 200, height: 50 },
+};
+
 /** Un campo de formulario (widget annotation de AcroForm). Vive en la capa
  *  /Annots — no en el content stream — así que editarlo es actualizar /Rect. */
 export interface WidgetNode {

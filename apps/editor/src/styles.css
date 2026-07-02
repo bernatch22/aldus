@@ -70,6 +70,14 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .pdf-stage { position: relative; box-shadow: 0 1px 8px rgba(0, 0, 0, 0.18); background: #fff; }
 .pdf-stage canvas { display: block; }
 .node-overlay { position: absolute; inset: 0; }
+.node-overlay.placing { cursor: crosshair; }
+.node-overlay.placing > * { pointer-events: none; }
+
+/* Nodo BLOQUEADO: invisible al mouse — ni hover, ni click, ni drag. Solo se
+   ve (y desbloquea) desde el panel/lista. */
+.node-overlay .locked { pointer-events: none; }
+.node-overlay .locked:hover { outline-color: transparent; background: transparent; }
+.node-overlay .locked.selected { outline: 1.5px dashed #a1a1aa; }
 
 .seg-box {
   position: absolute;
@@ -186,6 +194,9 @@ button.toggle.mini { width: 22px; height: 22px; font-size: 11px; flex-shrink: 0;
 .tramo-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 button.danger { margin-top: 12px; width: 100%; color: #b91c1c; border-color: #fecaca; }
 .page-input { width: 52px; text-align: center; font: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 4px 2px; }
+.toolbar-group.palette button { min-width: 30px; }
+button.tool-active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.inspector > button { margin-top: 10px; width: 100%; }
 .insp-props { display: grid; grid-template-columns: 72px 1fr; gap: 4px 8px; margin: 12px 0; }
 .insp-props dt { color: var(--muted); }
 .insp-props dd { margin: 0; overflow-wrap: anywhere; }

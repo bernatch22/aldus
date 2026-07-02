@@ -17,7 +17,7 @@ import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { bakeSegmentEdits } from '@aldus/core/bake';
+import { addFormField, bakeSegmentEdits, insertImage } from '@aldus/core/bake';
 
 const PORT = Number(process.env.ALDUS_PORT || 4100);
 const DATA_DIR = process.env.ALDUS_DATA || path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
@@ -102,6 +102,52 @@ app.post('/api/documents/:id/bake', async (req, res) => {
     res.json({ ok: true, applied, warnings });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'No se pudo aplicar el bake.' });
+  }
+});
+
+// Crear un campo de formulario nuevo (texto/checkbox/radio/select/lista/botón/firma).
+app.post('/api/documents/:id/fields', async (req, res) => {
+  const { id } = req.params;
+  if (!ID_RE.test(id) || !existsSync(pdfPath(id))) return res.status(404).json({ error: 'No existe.' });
+  const { type, page, x, y, width, height, name } = req.body ?? {};
+  if (!type || !Number.isFinite(page) || !Number.isFinite(x) || !Number.isFinite(y)) {
+    return res.status(400).json({ error: 'Body esperado: { type, page, x, y, width?, height?, name? }.' });
+  }
+  try {
+    const original = readFileSync(pdfPath(id));
+    const { pdf, name: assigned } = await addFormField(new Uint8Array(original), { type, page, x, y, width, height, name });
+    copyFileSync(pdfPath(id), `${pdfPath(id)}.bak`);
+    writeFileSync(pdfPath(id), Buffer.from(pdf));
+    res.json({ ok: true, name: assigned });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'No se pudo crear el campo.' });
+  }
+});
+
+// Insertar una imagen (PNG/JPEG) en el punto clickeado.
+app.post('/api/documents/:id/images', upload.single('image'), async (req, res) => {
+  const { id } = req.params;
+  if (!ID_RE.test(id) || !existsSync(pdfPath(id))) return res.status(404).json({ error: 'No existe.' });
+  const file = req.file;
+  const page = Number(req.body?.page);
+  const x = Number(req.body?.x);
+  const y = Number(req.body?.y);
+  if (!file || !Number.isFinite(page) || !Number.isFinite(x) || !Number.isFinite(y)) {
+    return res.status(400).json({ error: 'Esperado: multipart {image} + page/x/y.' });
+  }
+  if (!/^image\/(png|jpe?g)$/i.test(file.mimetype)) {
+    return res.status(400).json({ error: 'Solo PNG o JPEG.' });
+  }
+  try {
+    const original = readFileSync(pdfPath(id));
+    const { pdf, rect } = await insertImage(new Uint8Array(original), {
+      page, x, y, bytes: new Uint8Array(file.buffer), mime: file.mimetype,
+    });
+    copyFileSync(pdfPath(id), `${pdfPath(id)}.bak`);
+    writeFileSync(pdfPath(id), Buffer.from(pdf));
+    res.json({ ok: true, rect });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'No se pudo insertar la imagen.' });
   }
 });
 

@@ -4,6 +4,18 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### feat: LOCK de nodos + paleta de INSERTAR (campos, firma, imágenes)
+**Lock**: cualquier nodo (imagen/campo/segmento) se puede bloquear desde su panel — un
+nodo bloqueado es invisible al mouse (ni hover, ni selección, ni drag; pointer-events
+none); se ve con 🔒 en las listas del Inspector y se desbloquea desde ahí. Persistido por
+documento en localStorage. **Insertar**: paleta en la toolbar (T ☑ ◉ ▾ ✍ 🖼) → modo
+colocación (crosshair, Esc cancela) → click en la página crea el nodo al instante:
+campos AcroForm vía pdf-lib (text/checkbox/radio/select) con nombre único autogenerado
+(texto_1, check_1…), campo de FIRMA armado a mano a nivel de diccionario (FT /Sig — el
+`T` como PDFString, no PDFName: pdf.js lee el fieldName de ahí), e imágenes PNG/JPEG
+subidas por file-picker, colocadas en el click con aspecto preservado (máx 240pt).
+Endpoints POST /:id/fields y /:id/images. 2 tests nuevos (21/21 core).
+
 ### feat: Z-ORDER preservado + WIDGETS AcroForm editables
 **Z-order**: la re-emisión del bake ahora es un REEMPLAZO IN-PLACE en el stream (Splice
 {start,end,text}), no extirpar+append — una imagen de fondo movida sigue quedando DEBAJO

@@ -14,6 +14,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
+  cssPointToPdf,
   effectiveGeometry,
   effectiveImageRect,
   effectiveWidgetRect,
@@ -61,6 +62,11 @@ interface Props {
   onImageEdit: (action: ImageEditAction) => void;
   widgetEdits: Map<string, WidgetEdit>;
   onWidgetEdit: (action: WidgetEditAction) => void;
+  /** Nodos bloqueados: invisibles al mouse (ni hover ni drag). */
+  locked: Set<string>;
+  /** Modo colocación: el próximo click en la página crea un nodo. */
+  placing: boolean;
+  onPlace: (x: number, y: number) => void;
   /** Snapshot de la página renderizada (para previews de imágenes movidas). */
   snapshot: { url: string; width: number; height: number } | null;
 }
@@ -85,12 +91,23 @@ const MIN_VISIBLE = 24;
 const clampX = (x: number, w: number, pageW: number) => Math.min(Math.max(x, MIN_VISIBLE - w), pageW - MIN_VISIBLE);
 const clampY = (y: number, h: number, pageH: number) => Math.min(Math.max(y, MIN_VISIBLE - h), pageH - MIN_VISIBLE);
 
-export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, snapshot }: Props) {
+export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => setEditingId(null), [graph.page]);
 
   return (
-    <div className="node-overlay" onClick={() => onSelect(null)}>
+    <div
+      className={`node-overlay${placing ? ' placing' : ''}`}
+      onClick={e => {
+        if (placing) {
+          const r = e.currentTarget.getBoundingClientRect();
+          const p = cssPointToPdf(e.clientX - r.left, e.clientY - r.top, graph.height, scale);
+          onPlace(p.x, p.y);
+          return;
+        }
+        onSelect(null);
+      }}
+    >
       {graph.widgets.map(w => (
         <WidgetBox
           key={w.id}
@@ -100,6 +117,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           scale={scale}
           selected={selectedId === w.id}
           edit={widgetEdits.get(w.id) ?? null}
+          isLocked={locked.has(w.id)}
           onSelect={() => onSelect(w.id)}
           onPatch={patch => {
             const merged = mergeWidgetEdit(w, widgetEdits.get(w.id) ?? null, patch);
@@ -116,6 +134,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           scale={scale}
           selected={selectedId === img.id}
           edit={imageEdits.get(img.id) ?? null}
+          isLocked={locked.has(img.id)}
           snapshot={snapshot}
           onSelect={() => onSelect(img.id)}
           onPatch={patch => {
@@ -134,6 +153,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           selected={selectedId === seg.id}
           editing={editingId === seg.id}
           edit={edits.get(seg.id) ?? null}
+          isLocked={locked.has(seg.id)}
           onSelect={() => onSelect(seg.id)}
           onStartEdit={() => { onSelect(seg.id); setEditingId(seg.id); }}
           onStopEdit={() => setEditingId(null)}
@@ -154,6 +174,7 @@ interface WidgetBoxProps {
   scale: number;
   selected: boolean;
   edit: WidgetEdit | null;
+  isLocked: boolean;
   onSelect: () => void;
   onPatch: (patch: WidgetPatch) => void;
 }
@@ -165,7 +186,7 @@ const WIDGET_LABEL: Record<WidgetNode['widgetType'], string> = {
 
 /** Un campo de formulario: seleccionar, arrastrar (mover), grip (escalar).
  *  La edición se aplica al instante (reescritura del /Rect de la anotación). */
-function WidgetBox({ widget, pageWidth, pageHeight, scale, selected, edit, onSelect, onPatch }: WidgetBoxProps) {
+function WidgetBox({ widget, pageWidth, pageHeight, scale, selected, edit, isLocked, onSelect, onPatch }: WidgetBoxProps) {
   const eff = effectiveWidgetRect(widget, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
   const dragStart = useRef<{ px: number; py: number; moved: boolean } | null>(null);
@@ -186,7 +207,7 @@ function WidgetBox({ widget, pageWidth, pageHeight, scale, selected, edit, onSel
 
   return (
     <div
-      className={`widget-box${selected ? ' selected' : ''}${edit ? ' edited' : ''}`}
+      className={`widget-box${selected ? ' selected' : ''}${edit ? ' edited' : ''}${isLocked ? ' locked' : ''}`}
       style={{
         left: rect.left,
         top: rect.top,
@@ -270,6 +291,7 @@ interface ImageBoxProps {
   scale: number;
   selected: boolean;
   edit: ImageEdit | null;
+  isLocked: boolean;
   snapshot: { url: string; width: number; height: number } | null;
   onSelect: () => void;
   onPatch: (patch: ImagePatch) => void;
@@ -280,7 +302,7 @@ interface ImageBoxProps {
  *  muestra los PÍXELES reales (crop del snapshot de la página); el original
  *  queda visible hasta Aplicar (ahí se muda de verdad). Eliminada: velo rojo
  *  translúcido — nunca una máscara opaca que taparía el texto de arriba. */
-function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, snapshot, onSelect, onPatch }: ImageBoxProps) {
+function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked, snapshot, onSelect, onPatch }: ImageBoxProps) {
   const eff = effectiveImageRect(img, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
   const orig = pdfRectToCss({ x: img.x, y: img.y, width: img.width, height: img.height }, pageHeight, scale);
@@ -315,7 +337,7 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, snapshot,
   return (
     <>
       <div
-        className={`img-box${selected ? ' selected' : ''}${edit ? ' edited' : ''}${ghost ? ' ghost' : ''}`}
+        className={`img-box${selected ? ' selected' : ''}${edit ? ' edited' : ''}${ghost ? ' ghost' : ''}${isLocked ? ' locked' : ''}`}
         style={{
           left: rect.left,
           top: rect.top,
@@ -403,13 +425,14 @@ interface SegmentBoxProps {
   selected: boolean;
   editing: boolean;
   edit: SegmentEdit | null;
+  isLocked: boolean;
   onSelect: () => void;
   onStartEdit: () => void;
   onStopEdit: () => void;
   onPatch: (patch: SegmentPatch) => void;
 }
 
-function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, onSelect, onStartEdit, onStopEdit, onPatch }: SegmentBoxProps) {
+function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, isLocked, onSelect, onStartEdit, onStopEdit, onPatch }: SegmentBoxProps) {
   const eff = effectiveGeometry(seg, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
   const originalRect = pdfRectToCss({ x: seg.x, y: seg.y, width: seg.width, height: seg.height }, pageHeight, scale);
@@ -481,7 +504,7 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
         <div className="seg-mask" style={{ left: originalRect.left, top: originalRect.top, width: originalRect.width, height: originalRect.height }} />
       )}
       <div
-        className={`seg-box${selected ? ' selected' : ''}${masked ? ' masked' : ''}${edit ? ' edited' : ''}${editing ? ' editing' : ''}`}
+        className={`seg-box${selected ? ' selected' : ''}${masked ? ' masked' : ''}${edit ? ' edited' : ''}${editing ? ' editing' : ''}${isLocked ? ' locked' : ''}`}
         style={{
           left: rect.left,
           top: rect.top,

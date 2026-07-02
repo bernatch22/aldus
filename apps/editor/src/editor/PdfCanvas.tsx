@@ -25,9 +25,12 @@ interface Props {
   onImageEdit: (action: ImageEditAction) => void;
   widgetEdits: Map<string, WidgetEdit>;
   onWidgetEdit: (action: WidgetEditAction) => void;
+  locked: Set<string>;
+  placing: boolean;
+  onPlace: (x: number, y: number) => void;
 }
 
-export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit }: Props) {
+export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
@@ -94,6 +97,9 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
           onImageEdit={onImageEdit}
           widgetEdits={widgetEdits}
           onWidgetEdit={onWidgetEdit}
+          locked={locked}
+          placing={placing}
+          onPlace={onPlace}
           snapshot={snapshot}
         />
       )}

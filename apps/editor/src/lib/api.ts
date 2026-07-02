@@ -1,6 +1,6 @@
 /** Cliente del server de Aldus. Un solo origen (/api, proxied por Vite). */
 
-import type { ImageEdit, SegmentEdit, WidgetEdit } from '@aldus/core';
+import type { ImageEdit, SegmentEdit, WidgetEdit, WidgetKind } from '@aldus/core';
 
 export interface DocMeta {
   id: string;
@@ -37,6 +37,24 @@ export const api = {
 
   loadEdits: (id: string): Promise<{ edits: SegmentEdit[]; savedAt: string | null }> =>
     fetch(`/api/documents/${id}/edits`).then(r => ok<{ edits: SegmentEdit[]; savedAt: string | null }>(r)),
+
+  /** Crea un campo de formulario nuevo en el punto dado. */
+  createField: (id: string, spec: { type: WidgetKind; page: number; x: number; y: number }): Promise<{ ok: boolean; name: string }> =>
+    fetch(`/api/documents/${id}/fields`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(spec),
+    }).then(r => ok<{ ok: boolean; name: string }>(r)),
+
+  /** Inserta una imagen (PNG/JPEG) en el punto clickeado. */
+  insertImage: (id: string, file: File, spec: { page: number; x: number; y: number }): Promise<{ ok: boolean }> => {
+    const fd = new FormData();
+    fd.append('image', file);
+    fd.append('page', String(spec.page));
+    fd.append('x', String(spec.x));
+    fd.append('y', String(spec.y));
+    return fetch(`/api/documents/${id}/images`, { method: 'POST', body: fd }).then(r => ok<{ ok: boolean }>(r));
+  },
 
   /** Aplica las ediciones AL PDF (bake del content stream + /Annots) y lo persiste. */
   bake: (id: string, edits: SegmentEdit[], imageEdits: ImageEdit[] = [], widgetEdits: WidgetEdit[] = []): Promise<{ ok: boolean; applied: string[]; warnings: string[] }> =>

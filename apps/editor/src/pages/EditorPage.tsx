@@ -215,15 +215,24 @@ export function EditorPage() {
 
   // Un highlight atado a un segmento SIGUE al texto: su rect se resuelve
   // contra la geometría efectiva (con la edición pendiente aplicada).
+  // IDENTIDAD ESTABLE (lee por refs): jamás va en deps de effects — meter
+  // `graph` en la cadena de deps del preview causaba un loop de re-render
+  // (render → extract → graph nuevo → effect → render…) = pantalla parpadeando.
+  const graphRef = useRef(graph);
+  graphRef.current = graph;
   const resolveHighlights = useCallback((): PendingHighlight[] => {
-    return pendingHighlights.map(h => {
-      if (!h.segmentId || !graph || graph.page !== h.page) return h;
-      const seg = graph.segments.find(s => s.id === h.segmentId);
+    const g = graphRef.current;
+    return highlightsRef.current.map(h => {
+      if (!h.segmentId || !g || g.page !== h.page) return h;
+      const seg = g.segments.find(s => s.id === h.segmentId);
       if (!seg) return h;
-      const eff = effectiveGeometry(seg, edits.get(seg.id) ?? null);
+      const eff = effectiveGeometry(seg, editsRef.current.get(seg.id) ?? null);
       return { ...h, x: eff.x, y: eff.y, width: eff.width, height: eff.height };
     });
-  }, [pendingHighlights, graph, edits]);
+  }, []);
+  // El preview debe recomputarse cuando un segmento CON highlight atado se
+  // mueve — derivado quirúrgico (null cuando no hay highlights atados).
+  const editsAffectingHighlights = pendingHighlights.some(h => h.segmentId) ? edits : null;
 
   // ── PREVIEW HORNEADO LOCALMENTE: las ediciones pendientes de imágenes,
   //    campos y highlights se aplican EN EL BROWSER (el mismo bake de core)
@@ -249,7 +258,9 @@ export function EditorPage() {
       setPdf(prev => { void prev?.destroy(); return doc; });
     })().catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'No se pudo generar el preview'); });
     return () => { cancelled = true; };
-  }, [baseBytes, imageEdits, widgetEdits, pendingHighlights, resolveHighlights]);
+    // resolveHighlights es estable (lee refs) — NUNCA va en deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseBytes, imageEdits, widgetEdits, pendingHighlights, editsAffectingHighlights]);
 
   const onEdit = useCallback((edit: SegmentEdit | { segmentId: string; revert: true }) => {
     pushHistory();
@@ -362,7 +373,8 @@ export function EditorPage() {
     } finally {
       setBaking(false);
     }
-  }, [id, edits, imageEdits, widgetEdits, resolveHighlights]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, edits, imageEdits, widgetEdits, pendingHighlights]);
 
   const numPages = pdf?.numPages ?? 0;
   const totalEdits = edits.size + imageEdits.size + widgetEdits.size + pendingHighlights.length;

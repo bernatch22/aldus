@@ -4,6 +4,16 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### fix(editor): LOOP de re-render (pantalla parpadeando) + CLAUDE.md del proyecto
+`resolveHighlights` (que captura `graph`) estaba en las deps del effect del preview:
+render → extract → graph nuevo → effect → nuevo PDF → render… loop infinito = todo
+parpadeando. Ahora lee por REFS (identidad estable, jamás en deps) y el rerun por "movió
+un segmento con highlight atado" usa un derivado quirúrgico (`editsAffectingHighlights`,
+null si no hay highlights atados). Regla documentada en CLAUDE.md: el effect del preview
+no puede depender de `graph` ni de funciones que lo capturen.
++ **CLAUDE.md** nuevo (~100 líneas): arquitectura completa (modelo/bake/editor/gotchas)
++ queries recomendadas de `megabrain ask` — repo indexado en megabrain.
+
 ### fix(editor): color POR SELECCIÓN, highlights que siguen al texto, y des-boldear de verdad
 - **Color a la selección**: `StyledRun` ahora tiene `color` por tramo, end-to-end —
   `setStyleRange` en core (corta el rango y aplica color/estilo, testeado), los spans

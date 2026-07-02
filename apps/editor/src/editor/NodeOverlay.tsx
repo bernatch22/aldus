@@ -337,7 +337,10 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
   // preventDefault de los pointerdown impide el blur natural, así que lo
   // forzamos acá. Sin esto, la B de la toolbar le pegaba al editor viejo.
   const selectNode = (nodeId: string | null) => {
-    if (editingId && editingId !== nodeId) activeEditingBox()?.blur();
+    if (editingId && editingId !== nodeId) {
+      console.log('[aldus:forceblur] cierro editor de', editingId, 'por selección de', nodeId ?? '(nada)');
+      activeEditingBox()?.blur();
+    }
     onSelect(nodeId);
   };
 
@@ -753,6 +756,8 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
     const sel = window.getSelection();
     sel?.removeAllRanges();
     sel?.addRange(range);
+    console.log('[aldus:edit-open]', seg.id, 'contenido:', JSON.stringify((el.textContent ?? '').slice(0, 30)), 'focus:', document.activeElement === el);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing]);
 
   // El panel de propiedades pide "estilo a la selección" con un evento: solo
@@ -809,6 +814,12 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
   // fantasma dibuja el estado nuevo (transparente — flota sobre lo que haya).
   const masked = editing || edit != null || drag != null;
   const html = seedHtml(seg, edit, scale);
+  // Mientras se EDITA, React NO puede tocar el DOM del contentEditable: si el
+  // html recalculado cambia (una FontFace que carga re-mide el letter-spacing,
+  // llega un grafo nuevo…), React pisaría lo tipeado y mataría el caret. El
+  // html queda CONGELADO al entrar en edición; el modelo lo lee en el commit.
+  const frozenHtml = useRef(html);
+  if (!editing) frozenHtml.current = html;
 
   const commitFromDom = (el: HTMLElement) => {
     const sizeRatio = (edit?.fontSize ?? seg.fontSize) / seg.fontSize;
@@ -901,12 +912,18 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
             contentEditable={editing}
             suppressContentEditableWarning
             spellCheck={false}
-            dangerouslySetInnerHTML={{ __html: html }}
+            dangerouslySetInnerHTML={{ __html: editing ? frozenHtml.current : html }}
             onBlur={e => {
-              if (!editing) return;
-              // DEBUG temporal: ¿quién roba el foco? (diagnóstico del cierre
-              // instantáneo del ítem de lista recién abierto)
+              if (!editing) {
+                // blur con editing=false = el contentEditable se apagó ANTES
+                // del blur (editingId limpiado por otro camino) — tipeo perdido.
+                console.warn('[aldus:blur-huerfano]', seg.id, 'texto descartado:', JSON.stringify((e.currentTarget.textContent ?? '').slice(0, 30)));
+                return;
+              }
+              // DEBUG temporal: un .blur() PROGRAMÁTICO despacha síncrono — el
+              // stack de este trace muestra al culpable. Click al body = stack vacío.
               console.log('[aldus:blur]', seg.id, '→', (e.relatedTarget as HTMLElement | null)?.className ?? e.relatedTarget?.constructor.name ?? 'nadie (focus perdido)');
+              console.trace('[aldus:blur-stack]');
               onStopEdit();
               commitFromDom(e.currentTarget);
             }}

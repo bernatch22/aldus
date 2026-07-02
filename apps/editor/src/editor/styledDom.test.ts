@@ -65,6 +65,33 @@ describe('seed → serialize', () => {
     ]);
     expect(styledRunsEqual(runs, originalStyledRuns(seg))).toBe(true);
   });
+
+  it('ítem de lista pelado: gap sembrado (2 NBSP) + tipeo → "•  abc" en el commit', () => {
+    const run = mkRun(String.fromCharCode(0x2022), 72, 4);
+    const seg: SegmentNode = {
+      id: 'p1-l0-s1', kind: 'segment', page: 1, text: String.fromCharCode(0x2022), runs: [run],
+      x: 72, baseline: 700, width: 4, y: 697.6, height: 13.2, fontSize: 12,
+    };
+    const el = mount(seg);
+    // Lo que hace el focus-effect al abrir un marcador pelado: sembrar el gap…
+    el.appendChild(document.createTextNode(String.fromCharCode(0xa0, 0xa0)));
+    // …y el usuario tipea al final.
+    el.appendChild(document.createTextNode('abc'));
+    const runs = serializeStyled(el, seg, 1);
+    expect(runs.map(r => r.text).join('')).toBe(`${String.fromCharCode(0x2022)}  abc`);
+  });
+
+  it('el color HEREDADO (style inline de spans que crea Chrome) no es un override', () => {
+    const seg = mkSeg();
+    const el = mount(seg);
+    // Chrome al tipear envuelve texto nuevo en spans con el color computado.
+    const ghost = document.createElement('span');
+    ghost.style.color = 'rgb(0, 0, 0)';
+    ghost.textContent = 'X';
+    el.appendChild(ghost);
+    const runs = serializeStyled(el, seg, 1);
+    expect(runs.every(r => r.color === undefined)).toBe(true);
+  });
 });
 
 describe('applySelectionStyle (el camino del botón del panel y de Cmd+B)', () => {

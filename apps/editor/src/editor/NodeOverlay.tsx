@@ -96,6 +96,8 @@ interface Props {
   /** Color del resaltador (persistido) + su setter. */
   highlightColor: string;
   onHighlightColor: (c: string) => void;
+  /** Segmentos editados (extirpados del preview): se dibujan desde el cache. */
+  phantomSegments: SegmentNode[];
 }
 
 /** Botón chico de una toolbar flotante. */
@@ -262,9 +264,14 @@ function ObjectBar({ rect, pageWidth, width, onAlign, onZ, onDelete }: {
   );
 }
 
-export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: Props) {
+export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => setEditingId(null), [graph.page]);
+
+  // Segmentos a dibujar: los del grafo del preview + los FANTASMAS editados
+  // (extirpados del preview). Dedupe defensivo por id.
+  const inGraph = new Set(graph.segments.map(s => s.id));
+  const allSegments = [...graph.segments, ...phantomSegments.filter(s => !inGraph.has(s.id))];
 
   // Seleccionar OTRO nodo cierra (con commit) el editor de texto abierto — el
   // preventDefault de los pointerdown impide el blur natural, así que lo
@@ -305,7 +312,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           }}
         />
       ))}
-      {graph.segments.map(seg => (
+      {allSegments.map(seg => (
         <SegmentBox
           key={seg.id}
           seg={seg}
@@ -654,7 +661,6 @@ interface SegmentBoxProps {
 function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, isLocked, onSelect, onStartEdit, onStopEdit, onPatch, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: SegmentBoxProps) {
   const eff = effectiveGeometry(seg, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
-  const originalRect = pdfRectToCss({ x: seg.x, y: seg.y, width: seg.width, height: seg.height }, pageHeight, scale);
   const editRef = useRef<HTMLDivElement>(null);
   const dragStart = useRef<{ px: number; py: number; moved: boolean } | null>(null);
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
@@ -708,24 +714,13 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
     };
   }, [editing, selected, seg, edit, scale]);
 
-  // Segmento marcado para ELIMINAR: velo rojo, sin edición (se restaura desde
-  // el panel; se concreta con "Aplicar al PDF").
-  if (edit?.remove) {
-    return (
-      <div
-        className={`img-removed${selected ? ' selected' : ''}`}
-        style={{ left: originalRect.left, top: originalRect.top, width: originalRect.width, height: originalRect.height }}
-        title="Texto eliminado — Aplicar al PDF para confirmar"
-        onClick={e => { e.stopPropagation(); onSelect(); }}
-      />
-    );
-  }
+  // Segmento eliminado: el preview local ya lo extirpó — nada que dibujar
+  // (Ctrl+Z lo restaura).
+  if (edit?.remove) return null;
 
-  // Mientras se ARRASTRA, el box viaja con su texto visible (fondo blanco) y
-  // una máscara tapa los glifos originales — sin esto "se movía el frame y el
-  // texto quedaba en su lugar" hasta Aplicar.
+  // Un segmento con edición pendiente fue EXTIRPADO del preview: este box
+  // fantasma dibuja el estado nuevo (transparente — flota sobre lo que haya).
   const masked = editing || edit != null || drag != null;
-  const showMask = edit != null || drag != null;
   const html = seedHtml(seg, edit, scale);
 
   const commitFromDom = (el: HTMLElement) => {
@@ -739,9 +734,6 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
 
   return (
     <>
-      {showMask && (
-        <div className="seg-mask" style={{ left: originalRect.left, top: originalRect.top, width: originalRect.width, height: originalRect.height }} />
-      )}
       {selected && !isLocked && (
         <FloatingBar seg={seg} edit={edit} rect={rect} pageWidth={pageWidth} onPatch={onPatch} onDocOp={onDocOp} onRequestLink={onRequestLink} highlightColor={highlightColor} onHighlightColor={onHighlightColor} />
       )}

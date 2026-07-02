@@ -4,6 +4,22 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### fix(editor): sin mask blanco en la posición original — el preview EXTIRPA los originales (fantasmas)
+El texto editado entra al preview horneado local: por cada `SegmentEdit` pendiente se pasa
+un clon remove-only a `bakeSegmentEdits`, así los operadores ORIGINALES desaparecen del
+canvas y en la posición original no queda NADA (ni mask blanco, ni velo) — igual que ya
+pasaba con imágenes/widgets. El estado editado lo dibuja el overlay como box "fantasma"
+transparente:
+- `extractGraph.ts`: ids de línea/segmento por GEOMETRÍA (`p{n}-y{baseline}` / `-x{x}`),
+  estables cuando otros segmentos se extirpan del preview (antes eran por índice y se
+  corrían todos).
+- `EditorPage`: `segCache` (ref) guarda el nodo original al primer edit; `phantomSegments`
+  (useMemo por página) los inyecta a `PdfCanvas`→`NodeOverlay`, que los agrega a los del
+  grafo (dedupe por id). `findSeg` (grafo ?? cache) para Delete/nudge por teclado.
+- `NodeOverlay`: fuera el `seg-mask` de segmentos y el velo rojo de "texto eliminado"
+  (eliminado = extirpado del preview, no se dibuja nada; Ctrl+Z restaura). `.seg-mask`
+  queda solo para el arrastre de imágenes/widgets.
+
 ### fix(editor): texto movido transparente + velo esmerilado + campos creados con estilo moderno
 - Un segmento editado (sin estar en edición) ya NO lleva fondo blanco: el texto flota
   TRANSPARENTE sobre lo que haya debajo (imagen incluida) — fiel a lo que hará el bake.

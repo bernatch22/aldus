@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { getDocument, type PDFDocumentProxy } from 'pdfjs-dist';
 import {
   effectiveGeometry, FIELD_DEFAULT_SIZE, mergeSegmentEdit,
-  type ImageEdit, type PageGraph, type SegmentEdit, type WidgetEdit, type WidgetKind,
+  type ImageEdit, type PageGraph, type SegmentEdit, type SegmentNode, type WidgetEdit, type WidgetKind,
 } from '@aldus/core';
 import {
   MousePointer2, Pilcrow, List, TextCursorInput, SquareCheck, CircleDot,
@@ -230,9 +230,13 @@ export function EditorPage() {
       return { ...h, x: eff.x, y: eff.y, width: eff.width, height: eff.height };
     });
   }, []);
-  // El preview debe recomputarse cuando un segmento CON highlight atado se
-  // mueve — derivado quirúrgico (null cuando no hay highlights atados).
-  const editsAffectingHighlights = pendingHighlights.some(h => h.segmentId) ? edits : null;
+  // Buscar un segmento por id: primero el grafo del preview; si fue editado
+  // (extirpado del preview), el cache de fantasmas.
+  const findSeg = useCallback(
+    (sid: string): SegmentNode | null =>
+      graphRef.current?.segments.find(s => s.id === sid) ?? segCache.current.get(sid) ?? null,
+    [],
+  );
 
   // ── PREVIEW HORNEADO LOCALMENTE: las ediciones pendientes de imágenes,
   //    campos y highlights se aplican EN EL BROWSER (el mismo bake de core)
@@ -244,9 +248,15 @@ export function EditorPage() {
     let cancelled = false;
     (async () => {
       let bytes: Uint8Array = baseBytes;
-      if (imageEdits.size || widgetEdits.size || pendingHighlights.length) {
+      if (edits.size || imageEdits.size || widgetEdits.size || pendingHighlights.length) {
         const { bakeSegmentEdits, addHighlight } = await import('@aldus/core/bake');
-        const r = await bakeSegmentEdits(baseBytes.slice(), [], [...imageEdits.values()], [...widgetEdits.values()]);
+        // Los segmentos editados se EXTIRPAN del preview (sus ops desaparecen
+        // — sin máscaras ni velos en la posición original); el overlay dibuja
+        // el estado nuevo como fantasma transparente desde el cache.
+        const textRemovals: SegmentEdit[] = [...edits.values()].map(e => ({
+          segmentId: e.segmentId, page: e.page, text: e.original.text, remove: true, original: e.original,
+        }));
+        const r = await bakeSegmentEdits(baseBytes.slice(), textRemovals, [...imageEdits.values()], [...widgetEdits.values()]);
         bytes = r.pdf;
         for (const h of resolveHighlights()) ({ pdf: bytes } = await addHighlight(bytes, h));
       }
@@ -260,10 +270,18 @@ export function EditorPage() {
     return () => { cancelled = true; };
     // resolveHighlights es estable (lee refs) — NUNCA va en deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseBytes, imageEdits, widgetEdits, pendingHighlights, editsAffectingHighlights]);
+  }, [baseBytes, edits, imageEdits, widgetEdits, pendingHighlights]);
 
+  // Cache del NODO original de cada segmento editado: el preview extirpa sus
+  // ops (desaparece del grafo extraído), así que el overlay lo dibuja como
+  // "fantasma" desde acá (con la edición aplicada, transparente).
+  const segCache = useRef(new Map<string, SegmentNode>());
   const onEdit = useCallback((edit: SegmentEdit | { segmentId: string; revert: true }) => {
     pushHistory();
+    if (!('revert' in edit) && !segCache.current.has(edit.segmentId)) {
+      const s = graphRef.current?.segments.find(x => x.id === edit.segmentId);
+      if (s) segCache.current.set(edit.segmentId, s);
+    }
     setEdits(prev => {
       const next = new Map(prev);
       if ('revert' in edit) next.delete(edit.segmentId); else next.set(edit.segmentId, edit);
@@ -317,7 +335,7 @@ export function EditorPage() {
       }
 
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId && graph) {
-        const seg = graph.segments.find(s => s.id === selectedId);
+        const seg = findSeg(selectedId);
         if (seg) { e.preventDefault(); const m = mergeSegmentEdit(seg, edits.get(seg.id) ?? null, { remove: true }); if (m) onEdit(m); return; }
         const img = graph.images.find(i => i.id === selectedId);
         if (img) { e.preventDefault(); onImageEdit({ imageId: img.id, page: img.page, remove: true, original: { x: img.x, y: img.y, width: img.width, height: img.height } }); return; }
@@ -325,7 +343,7 @@ export function EditorPage() {
         if (w) { e.preventDefault(); onWidgetEdit({ widgetId: w.id, page: w.page, remove: true, original: { fieldName: w.fieldName, x: w.x, y: w.y, width: w.width, height: w.height } }); return; }
       }
 
-      const seg = selectedId && graph ? graph.segments.find(s => s.id === selectedId) : null;
+      const seg = selectedId ? findSeg(selectedId) : null;
       if (seg && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
         e.preventDefault();
         const step = e.shiftKey ? 5 : 0.5;
@@ -346,7 +364,7 @@ export function EditorPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [pdf, pageNum, selectedId, graph, edits, onEdit, onImageEdit, onWidgetEdit, undo, redo]);
+  }, [pdf, pageNum, selectedId, graph, edits, onEdit, onImageEdit, onWidgetEdit, undo, redo, findSeg]);
 
   const setZoom = useCallback((s: number) => {
     const clamped = Math.min(3, Math.max(0.5, Math.round(s * 100) / 100));
@@ -363,6 +381,7 @@ export function EditorPage() {
       setImageEdits(new Map());
       setWidgetEdits(new Map());
       setPendingHighlights([]);
+      segCache.current.clear();
       undoStack.current = [];
       redoStack.current = [];
       setSelectedId(null);
@@ -381,6 +400,17 @@ export function EditorPage() {
   const pageEdits = useMemo(() => new Map([...edits].filter(([, e]) => e.page === pageNum)), [edits, pageNum]);
   const pageImageEdits = useMemo(() => new Map([...imageEdits].filter(([, e]) => e.page === pageNum)), [imageEdits, pageNum]);
   const pageWidgetEdits = useMemo(() => new Map([...widgetEdits].filter(([, e]) => e.page === pageNum)), [widgetEdits, pageNum]);
+  // Segmentos editados = extirpados del preview → el overlay los dibuja como
+  // FANTASMAS (nodo original cacheado + edición aplicada, transparente).
+  const phantomSegments = useMemo(() => {
+    const out: SegmentNode[] = [];
+    for (const e of edits.values()) {
+      if (e.page !== pageNum) continue;
+      const s = segCache.current.get(e.segmentId);
+      if (s) out.push(s);
+    }
+    return out;
+  }, [edits, pageNum]);
 
   const toolActive = (p: Placing): boolean =>
     !!placing && !!p && placing.kind === p.kind &&
@@ -475,6 +505,7 @@ export function EditorPage() {
                 locked={locked} placing={placing != null} onPlace={onPlace}
                 onDocOp={docOp} onRequestLink={requestLink} onAddText={onAddText}
                 highlightColor={highlightColor} onHighlightColor={setHl}
+                phantomSegments={phantomSegments}
               />
             </div>
           ) : (

@@ -279,9 +279,13 @@ function bboxOf(runs: TextRunNode[]) {
 
 function lineFromRuns(group: TextRunNode[], page: number, index: number): LineNode {
   const runs = [...group].sort((a, b) => a.x - b.x);
-  const lineId = `p${page}-l${index}`;
-  const segments: SegmentNode[] = splitSegments(runs).map((segRuns, s) => ({
-    id: `${lineId}-s${s}`,
+  void index;
+  // Id por GEOMETRÍA (no por índice): estable aunque otras líneas desaparezcan
+  // (el preview local extirpa los ops de segmentos editados — con ids por
+  // índice, todos los ids posteriores se corrían y rompían el mapa de ediciones).
+  const lineId = `p${page}-y${Math.round(runs[0].baseline)}`;
+  const segments: SegmentNode[] = splitSegments(runs).map(segRuns => ({
+    id: `${lineId}-x${Math.round(segRuns[0].x)}`,
     kind: 'segment',
     page,
     text: segmentText(segRuns),

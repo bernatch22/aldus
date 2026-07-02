@@ -61,9 +61,9 @@ body {
 .seg-box.edited { outline-color: transparent; }
 .seg-box.edited.selected { outline-color: var(--accent); }
 .seg-text { white-space: pre; outline: none; min-height: 100%; width: max-content; color: #000; }
-/* Velo sobre los glifos ORIGINALES de un nodo movido/editado: esmerilado, no
-   un bloque blanco duro — sobre página blanca es invisible; sobre una imagen
-   atenúa el texto viejo sin el cuadrado brutal. */
+/* Velo esmerilado sobre la posición ORIGINAL de una imagen/widget MIENTRAS se
+   arrastra (al soltar, el preview horneado extirpa el original y el velo se va).
+   El texto editado ya no lo usa: sus operadores se extirpan del preview local. */
 .seg-mask {
   position: absolute;
   background: rgba(255, 255, 255, 0.93);

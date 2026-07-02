@@ -8,7 +8,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
-import { extractPageGraph, type ImageEdit, type PageGraph, type PdfJsPage, type SegmentEdit, type WidgetEdit } from '@aldus/core';
+import { extractPageGraph, type ImageEdit, type PageGraph, type PdfJsPage, type SegmentEdit, type SegmentNode, type WidgetEdit } from '@aldus/core';
 import { NodeOverlay, type AddTextRequest, type EditAction, type ImageEditAction, type WidgetEditAction } from './NodeOverlay';
 import { sampleRunColors } from './sampleColor';
 
@@ -34,9 +34,10 @@ interface Props {
   onAddText: (req: AddTextRequest) => void;
   highlightColor: string;
   onHighlightColor: (c: string) => void;
+  phantomSegments: SegmentNode[];
 }
 
-export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: Props) {
+export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
@@ -115,6 +116,7 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
           onAddText={onAddText}
           highlightColor={highlightColor}
           onHighlightColor={onHighlightColor}
+          phantomSegments={phantomSegments}
         />
       )}
     </div>

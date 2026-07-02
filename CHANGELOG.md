@@ -4,6 +4,24 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### fix(core): "Al fondo" REAL — inserta tras el papel blanco (backstop), no en el byte 0
+Enviar una imagen al fondo la prependeaba al inicio del stream, ANTES del relleno blanco
+full-page con que los PDFs de generadores (JotForm) pintan la hoja → el papel opaco la
+tapaba y quedaba "todo blanco". Fix de raíz en el bake:
+- `walkContent` ahora calcula el **backstop**: el punto justo antes del PRIMER op de
+  contenido real (fill no-blanco — con `isWhiteFill` sobre el raw del color —, `Do`,
+  `BT`, `sh`, trazos), es decir DESPUÉS del papel. Los paint-ops apuntan al ARRANQUE de
+  su path (insertar entre `re` y `f` sería ilegal); `n` (clip-only) no cuenta.
+- El bloque re-emitido usa matriz RELATIVA al CTM del backstop (`abs × inv(ctm)`) — en
+  el byte 0 el CTM era identidad, en el backstop no necesariamente.
+- `rebuild`: con el mismo `start`, una inserción pura ordena ANTES que una extirpación
+  (si no, el skip de solapados se la comía — caso "la imagen ya es el primer contenido").
+- Verificado contra el insurance agreement real: la imagen de fondo enviada al fondo
+  queda idéntica (misma geometría, 0 warnings) en vez de desaparecer. Test de regresión
+  `imageZOrder.test.ts` (orden papel→imagen→texto + round-trip de geometría).
+- UI: "Al fondo" vuelve a estar disponible para imágenes full-page (el ocultamiento
+  anterior era un parche — ahora la operación es correcta).
+
 ### fix(editor): "Al fondo" desaparecía la imagen de fondo — full-page ya es la capa de atrás
 Una imagen full-page (el fondo del insurance agreement) YA es la capa más al fondo del
 contenido: mandarla "al fondo" la reubicaba ANTES del relleno blanco de la página, que

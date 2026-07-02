@@ -299,7 +299,10 @@ interface Splice {
 }
 
 function rebuild(src: Uint8Array, splices: Splice[], prepend = '', append = ''): Uint8Array {
-  const sorted = [...splices].sort((a, b) => a.start - b.start);
+  // Con el MISMO start, una inserción pura (start==end) va ANTES que un
+  // reemplazo/extirpación — si no, el skip de solapados se la comería (caso:
+  // "al fondo" de una imagen que ya es el primer op de contenido).
+  const sorted = [...splices].sort((a, b) => a.start - b.start || (a.end - a.start) - (b.end - b.start));
   let out = prepend ? `${prepend}\n` : '';
   let pos = 0;
   for (const s of sorted) {
@@ -426,12 +429,14 @@ export async function bakeSegmentEdits(
       warnings.push(`página ${pageNum}: ${err instanceof Error ? err.message : 'stream ilegible'}`);
       continue;
     }
-    const { shows, xobjects } = walkContent(src);
+    const { shows, xobjects, backstop } = walkContent(src);
     const encCache = new Map<string, ReverseEncoder | null>();
     const splices: Splice[] = [];
-    // Bloques reordenados: al PRINCIPIO del stream (fondo) o al FINAL (frente).
-    // En los bordes del stream el CTM es identidad → matriz absoluta directa.
-    const prependBlocks: string[] = [];
+    // "Al frente" = bloque al FINAL del stream (CTM identidad ahí → matriz
+    // absoluta). "Al fondo" NO va al byte 0: ahí quedaría ANTES del relleno
+    // blanco full-page que muchos PDFs (JotForm) dibujan como papel — y ese
+    // blanco opaco taparía la imagen ("todo blanco"). Va al `backstop`: justo
+    // antes del primer op de contenido real, con matriz RELATIVA a su CTM.
     const appendBlocks: string[] = [];
 
     // ── imágenes: mover/escalar REEMPLAZA el Do en su lugar por
@@ -468,11 +473,18 @@ export async function bakeSegmentEdits(
       const abs: [number, number, number, number, number, number] = [na, 0, 0, nd, ne, nf];
 
       if (edit.zOrder) {
-        // Reordenar: extirpar el op y re-emitirlo en el borde del stream (CTM
-        // identidad ahí → matriz absoluta).
+        // Reordenar: extirpar el op y re-emitirlo en el borde del contenido.
         splices.push({ start: op.record.start, end: op.record.end, text: '' });
-        const block = `q ${fmt(abs[0])} ${fmt(abs[1])} ${fmt(abs[2])} ${fmt(abs[3])} ${fmt(abs[4])} ${fmt(abs[5])} cm /${op.name} Do Q`;
-        (edit.zOrder === 'back' ? prependBlocks : appendBlocks).push(block);
+        if (edit.zOrder === 'back') {
+          // En el backstop rige su CTM → compensar (M_rel = M_abs × inv(ctm)).
+          const binv = invert(backstop.ctm);
+          const m = binv ? mul(abs, binv) : abs;
+          const block = `q ${fmt(m[0])} ${fmt(m[1])} ${fmt(m[2])} ${fmt(m[3])} ${fmt(m[4])} ${fmt(m[5])} cm /${op.name} Do Q`;
+          splices.push({ start: backstop.offset, end: backstop.offset, text: block });
+        } else {
+          // Final del stream: CTM identidad → matriz absoluta directa.
+          appendBlocks.push(`q ${fmt(abs[0])} ${fmt(abs[1])} ${fmt(abs[2])} ${fmt(abs[3])} ${fmt(abs[4])} ${fmt(abs[5])} cm /${op.name} Do Q`);
+        }
         applied.push(`${edit.imageId}: enviada ${edit.zOrder === 'back' ? 'al fondo' : 'al frente'}`);
         continue;
       }
@@ -611,8 +623,8 @@ export async function bakeSegmentEdits(
         : `${edit.segmentId}: reescrito por tramos (${runsToEmit.length})`);
     }
 
-    if (splices.length || prependBlocks.length || appendBlocks.length) {
-      setPageContents(doc, page, rebuild(src, splices, prependBlocks.join('\n'), appendBlocks.join('\n')));
+    if (splices.length || appendBlocks.length) {
+      setPageContents(doc, page, rebuild(src, splices, '', appendBlocks.join('\n')));
     }
   }
 

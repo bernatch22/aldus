@@ -75,6 +75,28 @@ export interface XObjectOp {
 export interface ContentWalk {
   shows: ShowOp[];
   xobjects: XObjectOp[];
+  /** Punto de inserción para "enviar al fondo": justo antes del PRIMER op que
+   *  dibuja contenido real (fill no-blanco, Do, BT, sh) — es decir DESPUÉS del
+   *  "papel" (los fills blancos full-page con que muchos generadores pintan la
+   *  hoja). Insertar en el byte 0 dejaría el bloque bajo ese papel opaco.
+   *  `ctm` = CTM vigente ahí (la matriz emitida debe ser relativa: abs×inv). */
+  backstop: { offset: number; ctm: Matrix };
+}
+
+/** ¿El operador de relleno crudo pinta blanco (papel)? '' = negro por defecto. */
+function isWhiteFill(rawFill: string): boolean {
+  const toks = rawFill.trim().split(/\s+/);
+  if (toks.length < 2) return false;
+  const nums = toks.filter(t => /^[-+.\d]/.test(t)).map(Number).filter(Number.isFinite);
+  const op = toks[toks.length - 1];
+  if (op === 'g' && nums.length >= 1) return nums[nums.length - 1] >= 0.99;
+  if (op === 'rg' && nums.length >= 3) return nums.slice(-3).every(v => v >= 0.99);
+  if (op === 'k' && nums.length >= 4) return nums.slice(-4).every(v => v <= 0.01);
+  if ((op === 'sc' || op === 'scn') && nums.length >= 1) {
+    const vals = nums.slice(-Math.min(nums.length, 3));
+    return vals.every(v => v >= 0.99);
+  }
+  return false;
 }
 
 export function walkTextOps(src: Uint8Array): ShowOp[] {
@@ -99,6 +121,13 @@ export function walkContent(src: Uint8Array): ContentWalk {
   let stale = false;
   let fillColorRaw = '';
   let csRaw = '';
+  // Backstop: primer op de CONTENIDO (no papel). Un paint op pinta el path
+  // construido antes — el punto válido de inserción es el ARRANQUE del path.
+  let backstop: ContentWalk['backstop'] | null = null;
+  let pathStart: ContentWalk['backstop'] | null = null;
+  const markContent = (at: { offset: number; ctm: Matrix }) => {
+    if (!backstop) backstop = at;
+  };
 
   const raw = (rec: OpRecord): string => {
     let s = '';
@@ -134,7 +163,22 @@ export function walkContent(src: Uint8Array): ContentWalk {
       case 'q': stack.push(ctm); break;
       case 'Q': ctm = stack.pop() ?? IDENTITY; break;
       case 'cm': ctm = mul([num(rec, 0), num(rec, 1), num(rec, 2), num(rec, 3), num(rec, 4), num(rec, 5)], ctm); break;
-      case 'BT': tm = IDENTITY; tlm = IDENTITY; stale = false; break;
+      // ── backstop: construcción y pintado de paths ──
+      case 'm': case 're':
+        if (!pathStart) pathStart = { offset: rec.start, ctm };
+        break;
+      case 'n': pathStart = null; break; // path descartado (solo clip) — no es contenido
+      case 'f': case 'F': case 'f*': case 'b': case 'b*': case 'B': case 'B*':
+        if (!isWhiteFill(fillColorRaw)) markContent(pathStart ?? { offset: rec.start, ctm });
+        pathStart = null;
+        break;
+      case 'S': case 's': // un trazo visible es contenido (conservador)
+        markContent(pathStart ?? { offset: rec.start, ctm });
+        pathStart = null;
+        break;
+      case 'sh': markContent({ offset: rec.start, ctm }); break;
+      case 'BI': markContent({ offset: rec.start, ctm }); break;
+      case 'BT': markContent({ offset: rec.start, ctm }); tm = IDENTITY; tlm = IDENTITY; stale = false; break;
       case 'ET': break;
       case 'Tf': {
         const t = rec.operands[0];
@@ -164,10 +208,11 @@ export function walkContent(src: Uint8Array): ContentWalk {
       case 'Do': {
         const t = rec.operands[0];
         if (t && t.kind === 'name') xobjects.push({ record: rec, name: t.value as string, matrix: ctm });
+        markContent({ offset: rec.start, ctm });
         break;
       }
       default: break;
     }
   }
-  return { shows, xobjects };
+  return { shows, xobjects, backstop: backstop ?? { offset: 0, ctm: IDENTITY } };
 }

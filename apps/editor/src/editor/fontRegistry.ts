@@ -36,12 +36,17 @@ export function registerPageFonts(
       registered.add(fam); // aunque falle no se reintenta: cae al bucket
       try {
         const obj = page.commonObjs.get(f.loadedName) as { data?: Uint8Array } | null;
-        if (!obj?.data) continue;
+        if (!obj?.data) {
+          console.warn('[aldus:fonts] SIN BYTES para', f.loadedName, f.postScriptName, '— fantasma caerá al bucket', f.bucket);
+          continue;
+        }
         const ff = new FontFace(fam, obj.data.slice());
         document.fonts.add(ff);
-        void ff.load().catch(() => document.fonts.delete(ff));
-      } catch {
-        /* fuente aún no resuelta o sin data — el fallback del bucket cubre */
+        void ff.load()
+          .then(() => console.log('[aldus:fonts] registrada', fam, '←', f.loadedName))
+          .catch(err => { document.fonts.delete(ff); console.warn('[aldus:fonts] load FALLÓ', fam, err); });
+      } catch (err) {
+        console.warn('[aldus:fonts] commonObjs sin', f.loadedName, '(', f.postScriptName, ')', err);
       }
     }
   }

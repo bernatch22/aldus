@@ -53,6 +53,31 @@ import {
   serializeStyled,
   SELECTION_STYLE_EVENT,
 } from './styledDom';
+import { stableFontFamily } from './fontRegistry';
+
+// ── DEBUG temporal (pedido explícito): estado COMPLETO de estilos de un
+//    segmento al agarrarlo, soltarlo y re-renderizarse editado. ──
+export function dbgStyles(tag: string, seg: SegmentNode, edit: SegmentEdit | null, extra?: Record<string, unknown>): void {
+  try {
+    console.log(`[aldus:${tag}]`, seg.id, JSON.stringify((edit?.text ?? seg.text).slice(0, 40)), {
+      runs: seg.runs.map(r => ({
+        t: r.text.slice(0, 14),
+        font: r.font.loadedName, ps: r.font.postScriptName ?? null, emb: r.font.embedded,
+        bucket: r.font.bucket, b: r.font.bold, i: r.font.italic,
+        size: +r.fontSize.toFixed(2), color: r.color ?? null,
+        famCss: family(r),
+        loadedNameVivo: document.fonts.check(`12px '${r.font.loadedName}'`),
+        stableVivo: r.font.postScriptName ? document.fonts.check(`12px '${stableFontFamily(r.font.postScriptName)}'`) : null,
+      })),
+      edit: edit && {
+        x: edit.x ?? null, baseline: edit.baseline ?? null, fontSize: edit.fontSize ?? null,
+        font: edit.font ?? null, color: edit.color ?? null,
+        runs: edit.runs?.map(r => ({ t: r.text.slice(0, 14), b: r.bold, i: r.italic, color: r.color ?? null })) ?? null,
+      },
+      ...extra,
+    });
+  } catch { /* solo debug */ }
+}
 
 export type EditAction = SegmentEdit | { segmentId: string; revert: true };
 export type ImageEditAction = ImageEdit | { imageId: string; revert: true };
@@ -719,6 +744,13 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
     };
   }, [editing, selected, seg, edit, scale]);
 
+  // DEBUG temporal: cada vez que un segmento EDITADO se re-renderiza (cambia
+  // el edit o llega el seg fantasma del grafo nuevo), volcar sus estilos.
+  useEffect(() => {
+    if (edit) dbgStyles('render-edited', seg, edit, { editing, drag: drag != null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edit, seg]);
+
   // Sin velos ni masks: la extirpación del original arranca CON el gesto
   // (onDragging) — para cuando el usuario suelta, el canvas ya no tiene los
   // glifos viejos. El único transitorio es el original desvaneciéndose una
@@ -781,6 +813,7 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
           const dy = e.clientY - start.py;
           if (!start.moved && Math.abs(dx) + Math.abs(dy) > 3) {
             start.moved = true;
+            dbgStyles('drag-start', seg, edit);
             // El gesto arrancó: PdfCanvas blitea el lift pre-horneado (la
             // página sin este texto) — el original se esfuma al "levantarlo".
             onDragging(true);
@@ -800,6 +833,7 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
             onDragging(false, false);
             return;
           }
+          dbgStyles('drop', seg, edit, { drop: { nx, nb } });
           // El commit y el fin del arrastre van en el MISMO lote de estado: el
           // preview re-horneado tendrá píxeles idénticos al lift ya visible.
           onPatch({

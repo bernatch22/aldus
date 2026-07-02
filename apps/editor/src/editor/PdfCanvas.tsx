@@ -31,9 +31,11 @@ interface Props {
   onDocOp: (action: string, params: Record<string, unknown>) => void;
   onRequestLink: (target: { page: number; x: number; y: number; width: number; height: number }) => void;
   onAddText: (req: AddTextRequest) => void;
+  highlightColor: string;
+  onHighlightColor: (c: string) => void;
 }
 
-export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, onDocOp, onRequestLink, onAddText }: Props) {
+export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
@@ -107,6 +109,8 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
           onDocOp={onDocOp}
           onRequestLink={onRequestLink}
           onAddText={onAddText}
+          highlightColor={highlightColor}
+          onHighlightColor={onHighlightColor}
         />
       )}
     </div>

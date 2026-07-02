@@ -4,6 +4,20 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### feat(editor): undo/redo, toolbar flotante en imágenes/campos, highlight visible + color picker
+- **Undo/Redo** de las ediciones de texto: `Ctrl/Cmd+Z` deshace, `Ctrl+Shift+Z`/`Ctrl+Y`
+  rehace (historial de snapshots del map de ediciones, hasta 100), + botones en la top bar.
+  Se limpia al Aplicar.
+- **Sin "amarillito"**: un segmento/imagen editado ya NO muestra el borde ámbar en el
+  lienzo — se ve normal (el texto nuevo sobre fondo blanco); el estado pendiente vive solo
+  en el panel y el botón Aplicar. La máscara funcional (tapa los glifos originales) se
+  mantiene.
+- **Toolbar flotante también en imágenes y campos**: alinear izq/centro/der, orden Z
+  (imágenes) y eliminar, arriba del objeto seleccionado — igual que el texto.
+- **Highlight arreglado**: era invisible (amarillo pálido por multiply+0.45 sobre blanco);
+  ahora amarillo marcador saturado a 0.55 de opacidad, **con color picker** en la toolbar
+  flotante (persistido). Verificado: era correcto a nivel de PDF pero imperceptible.
+
 ### feat(editor): toolbar flotante con alineación + listas reales + fixes de drag y estilo
 - **Toolbar flotante arriba del texto seleccionado** (estilo Sejda/Acrobat): alinear
   izquierda/centro/derecha (x relativo a los márgenes de la página), B/I (respetan la

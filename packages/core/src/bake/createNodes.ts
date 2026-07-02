@@ -275,7 +275,8 @@ export async function addHeaderFooter(
 
 // ── highlight ────────────────────────────────────────────────────────────────
 
-/** Resalta un rect (blend multiply + transparencia: el texto sigue legible). */
+/** Resalta un rect como un marcador: blend Multiply (el texto de arriba sigue
+ *  legible) + color saturado a 0.55 de opacidad para que se vea de verdad. */
 export async function addHighlight(
   pdfBytes: Uint8Array,
   spec: { page: number; x: number; y: number; width: number; height: number; color?: string },
@@ -288,8 +289,8 @@ export async function addHighlight(
     y: spec.y - 1,
     width: spec.width + 2,
     height: spec.height + 2,
-    color: spec.color ? hexToRgb(spec.color) : rgb(1, 0.92, 0.23),
-    opacity: 0.45,
+    color: spec.color ? hexToRgb(spec.color) : rgb(1, 0.84, 0), // amarillo marcador saturado
+    opacity: 0.55,
     blendMode: BlendMode.Multiply,
   });
   return { pdf: await doc.save() };

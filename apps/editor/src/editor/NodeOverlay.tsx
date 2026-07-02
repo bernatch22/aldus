@@ -39,7 +39,7 @@ import {
   type WidgetNode,
   type WidgetPatch,
 } from '@aldus/core';
-import { AlignLeft, AlignCenter, AlignRight, Bold, Italic, Highlighter, Link2, Trash2 } from 'lucide-react';
+import { AlignLeft, AlignCenter, AlignRight, Bold, Italic, Highlighter, Link2, Trash2, SendToBack, BringToFront } from 'lucide-react';
 import {
   activeEditingBox,
   applySelectionStyle,
@@ -91,6 +91,31 @@ interface Props {
   onRequestLink: (target: { page: number; x: number; y: number; width: number; height: number }) => void;
   /** Enter al final de un ítem de lista → crear el siguiente. */
   onAddText: (req: AddTextRequest) => void;
+  /** Color del resaltador (persistido) + su setter. */
+  highlightColor: string;
+  onHighlightColor: (c: string) => void;
+}
+
+/** Botón chico de una toolbar flotante. */
+function FbBtn({ label, onClick, active, danger, children }: { label: string; onClick: () => void; active?: boolean; danger?: boolean; children: React.ReactNode }) {
+  return (
+    <button
+      title={label} aria-label={label}
+      onMouseDown={e => e.preventDefault()}
+      onClick={e => { e.stopPropagation(); onClick(); }}
+      className={`fb-btn${active ? ' active' : ''}${danger ? ' danger' : ''}`}
+    >{children}</button>
+  );
+}
+const FbSep = () => <span className="fb-sep" />;
+
+/** Contenedor de toolbar flotante posicionado sobre el rect. */
+function FloatingWrap({ rect, children }: { rect: { left: number; top: number }; children: React.ReactNode }) {
+  return (
+    <div className="float-bar" style={{ left: rect.left, top: Math.max(2, rect.top - 36) }} onClick={e => e.stopPropagation()}>
+      {children}
+    </div>
+  );
 }
 
 /** Tipografía del CONTENEDOR editable: la dominante del segmento (con tamaño/
@@ -114,8 +139,8 @@ const clampX = (x: number, w: number, pageW: number) => Math.min(Math.max(x, MIN
 const clampY = (y: number, h: number, pageH: number) => Math.min(Math.max(y, MIN_VISIBLE - h), pageH - MIN_VISIBLE);
 
 /** Toolbar flotante arriba del segmento seleccionado: alineación (relativa a
- *  la página), B/I, resaltar, link, eliminar. */
-function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLink }: {
+ *  la página), B/I, resaltar (+color), link, eliminar. */
+function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLink, highlightColor, onHighlightColor }: {
   seg: SegmentNode;
   edit: SegmentEdit | null;
   rect: { left: number; top: number };
@@ -123,6 +148,8 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
   onPatch: (patch: SegmentPatch) => void;
   onDocOp: (action: string, params: Record<string, unknown>) => void;
   onRequestLink: (target: { page: number; x: number; y: number; width: number; height: number }) => void;
+  highlightColor: string;
+  onHighlightColor: (c: string) => void;
 }) {
   const styled: StyledRun[] = edit?.runs ?? originalStyledRuns(seg);
   const allBold = styled.length > 0 && styled.every(r => r.bold);
@@ -140,33 +167,53 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
   const alignTo = (x: number) => onPatch({ x: Math.abs(x - seg.x) < 0.05 ? null : round1(x) });
   const bbox = { page: seg.page, x: eff.x, y: eff.y, width: eff.width, height: eff.height };
 
-  const btn = (label: string, onClick: () => void, child: React.ReactNode, active = false, danger = false) => (
-    <button
-      title={label}
-      aria-label={label}
-      onMouseDown={e => e.preventDefault()}
-      onClick={e => { e.stopPropagation(); onClick(); }}
-      className={`fb-btn${active ? ' active' : ''}${danger ? ' danger' : ''}`}
-    >{child}</button>
-  );
-
   return (
-    <div className="float-bar" style={{ left: rect.left, top: Math.max(2, rect.top - 36) }} onClick={e => e.stopPropagation()}>
-      {btn('Alinear a la izquierda', () => alignTo(MARGIN), <AlignLeft size={14} />)}
-      {btn('Centrar en la página', () => alignTo((pageWidth - eff.width) / 2), <AlignCenter size={14} />)}
-      {btn('Alinear a la derecha', () => alignTo(pageWidth - MARGIN - eff.width), <AlignRight size={14} />)}
-      <span className="fb-sep" />
-      {btn('Negrita', () => toggle('bold'), <Bold size={14} />, allBold)}
-      {btn('Itálica', () => toggle('italic'), <Italic size={14} />, allItalic)}
-      <span className="fb-sep" />
-      {btn('Resaltar', () => onDocOp('highlight', bbox), <Highlighter size={14} />)}
-      {btn('Link', () => onRequestLink(bbox), <Link2 size={14} />)}
-      {btn('Eliminar', () => onPatch({ remove: true }), <Trash2 size={14} />, false, true)}
-    </div>
+    <FloatingWrap rect={rect}>
+      <FbBtn label="Alinear a la izquierda" onClick={() => alignTo(MARGIN)}><AlignLeft size={14} /></FbBtn>
+      <FbBtn label="Centrar en la página" onClick={() => alignTo((pageWidth - eff.width) / 2)}><AlignCenter size={14} /></FbBtn>
+      <FbBtn label="Alinear a la derecha" onClick={() => alignTo(pageWidth - MARGIN - eff.width)}><AlignRight size={14} /></FbBtn>
+      <FbSep />
+      <FbBtn label="Negrita" onClick={() => toggle('bold')} active={allBold}><Bold size={14} /></FbBtn>
+      <FbBtn label="Itálica" onClick={() => toggle('italic')} active={allItalic}><Italic size={14} /></FbBtn>
+      <FbSep />
+      <FbBtn label="Resaltar" onClick={() => onDocOp('highlight', { ...bbox, color: highlightColor })}><Highlighter size={14} /></FbBtn>
+      <button className="fb-swatch" title="Color del resaltador" style={{ background: highlightColor }} onMouseDown={e => e.preventDefault()} onClick={e => e.stopPropagation()}>
+        <input type="color" value={highlightColor} onChange={e => onHighlightColor(e.target.value)} />
+      </button>
+      <FbBtn label="Link" onClick={() => onRequestLink(bbox)}><Link2 size={14} /></FbBtn>
+      <FbSep />
+      <FbBtn label="Eliminar" onClick={() => onPatch({ remove: true })} danger><Trash2 size={14} /></FbBtn>
+    </FloatingWrap>
   );
 }
 
-export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, onDocOp, onRequestLink, onAddText }: Props) {
+/** Toolbar flotante para IMAGEN o CAMPO: alineación + (imagen) orden Z + eliminar. */
+function ObjectBar({ rect, pageWidth, width, onAlign, onZ, onDelete }: {
+  rect: { left: number; top: number };
+  pageWidth: number;
+  width: number;
+  onAlign: (x: number) => void;
+  onZ?: (o: 'front' | 'back') => void;
+  onDelete: () => void;
+}) {
+  const MARGIN = 40;
+  return (
+    <FloatingWrap rect={rect}>
+      <FbBtn label="Alinear a la izquierda" onClick={() => onAlign(MARGIN)}><AlignLeft size={14} /></FbBtn>
+      <FbBtn label="Centrar en la página" onClick={() => onAlign((pageWidth - width) / 2)}><AlignCenter size={14} /></FbBtn>
+      <FbBtn label="Alinear a la derecha" onClick={() => onAlign(pageWidth - MARGIN - width)}><AlignRight size={14} /></FbBtn>
+      {onZ && <>
+        <FbSep />
+        <FbBtn label="Enviar al fondo" onClick={() => onZ('back')}><SendToBack size={14} /></FbBtn>
+        <FbBtn label="Traer al frente" onClick={() => onZ('front')}><BringToFront size={14} /></FbBtn>
+      </>}
+      <FbSep />
+      <FbBtn label="Eliminar" onClick={onDelete} danger><Trash2 size={14} /></FbBtn>
+    </FloatingWrap>
+  );
+}
+
+export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => setEditingId(null), [graph.page]);
 
@@ -222,6 +269,8 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           onDocOp={onDocOp}
           onRequestLink={onRequestLink}
           onAddText={onAddText}
+          highlightColor={highlightColor}
+          onHighlightColor={onHighlightColor}
         />
       ))}
       {/* Los widgets al FINAL del DOM = arriba de todo para el mouse (como en
@@ -287,6 +336,14 @@ function WidgetBox({ widget, pageWidth, pageHeight, scale, selected, edit, isLoc
   }
 
   return (
+    <>
+      {selected && !isLocked && (
+        <ObjectBar
+          rect={rect} pageWidth={pageWidth} width={eff.width}
+          onAlign={x => onPatch({ x: round1(clampX(x, eff.width, pageWidth)) })}
+          onDelete={() => onPatch({ remove: true })}
+        />
+      )}
     <div
       className={`widget-box${selected ? ' selected' : ''}${edit ? ' edited' : ''}${isLocked ? ' locked' : ''}`}
       style={{
@@ -363,6 +420,7 @@ function WidgetBox({ widget, pageWidth, pageHeight, scale, selected, edit, isLoc
         />
       )}
     </div>
+    </>
   );
 }
 
@@ -418,6 +476,14 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
     : undefined;
   return (
     <>
+      {selected && !isLocked && (
+        <ObjectBar
+          rect={rect} pageWidth={pageWidth} width={eff.width}
+          onAlign={x => onPatch({ x: round1(clampX(x, eff.width, pageWidth)) })}
+          onZ={o => onPatch({ zOrder: o })}
+          onDelete={() => onPatch({ remove: true })}
+        />
+      )}
       <div
         className={`img-box${selected ? ' selected' : ''}${edit ? ' edited' : ''}${ghost ? ' ghost' : ''}${isLocked ? ' locked' : ''}`}
         style={{
@@ -516,9 +582,11 @@ interface SegmentBoxProps {
   onDocOp: (action: string, params: Record<string, unknown>) => void;
   onRequestLink: (target: { page: number; x: number; y: number; width: number; height: number }) => void;
   onAddText: (req: AddTextRequest) => void;
+  highlightColor: string;
+  onHighlightColor: (c: string) => void;
 }
 
-function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, isLocked, onSelect, onStartEdit, onStopEdit, onPatch, onDocOp, onRequestLink, onAddText }: SegmentBoxProps) {
+function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, isLocked, onSelect, onStartEdit, onStopEdit, onPatch, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: SegmentBoxProps) {
   const eff = effectiveGeometry(seg, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
   const originalRect = pdfRectToCss({ x: seg.x, y: seg.y, width: seg.width, height: seg.height }, pageHeight, scale);
@@ -606,8 +674,8 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
       {showMask && (
         <div className="seg-mask" style={{ left: originalRect.left, top: originalRect.top, width: originalRect.width, height: originalRect.height }} />
       )}
-      {selected && !isLocked && (
-        <FloatingBar seg={seg} edit={edit} rect={rect} pageWidth={pageWidth} onPatch={onPatch} onDocOp={onDocOp} onRequestLink={onRequestLink} />
+      {selected && !isLocked && !editing && (
+        <FloatingBar seg={seg} edit={edit} rect={rect} pageWidth={pageWidth} onPatch={onPatch} onDocOp={onDocOp} onRequestLink={onRequestLink} highlightColor={highlightColor} onHighlightColor={onHighlightColor} />
       )}
       <div
         className={`seg-box${selected ? ' selected' : ''}${masked ? ' masked' : ''}${edit ? ' edited' : ''}${editing ? ' editing' : ''}${isLocked ? ' locked' : ''}`}

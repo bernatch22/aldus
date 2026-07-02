@@ -8,7 +8,7 @@ import {
 import {
   MousePointer2, Pilcrow, List, TextCursorInput, SquareCheck, CircleDot,
   SquareChevronDown, Signature, ImagePlus, Droplets, PanelTop,
-  ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Check, type LucideIcon,
+  ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Check, Undo2, Redo2, type LucideIcon,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { PdfCanvas } from '../editor/PdfCanvas';
@@ -70,6 +70,8 @@ export function EditorPage() {
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [dialog, setDialog] = useState<Dialog>(null);
+  const [highlightColor, setHighlightColor] = useState<string>(() => localStorage.getItem('aldus-hl') || '#ffd400');
+  const setHl = useCallback((c: string) => { setHighlightColor(c); localStorage.setItem('aldus-hl', c); }, []);
 
   // Toast efímero.
   useEffect(() => {
@@ -154,13 +156,35 @@ export function EditorPage() {
     return () => { cancelled = true; void task.destroy(); };
   }, [id, docVersion]);
 
+  // ── Historial de ediciones de TEXTO (Ctrl+Z / Ctrl+Shift+Z · Ctrl+Y). Los
+  //    snapshots son del map completo `edits` — undo/redo lo restauran entero. ──
+  const undoStack = useRef<Map<string, SegmentEdit>[]>([]);
+  const redoStack = useRef<Map<string, SegmentEdit>[]>([]);
+  const [histTick, setHistTick] = useState(0); // fuerza re-render para habilitar botones
   const onEdit = useCallback((edit: SegmentEdit | { segmentId: string; revert: true }) => {
     setEdits(prev => {
+      undoStack.current.push(prev);
+      if (undoStack.current.length > 100) undoStack.current.shift();
+      redoStack.current = [];
       const next = new Map(prev);
       if ('revert' in edit) next.delete(edit.segmentId); else next.set(edit.segmentId, edit);
       return next;
     });
+    setHistTick(t => t + 1);
   }, []);
+  const undo = useCallback(() => {
+    if (!undoStack.current.length) return;
+    setEdits(prev => { redoStack.current.push(prev); return undoStack.current.pop()!; });
+    setSelectedId(null);
+    setHistTick(t => t + 1);
+  }, []);
+  const redo = useCallback(() => {
+    if (!redoStack.current.length) return;
+    setEdits(prev => { undoStack.current.push(prev); return redoStack.current.pop()!; });
+    setSelectedId(null);
+    setHistTick(t => t + 1);
+  }, []);
+  void histTick;
 
   // Las ediciones de IMAGEN/CAMPO se aplican AL INSTANTE (bake inmediato + recarga).
   const imgBusy = useRef(false);
@@ -206,6 +230,18 @@ export function EditorPage() {
       if (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName))) return;
       if (e.key === 'Escape') { setPlacing(null); return; }
 
+      // Undo / redo (Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z o Ctrl/Cmd+Y).
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        if (e.shiftKey) redo(); else undo();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        redo();
+        return;
+      }
+
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId && graph) {
         const seg = graph.segments.find(s => s.id === selectedId);
         if (seg) { e.preventDefault(); const m = mergeSegmentEdit(seg, edits.get(seg.id) ?? null, { remove: true }); if (m) onEdit(m); return; }
@@ -236,7 +272,7 @@ export function EditorPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [pdf, pageNum, selectedId, graph, edits, onEdit, onImageEdit, onWidgetEdit]);
+  }, [pdf, pageNum, selectedId, graph, edits, onEdit, onImageEdit, onWidgetEdit, undo, redo]);
 
   const setZoom = useCallback((s: number) => {
     const clamped = Math.min(3, Math.max(0.5, Math.round(s * 100) / 100));
@@ -250,6 +286,8 @@ export function EditorPage() {
     try {
       const r = await api.bake(id, [...edits.values()], []);
       setEdits(new Map());
+      undoStack.current = [];
+      redoStack.current = [];
       setSelectedId(null);
       setDocVersion(v => v + 1);
       setNotice(r.warnings.length ? `Aplicado con avisos: ${r.warnings.join(' · ')}` : `Aplicado (${r.applied.length})`);
@@ -299,6 +337,13 @@ export function EditorPage() {
           <IconButton icon={ZoomOut} label="Alejar" onClick={() => setZoom(scale - 0.15)} />
           <span className="w-11 text-center text-[13px] tabular-nums text-neutral-500">{Math.round(scale * 100)}%</span>
           <IconButton icon={ZoomIn} label="Acercar" onClick={() => setZoom(scale + 0.15)} />
+        </div>
+
+        <div className="mx-1 h-6 w-px bg-neutral-200" />
+
+        <div className="flex items-center gap-1">
+          <IconButton icon={Undo2} label="Deshacer (Ctrl+Z)" disabled={undoStack.current.length === 0} onClick={undo} />
+          <IconButton icon={Redo2} label="Rehacer (Ctrl+Shift+Z)" disabled={redoStack.current.length === 0} onClick={redo} />
         </div>
 
         <div className="flex-1" />
@@ -351,6 +396,7 @@ export function EditorPage() {
                 widgetEdits={pageWidgetEdits} onWidgetEdit={onWidgetEdit}
                 locked={locked} placing={placing != null} onPlace={onPlace}
                 onDocOp={docOp} onRequestLink={requestLink} onAddText={onAddText}
+                highlightColor={highlightColor} onHighlightColor={setHl}
               />
             </div>
           ) : (

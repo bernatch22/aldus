@@ -24,6 +24,7 @@ import {
   mergeWidgetEdit,
   hasListMarker,
   isBareListMarker,
+  LIST_GAP,
   nextListMarker,
   originalStyledRuns,
   setStyleRange,
@@ -393,7 +394,7 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       // Ítem de lista pelado: sembrar el GAP (espacios REALES — el textarea no
       // los colapsa). Con tipeo detrás quedan interiores y se hornean; sin
       // tipeo, el commit los recorta = noop.
-      const value = isBareListMarker(seedText) ? `${seedText.replace(/\s+$/, '')}  ` : seedText;
+      const value = isBareListMarker(seedText) ? `${seedText.replace(/\s+$/, '')}${LIST_GAP}` : seedText;
       const eff = effectiveGeometry(s.seg, s.edit);
       const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, s.pageHeight, s.scale);
       const style = containerStyle(s.seg, s.edit, s.scale);
@@ -494,7 +495,7 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
           ta.value = ta.value.slice(m[0].length);
           ta.setSelectionRange(Math.max(0, before - m[0].length), Math.max(0, before - m[0].length));
         } else {
-          const marker = `${String.fromCharCode(0x2022)}  `;
+          const marker = `${String.fromCharCode(0x2022)}${LIST_GAP}`;
           ta.value = marker + ta.value;
           ta.setSelectionRange(before + marker.length, before + marker.length);
         }
@@ -514,7 +515,16 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
   }, [commit, close, fit]);
 
   return (
-    <div ref={hostRef} className="seg-box editing masked" style={{ display: 'none', position: 'absolute', zIndex: 40 }}>
+    // stopPropagation: un click DENTRO del editor no puede burbujear al
+    // overlay (su click de fondo deselecciona y hasta forzaba el blur).
+    <div
+      ref={hostRef}
+      className="seg-box editing masked"
+      style={{ display: 'none', position: 'absolute', zIndex: 40 }}
+      onClick={e => e.stopPropagation()}
+      onPointerDown={e => e.stopPropagation()}
+      onDoubleClick={e => e.stopPropagation()}
+    >
       <textarea
         ref={taRef}
         className="seg-text seg-textarea"
@@ -778,7 +788,7 @@ function WidgetBox({ widget, pageWidth, pageHeight, scale, selected, edit, isLoc
       }}
     >
       {selected && <span className="widget-label">{WIDGET_LABEL[widget.widgetType]} · {widget.fieldName}</span>}
-      {selected && (
+      {!isLocked && (
         <div
           className="seg-grip"
           title="Arrastrar para redimensionar el campo"
@@ -916,7 +926,7 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
           });
         }}
       >
-        {selected && (
+        {!isLocked && (
           <div
             className="seg-grip"
             title="Arrastrar para escalar la imagen"
@@ -1094,7 +1104,7 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
             dangerouslySetInnerHTML={{ __html: html }}
           />
         )}
-        {selected && !editing && (
+        {!editing && !isLocked && (
           <div
             className="seg-grip"
             title="Ampliar el área de texto (la letra no cambia; el tamaño se ajusta en la barra)"

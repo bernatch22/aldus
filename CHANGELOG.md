@@ -4,6 +4,17 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### fix(editor): click dentro del editor ya no deselecciona + grips descubribles + gap de lista generoso
+- **Click dentro del textarea deseleccionaba** (y podía cerrar el editor): el click
+  burbujeaba al overlay, cuyo handler de fondo hace `selectNode(null)`. El host del
+  TextEditLayer ahora corta la propagación (click/pointerdown/dblclick).
+- **Grips siempre descubribles**: los handles de resize (texto/imagen/campo) ya no
+  exigen seleccionar primero — están siempre presentes (salvo lock) y se revelan con
+  el hover del nodo (opacity via CSS).
+- **`LIST_GAP` (4 espacios)**: constante única en core para el gap marcador→texto de
+  las listas (toggle, siembra del ítem nuevo, toggle en vivo del layer). Se elimina
+  `toggleListMarkerInDom` (muerto tras el textarea).
+
 ### refactor(editor): el TextEditLayer pasa a TEXTAREA plano (patrón Excalidraw) — adiós contentEditable
 Idea del usuario, y es la correcta: un `<textarea>` nativo no colapsa espacios (el gap de
 lista son espacios REALES, sin NBSP), no crea spans fantasma, y su caret es indestructible.

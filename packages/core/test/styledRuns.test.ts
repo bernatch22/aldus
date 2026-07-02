@@ -27,9 +27,9 @@ describe('applyTextDiff (textarea plano → estilos re-mapeados)', () => {
 
 describe('toggleListMarker (lista como formato)', () => {
   const R = (text: string, bold = false): StyledRun => ({ text, bold, italic: false, dx: 0 });
-  it('sin marcador → prepende viñeta con gap (2 espacios) al primer tramo', () => {
+  it('sin marcador → prepende viñeta con LIST_GAP al primer tramo', () => {
     const out = toggleListMarker([R('Hola', true), R(' mundo')]);
-    expect(out.map(r => [r.text, r.bold])).toEqual([['•  Hola', true], [' mundo', false]]);
+    expect(out.map(r => [r.text, r.bold])).toEqual([['•    Hola', true], [' mundo', false]]);
     expect(hasListMarker(out.map(r => r.text).join(''))).toBe(true);
   });
   it('con viñeta → la quita (marcador + gap completos)', () => {

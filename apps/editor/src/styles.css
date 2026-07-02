@@ -79,11 +79,16 @@ textarea.seg-textarea {
   backdrop-filter: blur(1.5px);
 }
 
-/* Handle de resize compartido */
+/* Handle de resize compartido: SIEMPRE presente (no hace falta seleccionar
+   primero) — se revela con el hover del nodo o con la selección. */
 .seg-grip {
   position: absolute; right: -5px; bottom: -5px; width: 10px; height: 10px;
   background: #fff; border: 2px solid var(--accent); border-radius: 3px; cursor: nwse-resize;
+  opacity: 0; transition: opacity .12s;
 }
+.seg-box:hover .seg-grip, .seg-box.selected .seg-grip,
+.img-box:hover .seg-grip, .img-box.selected .seg-grip,
+.widget-box:hover .seg-grip, .widget-box.selected .seg-grip { opacity: 1; }
 
 /* Imágenes */
 .img-box { position: absolute; cursor: pointer; outline: 1px solid transparent; outline-offset: 1px; border-radius: 2px; }

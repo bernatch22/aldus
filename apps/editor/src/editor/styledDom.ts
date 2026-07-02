@@ -195,35 +195,6 @@ export function seedHtml(seg: SegmentNode, edit: SegmentEdit | null, scale: numb
   return originalLayoutHtml(seg, scale, 1);
 }
 
-/** Toggle de viñeta EN VIVO sobre el DOM editable (editor abierto): mismo
- *  contrato que toggleListMarker (core) pero MUTANDO el DOM — durante la
- *  edición el DOM manda y React no puede re-renderizarlo (html congelado).
- *  El gap se inserta como NBSP (contentEditable colapsa espacios planos);
- *  el commit los serializa como espacios reales. */
-export function toggleListMarkerInDom(el: HTMLElement): void {
-  const text = el.textContent ?? '';
-  const m = /^(\s*)(?:[•·▪‣*-]|\d{1,3}[.)]|[a-zA-Z][.)])(\s*)/.exec(text);
-  if (m) {
-    // Quitar el marcador: recortar m[0] del frente, text-node por text-node.
-    let toCut = m[0].length;
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-    const texts: Text[] = [];
-    for (let n = walker.nextNode(); n; n = walker.nextNode()) texts.push(n as Text);
-    for (const t of texts) {
-      if (toCut <= 0) break;
-      const take = Math.min(toCut, t.data.length);
-      t.deleteData(0, take);
-      toCut -= take;
-    }
-  } else {
-    // Prepender "•" + gap DENTRO del primer span (hereda su estilo/fuente).
-    const marker = document.createTextNode(String.fromCharCode(0x2022, 0xa0, 0xa0));
-    const first = el.firstElementChild;
-    if (first) first.insertBefore(marker, first.firstChild);
-    else el.insertBefore(marker, el.firstChild);
-  }
-}
-
 /** DOM editado → runs estilados. data-b/data-i de los spans sembrados manda;
  *  también se respetan <b>/<i>/font-weight por si el browser los inserta. */
 /** 'rgb(r, g, b)' o '#hex' → '#rrggbb' (o undefined si no se entiende). */

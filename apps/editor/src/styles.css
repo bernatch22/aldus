@@ -60,6 +60,10 @@ body {
 .seg-box.masked { cursor: text; }
 .seg-box.edited { outline-color: transparent; }
 .seg-box.edited.selected { outline-color: var(--accent); }
+/* Un texto en interacción o ya editado se dibuja ARRIBA del chrome de los
+   widgets (que van últimos en el DOM por prioridad de mouse): sin esto, el
+   texto soltado sobre un campo quedaba bajo su tinte — "cambiaba de color". */
+.seg-box.selected, .seg-box.editing, .seg-box.edited { z-index: 20; }
 .seg-text { white-space: pre; outline: none; min-height: 100%; width: max-content; color: #000; }
 /* Velo esmerilado sobre la posición ORIGINAL de una imagen/widget MIENTRAS se
    arrastra (al soltar, el preview horneado extirpa el original y el velo se va).
@@ -88,10 +92,11 @@ body {
 .img-removed.selected { outline-color: var(--accent); }
 .img-removed .ghost-label { color: var(--danger); top: 2px; left: 4px; }
 
-/* Campos de formulario */
+/* Campos de formulario. SIN fondo permanente: el canvas ya pinta la apariencia
+   real del campo, y el tinte teñía cualquier texto que quedara debajo. */
 .widget-box {
-  position: absolute; cursor: pointer; outline: 1.5px dashed color-mix(in srgb, var(--field) 55%, transparent);
-  outline-offset: 1px; border-radius: 3px; background: color-mix(in srgb, var(--field) 5%, transparent);
+  position: absolute; cursor: pointer; outline: 1.5px dashed color-mix(in srgb, var(--field) 45%, transparent);
+  outline-offset: 1px; border-radius: 3px;
 }
 .widget-box:hover { outline-color: var(--field); background: color-mix(in srgb, var(--field) 10%, transparent); }
 .widget-box.selected { outline: 2px solid var(--field); cursor: move; }

@@ -4,6 +4,19 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### fix(editor): texto arrastrado sobre CAMPOS — color/contenido "buggeado" (tinte del widget-box + sampling contaminado)
+Con text fields presentes (insurance agreement), el texto movido se veía de otro color
+y con el contenido ensuciado. Dos causas, ninguna en el bake (test de regresión
+`widgetAppearance.test.ts` prueba que extirpar texto NO altera /AP, /DA ni /V de los
+campos; ids de segmentos estables — drift 0 verificado contra el PDF real):
+1. El `.widget-box` (overlay) tenía FONDO permanente (tinte violeta 5%) y los widgets
+   van últimos en el DOM (prioridad de mouse) → el texto soltado sobre un campo quedaba
+   DEBAJO del tinte. Ahora el fondo del widget solo existe en hover, y un seg-box
+   seleccionado/editado/en edición sube a `z-index: 20` (arriba del chrome de widgets).
+2. `sampleRunColors` muestreaba el color del run desde píxeles del canvas donde los
+   WIDGETS pintan su apariencia: un run solapado con un campo cacheaba el color del
+   borde/fondo del campo. Ahora los rects de widgets se excluyen del muestreo.
+
 ### fix(editor): los fantasmas perdían TODOS los estilos al soltar — fuentes embebidas bajo nombres ESTABLES
 pdf.js registra cada fuente embebida como FontFace bajo su `loadedName` (g_d0_f3), un id
 POR DOCUMENTO: el preview crea un doc nuevo por edición y destruye el anterior (sus

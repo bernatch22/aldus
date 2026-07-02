@@ -51,12 +51,15 @@ Dev: `pnpm install && pnpm dev` (server :4100 + editor :5190).
 
 Hecho ✅: grafo tipado (run→segmento→línea), editor por segmentos anclados (gaps =
 fronteras, tab-stop gratis), fuente embebida + fit por letter-spacing, object
-properties (texto/B/I/tamaño/familia/x/baseline), mover por drag, server de edits.
+properties (texto/B/I/tamaño/familia/x/baseline), mover por drag + nudge, grip de
+resize, **BAKE del content stream con tests** (extirpar ops + re-emitir verbatim;
+texto nuevo re-codificado vía /ToUnicode; sustitución explícita si el subset no
+alcanza — "Aplicar al PDF" en el editor).
 
-- **Tier 0 — núcleo (bloqueante):** (1) **bake del content stream** (reflow DENTRO del
-  bounding box del párrafo — la caja es la unidad de reflow, la página no se mueve);
-  (2) **matriz de fuentes de 3 niveles** (instalada / embebida-subset: solo atributos,
-  no glifos nuevos / no disponible: sustitución con warning) en el picker.
+- **Tier 0 — restante:** reflow multi-línea DENTRO del bounding box del párrafo
+  (hoy el bake es por segmento/línea); exponer la **matriz de fuentes de 3 niveles**
+  en el picker (embebida-subset: solo atributos / sustitución con warning — el bake
+  ya la implementa por abajo).
 - **Tier 1 — table-stakes:** toolbar de formato (font/size/color/B/I/alineación; panel
   fijo + floating mínima sobre selección), panel derecho con Geometría+Apariencia,
   8 handles de resize, nudge por teclado, multi-select; **imágenes** (insert/replace/

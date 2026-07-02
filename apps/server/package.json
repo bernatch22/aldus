@@ -9,6 +9,7 @@
     "start": "tsx src/index.ts"
   },
   "dependencies": {
+    "@aldus/core": "workspace:*",
     "express": "^4.21.2",
     "multer": "^2.0.1",
     "tsx": "^4.19.2"

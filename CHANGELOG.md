@@ -4,6 +4,21 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### feat(core): BAKE del content stream — Tier 0 completo, con tests (5/5)
+Las ediciones ahora se aplican AL PDF de verdad, sin paint-over: tokenizador completo del
+content stream (`bake/tokenizer.ts`, strings/hex/arrays/dicts/inline-images con offsets de
+bytes), máquina de estado de texto ISO 32000 §9.4 (`bake/textWalk.ts`: Tm/Td/TD/T*/TL/Tf/
+q/Q/cm + color de relleno; los shows encadenados sin reposicionar se marcan `stale` y NO se
+tocan), y el orquestador (`bake/bake.ts`, pdf-lib para plumbing): (A) mover/escalar = los
+ops originales se EXTIRPAN y se re-emiten VERBATIM (mismos bytes/fuente/color/kerning TJ)
+con la matriz reubicada — pixel-perfect; (B) texto nuevo = re-codificado con la fuente
+ORIGINAL vía el mapa inverso del /ToUnicode (`bake/toUnicode.ts`); (C) cambio de familia/
+estilo o subset insuficiente = fuente estándar embebida con warning explícito (política
+Acrobat). Lo ilocalizable se salta con warning — nunca se toca lo que no se entiende.
+Tests vitest reales (crear pdf-lib → extraer pdfjs → bake → re-extraer y verificar
+geometría). Server: `POST /:id/bake` (backup .bak). UI: botón "Aplicar al PDF" (recarga el
+doc y limpia las ediciones), nudge con flechas (Shift=5pt), grip de resize proporcional.
+
 ### fix(editor): el texto ya no "salta" de tamaño/espacio al editar
 Dos causas: (1) texto tipeado FUERA de los spans sembrados (bordes del box, select-all)
 heredaba el system font del UI → ahora el contenedor editable hereda la fuente/tamaño

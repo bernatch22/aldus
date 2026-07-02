@@ -2,9 +2,16 @@
   "name": "@aldus/core",
   "version": "0.0.1",
   "type": "module",
-  "description": "El motor de Aldus: modelo tipado del grafo de contenido de un PDF, extracción con geometría real y helpers de coordenadas.",
+  "description": "El motor de Aldus: modelo tipado del grafo de contenido de un PDF, extracción con geometría real, y bake de ediciones sobre el content stream.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./bake": "./src/bake/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "pdf-lib": "^1.17.1"
   },
   "peerDependencies": {
     "pdfjs-dist": ">=4"
@@ -15,6 +22,9 @@
     }
   },
   "devDependencies": {
-    "typescript": "^5.7.0"
+    "@types/node": "^22.10.0",
+    "pdfjs-dist": "^4.10.38",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.8"
   }
 }

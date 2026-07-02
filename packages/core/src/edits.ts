@@ -28,13 +28,17 @@ export function mergeSegmentEdit(
   prev: SegmentEdit | null,
   patch: SegmentPatch,
 ): SegmentEdit | null {
+  const dom = seg.runs.reduce((a, b) => (b.width > a.width ? b : a));
   const next: SegmentEdit = prev
     ? { ...prev }
     : {
         segmentId: seg.id,
         page: seg.page,
         text: seg.text,
-        original: { text: seg.text, x: seg.x, baseline: seg.baseline, width: seg.width, fontSize: seg.fontSize },
+        original: {
+          text: seg.text, x: seg.x, baseline: seg.baseline, width: seg.width, fontSize: seg.fontSize,
+          bucket: dom.font.bucket, bold: dom.font.bold, italic: dom.font.italic,
+        },
       };
 
   if (patch.text !== undefined) next.text = patch.text;

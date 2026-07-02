@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { getDocument, type PDFDocumentProxy } from 'pdfjs-dist';
-import type { PageGraph, SegmentEdit } from '@aldus/core';
+import { effectiveGeometry, mergeSegmentEdit, type PageGraph, type SegmentEdit } from '@aldus/core';
 import { api } from '../lib/api';
 import { PdfCanvas } from '../editor/PdfCanvas';
 import { Inspector } from '../editor/Inspector';
 
+const r1 = (v: number) => Math.round(v * 10) / 10;
+
 export function EditorPage() {
   const { id = '' } = useParams();
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
+  const [docVersion, setDocVersion] = useState(0);
   const [pageNum, setPageNum] = useState(1);
   const [scale, setScale] = useState<number>(() => {
     const saved = parseFloat(localStorage.getItem('aldus-zoom') || '');
@@ -17,30 +20,54 @@ export function EditorPage() {
   const [graph, setGraph] = useState<PageGraph | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [edits, setEdits] = useState<Map<string, SegmentEdit>>(new Map());
-  const [saving, setSaving] = useState(false);
-  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [baking, setBaking] = useState(false);
+  const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
     let cancelled = false;
-    const task = getDocument({ url: api.pdfUrl(id) });
+    const task = getDocument({ url: `${api.pdfUrl(id)}?v=${docVersion}` });
     task.promise.then(
       doc => { if (!cancelled) setPdf(doc); else void doc.destroy(); },
       e => { if (!cancelled) setError(e instanceof Error ? e.message : 'No se pudo abrir el PDF'); },
     );
-    api.loadEdits(id).then(saved => {
-      if (cancelled || !saved.edits.length) return;
-      setEdits(new Map(saved.edits.map(e => [e.segmentId, e])));
-      setSavedAt(saved.savedAt);
-    }).catch(() => { /* sin edits previos */ });
     return () => { cancelled = true; void task.destroy(); };
-  }, [id]);
+  }, [id, docVersion]);
 
-  // Navegación por teclado (←/→, PageUp/PageDown) — nunca mientras se tipea.
+  const onEdit = useCallback((edit: SegmentEdit | { segmentId: string; revert: true }) => {
+    setEdits(prev => {
+      const next = new Map(prev);
+      if ('revert' in edit) next.delete(edit.segmentId);
+      else next.set(edit.segmentId, edit);
+      return next;
+    });
+  }, []);
+
+  // Teclado: con un segmento seleccionado las flechas hacen NUDGE (Shift = 5pt);
+  // sin selección, ←/→ y PageUp/PageDown navegan páginas. Nunca mientras se tipea.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName))) return;
+
+      const seg = selectedId && graph ? graph.segments.find(s => s.id === selectedId) : null;
+      if (seg && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+        e.preventDefault();
+        const step = e.shiftKey ? 5 : 0.5;
+        const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+        const dy = e.key === 'ArrowUp' ? step : e.key === 'ArrowDown' ? -step : 0;
+        const cur = edits.get(seg.id) ?? null;
+        const eff = effectiveGeometry(seg, cur);
+        const nx = r1(eff.x + dx);
+        const nb = r1(eff.baseline + dy);
+        const merged = mergeSegmentEdit(seg, cur, {
+          x: nx === r1(seg.x) ? null : nx,
+          baseline: nb === r1(seg.baseline) ? null : nb,
+        });
+        onEdit(merged ?? { segmentId: seg.id, revert: true });
+        return;
+      }
+
       const numPages = pdf?.numPages ?? 0;
       if ((e.key === 'ArrowRight' || e.key === 'PageDown') && pageNum < numPages) {
         e.preventDefault();
@@ -54,7 +81,7 @@ export function EditorPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [pdf, pageNum]);
+  }, [pdf, pageNum, selectedId, graph, edits, onEdit]);
 
   const setZoom = useCallback((s: number) => {
     const clamped = Math.min(3, Math.max(0.5, Math.round(s * 100) / 100));
@@ -62,25 +89,21 @@ export function EditorPage() {
     localStorage.setItem('aldus-zoom', String(clamped));
   }, []);
 
-  const onEdit = useCallback((edit: SegmentEdit | { segmentId: string; revert: true }) => {
-    setEdits(prev => {
-      const next = new Map(prev);
-      if ('revert' in edit) next.delete(edit.segmentId);
-      else next.set(edit.segmentId, edit);
-      return next;
-    });
-  }, []);
-
-  const save = useCallback(async () => {
-    setSaving(true);
+  // Aplica las ediciones AL PDF (bake) y recarga el documento nuevo.
+  const bake = useCallback(async () => {
+    setBaking(true);
     setError('');
+    setNotice('');
     try {
-      await api.saveEdits(id, [...edits.values()]);
-      setSavedAt(new Date().toISOString());
+      const r = await api.bake(id, [...edits.values()]);
+      setEdits(new Map());
+      setSelectedId(null);
+      setDocVersion(v => v + 1);
+      setNotice(r.warnings.length ? `Aplicado con avisos: ${r.warnings.join(' · ')}` : `Aplicado ✓ (${r.applied.length})`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo guardar');
+      setError(e instanceof Error ? e.message : 'No se pudo aplicar');
     } finally {
-      setSaving(false);
+      setBaking(false);
     }
   }, [id, edits]);
 
@@ -122,9 +145,9 @@ export function EditorPage() {
         </div>
         <div className="toolbar-group">
           {error && <span className="error">{error}</span>}
-          {savedAt && !edits.size && <span className="muted">guardado</span>}
-          <button className="primary" disabled={saving || edits.size === 0} onClick={() => void save()}>
-            {saving ? 'Guardando…' : `Guardar${edits.size ? ` (${edits.size})` : ''}`}
+          {!error && notice && <span className="muted">{notice}</span>}
+          <button className="primary" disabled={baking || edits.size === 0} onClick={() => void bake()}>
+            {baking ? 'Aplicando…' : `Aplicar al PDF${edits.size ? ` (${edits.size})` : ''}`}
           </button>
         </div>
       </header>

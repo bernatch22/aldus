@@ -196,6 +196,8 @@ function SegmentBox({ seg, pageHeight, scale, selected, editing, edit, onSelect,
   const editRef = useRef<HTMLDivElement>(null);
   const dragStart = useRef<{ px: number; py: number; moved: boolean } | null>(null);
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
+  const gripStart = useRef<number | null>(null);
+  const [gripRatio, setGripRatio] = useState<number | null>(null);
 
   useEffect(() => {
     if (!editing) return;
@@ -229,7 +231,12 @@ function SegmentBox({ seg, pageHeight, scale, selected, editing, edit, onSelect,
           minWidth: rect.width,
           height: rect.height,
           lineHeight: `${rect.height}px`,
-          transform: drag ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
+          transform: drag
+            ? `translate(${drag.dx}px, ${drag.dy}px)`
+            : gripRatio
+              ? `scale(${gripRatio})`
+              : undefined,
+          transformOrigin: 'left bottom',
         }}
         onClick={e => { e.stopPropagation(); onSelect(); }}
         onDoubleClick={e => { e.stopPropagation(); onStartEdit(); }}
@@ -284,6 +291,37 @@ function SegmentBox({ seg, pageHeight, scale, selected, editing, edit, onSelect,
                 e.currentTarget.blur();
               }
             }}
+          />
+        )}
+        {/* Grip de resize: arrastrar escala el tamaño de fuente proporcionalmente. */}
+        {selected && !editing && (
+          <div
+            className="seg-grip"
+            title="Arrastrar para escalar el texto"
+            onPointerDown={e => {
+              e.preventDefault();
+              e.stopPropagation();
+              e.currentTarget.setPointerCapture(e.pointerId);
+              gripStart.current = e.clientX;
+            }}
+            onPointerMove={e => {
+              if (gripStart.current == null) return;
+              e.stopPropagation();
+              const ratio = Math.max(0.2, (rect.width + e.clientX - gripStart.current) / rect.width);
+              setGripRatio(ratio);
+            }}
+            onPointerUp={e => {
+              e.stopPropagation();
+              const start = gripStart.current;
+              gripStart.current = null;
+              setGripRatio(null);
+              if (start == null) return;
+              const ratio = Math.max(0.2, (rect.width + e.clientX - start) / rect.width);
+              const size = Math.max(4, round1(eff.fontSize * ratio));
+              onPatch({ fontSize: size === round1(seg.fontSize) ? null : size });
+            }}
+            onClick={e => e.stopPropagation()}
+            onDoubleClick={e => e.stopPropagation()}
           />
         )}
       </div>

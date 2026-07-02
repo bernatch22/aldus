@@ -14,9 +14,10 @@
 import express from 'express';
 import multer from 'multer';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { bakeSegmentEdits } from '@aldus/core/bake';
 
 const PORT = Number(process.env.ALDUS_PORT || 4100);
 const DATA_DIR = process.env.ALDUS_DATA || path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
@@ -80,6 +81,26 @@ app.put('/api/documents/:id/edits', (req, res) => {
   if (!Array.isArray(edits)) return res.status(400).json({ error: 'Body esperado: { edits: [...] }.' });
   writeFileSync(editsPath(id), JSON.stringify({ edits, savedAt: new Date().toISOString() }, null, 2));
   res.json({ ok: true, count: edits.length });
+});
+
+// Bake: aplica las ediciones AL PDF (content stream) y persiste el resultado.
+// El PDF anterior queda en .bak (un nivel de undo grueso).
+app.post('/api/documents/:id/bake', async (req, res) => {
+  const { id } = req.params;
+  if (!ID_RE.test(id) || !existsSync(pdfPath(id))) return res.status(404).json({ error: 'No existe.' });
+  const edits = req.body?.edits;
+  if (!Array.isArray(edits) || edits.length === 0) {
+    return res.status(400).json({ error: 'Body esperado: { edits: [...] } no vacío.' });
+  }
+  try {
+    const original = readFileSync(pdfPath(id));
+    const { pdf, applied, warnings } = await bakeSegmentEdits(new Uint8Array(original), edits);
+    copyFileSync(pdfPath(id), `${pdfPath(id)}.bak`);
+    writeFileSync(pdfPath(id), Buffer.from(pdf));
+    res.json({ ok: true, applied, warnings });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'No se pudo aplicar el bake.' });
+  }
 });
 
 app.get('/api/documents/:id/edits', (req, res) => {

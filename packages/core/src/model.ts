@@ -124,6 +124,16 @@ export interface SegmentEdit {
   x?: number;
   /** Nueva baseline (mover). */
   baseline?: number;
-  /** Snapshot del nodo original para que el bake pueda localizarlo sin ambigüedad. */
-  original: { text: string; x: number; baseline: number; width: number; fontSize: number };
+  /** Snapshot del nodo original para que el bake pueda localizarlo sin
+   *  ambigüedad (y, si hay sustitución de fuente, imitar su estilo). */
+  original: {
+    text: string;
+    x: number;
+    baseline: number;
+    width: number;
+    fontSize: number;
+    bucket?: FontBucket;
+    bold?: boolean;
+    italic?: boolean;
+  };
 }

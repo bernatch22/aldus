@@ -279,6 +279,41 @@ export function activeEditingBox(): HTMLElement | null {
   return a instanceof HTMLElement && a.classList.contains('seg-text') && a.isContentEditable ? a : null;
 }
 
+/** Estilo de la selección actual dentro del box en edición (para encender los
+ *  toggles del panel): con caret colapsado, el estilo del carácter ANTERIOR
+ *  (la convención de todo editor de texto). null = sin selección en el box. */
+export function selectionStyle(
+  el: HTMLElement,
+  seg: SegmentNode,
+  edit: SegmentEdit | null,
+): { bold: boolean; italic: boolean } | null {
+  const sel = window.getSelection();
+  const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+  if (!range || !el.contains(range.commonAncestorContainer)) return null;
+  const sizeRatio = (edit?.fontSize ?? seg.fontSize) / seg.fontSize;
+  const runs = serializeStyled(el, seg, sizeRatio);
+  let { start, end } = flatOffsets(el, range);
+  if (end <= start) {
+    start = Math.max(0, start - 1);
+    end = start + 1;
+  }
+  let bold = true;
+  let italic = true;
+  let any = false;
+  let pos = 0;
+  for (const r of runs) {
+    const from = pos;
+    const to = pos + r.text.length;
+    if (to > start && from < end) {
+      any = true;
+      bold = bold && r.bold;
+      italic = italic && r.italic;
+    }
+    pos = to;
+  }
+  return any ? { bold, italic } : { bold: false, italic: false };
+}
+
 /** Nombre del evento con el que el panel le pide al box en edición aplicar
  *  estilo a la selección. */
 export const SELECTION_STYLE_EVENT = 'aldus:selection-style';

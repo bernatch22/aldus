@@ -17,8 +17,9 @@ import {
   type SegmentPatch,
   type StyledRun,
 } from '@aldus/core';
+import { useEffect, useState } from 'react';
 import type { EditAction } from './NodeOverlay';
-import { activeEditingBox, SELECTION_STYLE_EVENT } from './styledDom';
+import { activeEditingBox, selectionStyle, SELECTION_STYLE_EVENT } from './styledDom';
 
 interface Props {
   graph: PageGraph | null;
@@ -109,9 +110,23 @@ function ObjectProperties({ seg, edit, onClose, onEdit }: PropsPanelProps) {
   // cada tramo tiene además sus propios B/I (quitar la negrita a UNA parte no
   // toca el resto).
   const styled: StyledRun[] = edit?.runs ?? originalStyledRuns(seg);
-  const allBold = styled.length > 0 && styled.every(r => r.bold);
-  const allItalic = styled.length > 0 && styled.every(r => r.italic);
   const setRuns = (runs: StyledRun[]) => commit({ runs });
+
+  // Con un box en edición, los toggles se encienden según el estilo BAJO EL
+  // CURSOR/selección (recalculado en cada selectionchange); sin edición, según
+  // el estilo de todos los tramos del segmento.
+  const [selSty, setSelSty] = useState<{ bold: boolean; italic: boolean } | null>(null);
+  useEffect(() => {
+    const update = () => {
+      const el = activeEditingBox();
+      setSelSty(el ? selectionStyle(el, seg, edit) : null);
+    };
+    update();
+    document.addEventListener('selectionchange', update);
+    return () => document.removeEventListener('selectionchange', update);
+  }, [seg, edit]);
+  const allBold = selSty ? selSty.bold : styled.length > 0 && styled.every(r => r.bold);
+  const allItalic = selSty ? selSty.italic : styled.length > 0 && styled.every(r => r.italic);
   /** Con un box EN EDICIÓN, el toggle va a la SELECCIÓN (el mousedown del botón
    *  hace preventDefault, así el editable no pierde foco ni selección). */
   const toggleStyle = (key: 'bold' | 'italic', fallback: () => void) => {

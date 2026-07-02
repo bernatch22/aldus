@@ -203,6 +203,11 @@ export function EditorPage() {
       .catch(e => setError(e instanceof Error ? e.message : 'No se pudo aplicar'));
   }, [id, pushHistory]);
 
+  // Precalentar el chunk del bake (pdf-lib es pesado): sin esto, la PRIMERA
+  // edición paga el import dinámico y el preview extirpador tarda ~1s en
+  // llegar — se veía el texto "duplicado" hasta entonces.
+  useEffect(() => { void import('@aldus/core/bake'); }, []);
+
   // Los BYTES base del documento (lo que el server tiene persistido).
   useEffect(() => {
     let cancelled = false;

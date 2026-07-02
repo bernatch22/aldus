@@ -4,6 +4,18 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### fix(editor): duplicado transitorio al primer mover — velo hasta que el preview extirpe + warm-up del bake
+El bake extirpador del preview es ASÍNCRONO: al soltar el drag, el overlay ya dibuja el
+texto en la posición nueva pero el canvas viejo sigue mostrando los glifos originales
+hasta que el re-bake aterriza (la primera vez ~1s: pagaba el `import()` dinámico de
+pdf-lib). Se veía "duplicado" y quedaba en la posición original. Ahora:
+- `SegmentBox` recibe `inPreview` (¿el segmento sigue en el grafo extraído?): mientras
+  esté (bake en vuelo), un velo esmerilado tapa la posición original; cuando el preview
+  nuevo llega, el segmento pasa a fantasma y el velo cae solo. También aplica al drag
+  sin edición previa y al texto eliminado pendiente.
+- `EditorPage` precalienta `@aldus/core/bake` al montar — la primera edición ya no paga
+  la carga del chunk.
+
 ### fix(editor): sin mask blanco en la posición original — el preview EXTIRPA los originales (fantasmas)
 El texto editado entra al preview horneado local: por cada `SegmentEdit` pendiente se pasa
 un clon remove-only a `bakeSegmentEdits`, así los operadores ORIGINALES desaparecen del

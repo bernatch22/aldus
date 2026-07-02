@@ -322,6 +322,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           selected={selectedId === seg.id}
           editing={editingId === seg.id}
           edit={edits.get(seg.id) ?? null}
+          inPreview={inGraph.has(seg.id)}
           isLocked={locked.has(seg.id)}
           onSelect={() => selectNode(seg.id)}
           onStartEdit={() => { selectNode(seg.id); setEditingId(seg.id); }}
@@ -646,6 +647,9 @@ interface SegmentBoxProps {
   selected: boolean;
   editing: boolean;
   edit: SegmentEdit | null;
+  /** true = el segmento sigue en el grafo del preview (sus glifos originales
+      aún se ven en el canvas — el bake extirpador no llegó todavía). */
+  inPreview: boolean;
   isLocked: boolean;
   onSelect: () => void;
   onStartEdit: () => void;
@@ -658,9 +662,10 @@ interface SegmentBoxProps {
   onHighlightColor: (c: string) => void;
 }
 
-function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, isLocked, onSelect, onStartEdit, onStopEdit, onPatch, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: SegmentBoxProps) {
+function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, inPreview, isLocked, onSelect, onStartEdit, onStopEdit, onPatch, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: SegmentBoxProps) {
   const eff = effectiveGeometry(seg, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
+  const originalRect = pdfRectToCss({ x: seg.x, y: seg.y, width: seg.width, height: seg.height }, pageHeight, scale);
   const editRef = useRef<HTMLDivElement>(null);
   const dragStart = useRef<{ px: number; py: number; moved: boolean } | null>(null);
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
@@ -714,9 +719,20 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
     };
   }, [editing, selected, seg, edit, scale]);
 
-  // Segmento eliminado: el preview local ya lo extirpó — nada que dibujar
-  // (Ctrl+Z lo restaura).
-  if (edit?.remove) return null;
+  // VELO TRANSITORIO: mientras el segmento editado/arrastrado siga en el grafo
+  // del preview (el bake extirpador es asíncrono — aún no llegó), sus glifos
+  // originales siguen pintados en el canvas → un velo esmerilado los tapa para
+  // que no se vea "duplicado". Cuando el preview nuevo aterriza, el segmento
+  // sale del grafo (pasa a fantasma) y el velo cae solo.
+  const veil = inPreview && (edit != null || drag != null);
+
+  // Segmento eliminado: el preview local lo extirpa — nada que dibujar
+  // (Ctrl+Z lo restaura); el velo tapa los glifos hasta que el bake llegue.
+  if (edit?.remove) {
+    return veil
+      ? <div className="seg-mask" style={{ left: originalRect.left, top: originalRect.top, width: originalRect.width, height: originalRect.height }} />
+      : null;
+  }
 
   // Un segmento con edición pendiente fue EXTIRPADO del preview: este box
   // fantasma dibuja el estado nuevo (transparente — flota sobre lo que haya).
@@ -734,6 +750,9 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
 
   return (
     <>
+      {veil && (
+        <div className="seg-mask" style={{ left: originalRect.left, top: originalRect.top, width: originalRect.width, height: originalRect.height }} />
+      )}
       {selected && !isLocked && (
         <FloatingBar seg={seg} edit={edit} rect={rect} pageWidth={pageWidth} onPatch={onPatch} onDocOp={onDocOp} onRequestLink={onRequestLink} highlightColor={highlightColor} onHighlightColor={onHighlightColor} />
       )}

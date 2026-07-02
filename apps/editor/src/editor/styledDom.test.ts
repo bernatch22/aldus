@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { originalStyledRuns, styledRunsEqual, type FontBucket, type SegmentNode, type TextRunNode } from '@aldus/core';
-import { applySelectionStyle, flatOffsets, seedHtml, serializeStyled } from './styledDom';
+import { applySelectionStyle, flatOffsets, seedHtml, serializeStyled, toggleListMarkerInDom } from './styledDom';
 
 function mkRun(text: string, x: number, width: number, opts: { bold?: boolean; italic?: boolean } = {}): TextRunNode {
   return {
@@ -79,6 +79,19 @@ describe('seed → serialize', () => {
     el.appendChild(document.createTextNode('abc'));
     const runs = serializeStyled(el, seg, 1);
     expect(runs.map(r => r.text).join('')).toBe(`${String.fromCharCode(0x2022)}  abc`);
+  });
+
+  it('toggle de lista EN VIVO (editor abierto): muta el DOM, roundtrip limpio', () => {
+    const seg = mkSeg();
+    const el = mount(seg);
+    toggleListMarkerInDom(el);
+    let runs = serializeStyled(el, seg, 1);
+    expect(runs.map(r => r.text).join('')).toBe(`${String.fromCharCode(0x2022)}  Total: 125.00`);
+    // el marcador hereda el estilo del primer tramo (bold)
+    expect(runs[0].bold).toBe(true);
+    toggleListMarkerInDom(el);
+    runs = serializeStyled(el, seg, 1);
+    expect(styledRunsEqual(runs, originalStyledRuns(seg))).toBe(true);
   });
 
   it('el color HEREDADO (style inline de spans que crea Chrome) no es un override', () => {

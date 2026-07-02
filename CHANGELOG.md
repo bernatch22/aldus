@@ -4,6 +4,16 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### fix(editor): toggle de lista EN VIVO con el editor abierto — muta el DOM como B/I/color
+Los traces finales mostraron que el flujo de fondo YA funcionaba (commits "•  asd" y
+"•  sdad" correctos, gap sembrado, Enter fluido) — lo roto era lo VISIBLE: con el editor
+abierto, el toggle de lista iba por `onPatch` (modelo) y el DOM congelado no lo reflejaba
+→ "no pasa nada". Patrón canónico de editores contentEditable (CKEditor et al.): durante
+la edición la toolbar MUTA el DOM preservando la selección — nunca re-renderiza desde el
+modelo. `toggleListMarkerInDom` (styledDom, jsdom-testeado): prepende "•"+gap NBSP dentro
+del primer span (hereda estilo) o recorta el marcador text-node por text-node; el commit
+lo serializa normal. Con editor cerrado sigue el camino de modelo (`toggleListMarker`).
+
 ### fix(editor): el PREVIEW se CONGELA mientras hay un editor de texto abierto (fin del editor que se cierra solo)
 Los traces mostraron `[aldus:edit-open]` ×3 para el mismo segmento y grafos de documentos
 distintos (g_d4↔g_d7↔g_d4) aterrizando EN PLENA edición: el pipeline de preview seguía

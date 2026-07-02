@@ -55,6 +55,7 @@ import {
   selectionStyle,
   serializeStyled,
   SELECTION_STYLE_EVENT,
+  toggleListMarkerInDom,
 } from './styledDom';
 import { stableFontFamily } from './fontRegistry';
 
@@ -235,8 +236,19 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
 
   // Lista = un FORMATO más del texto: toggle del marcador "•  " al frente
   // (Enter en edición continúa la lista con el marcador incrementado).
-  const isList = hasListMarker(styledText(styled));
+  // Con el editor ABIERTO, el toggle MUTA el DOM en vivo (mismo principio que
+  // B/I/color: el DOM manda durante la edición; el html está congelado y un
+  // patch de modelo no se vería hasta cerrar). El commit lo serializa después.
+  const [, bumpListTick] = useState(0);
+  const liveBox = activeEditingBox();
+  const isList = hasListMarker(liveBox ? (liveBox.textContent ?? '') : styledText(styled));
   const toggleList = () => {
+    const el = activeEditingBox();
+    if (el) {
+      toggleListMarkerInDom(el);
+      bumpListTick(t => t + 1); // refresca el estado del botón
+      return;
+    }
     const next = toggleListMarker(styled);
     if (next !== styled) onPatch({ runs: next, text: styledText(next) });
   };

@@ -6,7 +6,14 @@
 
 import { describe, expect, it } from 'vitest';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
-import { extractPageGraph, type PageGraph, type PdfJsPage, type SegmentEdit } from '../src/index.js';
+import {
+  extractPageGraph,
+  mergeSegmentEdit,
+  originalStyledRuns,
+  type PageGraph,
+  type PdfJsPage,
+  type SegmentEdit,
+} from '../src/index.js';
 import { bakeSegmentEdits } from '../src/bake/index.js';
 
 async function makePdf(): Promise<Uint8Array> {
@@ -105,6 +112,38 @@ describe('bake', () => {
     expect(resized.fontSize).toBeCloseTo(18, 0);
     expect(resized.x).toBeCloseTo(72, 0);
     expect(resized.baseline).toBeCloseTo(700, 0);
+  });
+
+  it('quita la negrita a UNA parte sin tocar el resto (estilo por tramo)', async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    const helv = await doc.embedFont(StandardFonts.Helvetica);
+    const helvBold = await doc.embedFont(StandardFonts.HelveticaBold);
+    page.drawText('Total:', { x: 72, y: 700, size: 12, font: helvBold });
+    page.drawText('125.00', { x: 110, y: 700, size: 12, font: helv });
+    const pdf = await doc.save();
+
+    const g = await graphOf(pdf);
+    const seg = g.segments.find(s => s.text.includes('Total:'));
+    if (!seg) throw new Error('segmento no encontrado');
+    expect(seg.text).toContain('125.00'); // un solo segmento, dos estilos
+    const styled = originalStyledRuns(seg);
+    expect(styled.map(r => r.bold)).toEqual([true, false]);
+
+    // Quitar la negrita SOLO del primer tramo.
+    const runs = styled.map((r, i) => (i === 0 ? { ...r, bold: false } : r));
+    const edit = mergeSegmentEdit(seg, null, { runs });
+    if (!edit) throw new Error('la edición no debería ser noop');
+    const { pdf: baked } = await bakeSegmentEdits(pdf, [edit]);
+
+    const g2 = await graphOf(baked);
+    const seg2 = g2.segments.find(s => s.text.includes('Total:'));
+    if (!seg2) throw new Error('segmento horneado no encontrado');
+    expect(seg2.runs.every(r => !r.font.bold)).toBe(true);
+    expect(seg2.text).toContain('125.00');
+    // Y el caso inverso implícito: el tramo regular jamás se volvió bold.
+    const value = seg2.runs.find(r => r.text.includes('125'));
+    expect(value?.font.bold).toBe(false);
   });
 
   it('un segmento ilocalizable se salta con warning y el PDF queda intacto', async () => {

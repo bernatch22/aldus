@@ -7,7 +7,16 @@
  *    como overrides del SegmentEdit vía mergeSegmentEdit (core).
  */
 
-import { mergeSegmentEdit, type FontBucket, type PageGraph, type SegmentEdit, type SegmentNode, type SegmentPatch } from '@aldus/core';
+import {
+  mergeSegmentEdit,
+  originalStyledRuns,
+  type FontBucket,
+  type PageGraph,
+  type SegmentEdit,
+  type SegmentNode,
+  type SegmentPatch,
+  type StyledRun,
+} from '@aldus/core';
 import type { EditAction } from './NodeOverlay';
 
 interface Props {
@@ -80,8 +89,13 @@ function ObjectProperties({ seg, edit, onClose, onEdit }: PropsPanelProps) {
   };
 
   const dom = seg.runs.reduce((a, b) => (b.width > a.width ? b : a));
-  const curBold = edit?.bold ?? dom.font.bold;
-  const curItalic = edit?.italic ?? dom.font.italic;
+  // El estilo vive POR TRAMO: los toggles globales aplican a todos los tramos;
+  // cada tramo tiene además sus propios B/I (quitar la negrita a UNA parte no
+  // toca el resto).
+  const styled: StyledRun[] = edit?.runs ?? originalStyledRuns(seg);
+  const allBold = styled.length > 0 && styled.every(r => r.bold);
+  const allItalic = styled.length > 0 && styled.every(r => r.italic);
+  const setRuns = (runs: StyledRun[]) => commit({ runs });
   const curSize = edit?.fontSize ?? seg.fontSize;
   const curFont: FontBucket | 'original' = edit?.font ?? 'original';
   const curX = edit?.x ?? seg.x;
@@ -112,20 +126,14 @@ function ObjectProperties({ seg, edit, onClose, onEdit }: PropsPanelProps) {
       <label className="prop-label">Estilo</label>
       <div className="prop-row">
         <button
-          className={`toggle${curBold ? ' active' : ''}`}
-          title="Bold"
-          onClick={() => {
-            const next = !curBold;
-            commit({ bold: next === dom.font.bold ? null : next });
-          }}
+          className={`toggle${allBold ? ' active' : ''}`}
+          title="Bold (todo el segmento)"
+          onClick={() => setRuns(styled.map(r => ({ ...r, bold: !allBold })))}
         ><strong>B</strong></button>
         <button
-          className={`toggle${curItalic ? ' active' : ''}`}
-          title="Italic"
-          onClick={() => {
-            const next = !curItalic;
-            commit({ italic: next === dom.font.italic ? null : next });
-          }}
+          className={`toggle${allItalic ? ' active' : ''}`}
+          title="Italic (todo el segmento)"
+          onClick={() => setRuns(styled.map(r => ({ ...r, italic: !allItalic })))}
         ><em>I</em></button>
         <input
           className="prop-input num"
@@ -149,6 +157,29 @@ function ObjectProperties({ seg, edit, onClose, onEdit }: PropsPanelProps) {
           <option value="mono">Mono</option>
         </select>
       </div>
+
+      {styled.length > 1 && (
+        <>
+          <label className="prop-label">Tramos (estilo por parte)</label>
+          <ul className="tramo-list">
+            {styled.map((r, i) => (
+              <li key={i}>
+                <span className="mono tramo-text">{r.text || '·'}</span>
+                <button
+                  className={`toggle mini${r.bold ? ' active' : ''}`}
+                  title="Bold de este tramo"
+                  onClick={() => setRuns(styled.map((s, j) => (j === i ? { ...s, bold: !s.bold } : s)))}
+                ><strong>B</strong></button>
+                <button
+                  className={`toggle mini${r.italic ? ' active' : ''}`}
+                  title="Italic de este tramo"
+                  onClick={() => setRuns(styled.map((s, j) => (j === i ? { ...s, italic: !s.italic } : s)))}
+                ><em>I</em></button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
 
       <label className="prop-label">Posición (pt)</label>
       <div className="prop-row">

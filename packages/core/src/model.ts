@@ -103,19 +103,31 @@ export interface PageGraph {
   segments: SegmentNode[];
 }
 
+/** Un tramo de texto con su estilo, DENTRO de una edición. El estilo vive a
+ *  nivel de run — nunca del segmento entero — así "quitar la negrita a una
+ *  parte" no pisa el estilo del resto. */
+export interface StyledRun {
+  text: string;
+  bold: boolean;
+  italic: boolean;
+  /** Offset horizontal (pt) desde el origen del segmento, medido en el editor. */
+  dx: number;
+}
+
 /** Una edición pendiente sobre un segmento (lo que el server persiste y, en la
  *  fase de bake, aplica sobre el content stream). El segmento vecino no se toca:
  *  su x de anclaje ES la preservación del gap.
  *
  *  Los campos opcionales son OVERRIDES: presentes solo si el usuario los cambió
- *  (ausente = se conserva lo original del PDF). Mover = x/baseline nuevos. */
+ *  (ausente = se conserva lo original del PDF). Mover = x/baseline nuevos.
+ *  Estilo (bold/italic) = SIEMPRE por run, en `runs`. */
 export interface SegmentEdit {
   segmentId: string;
   page: number;
-  /** Texto nuevo del segmento. */
+  /** Texto plano del segmento (derivado de `runs` cuando está presente). */
   text: string;
-  bold?: boolean;
-  italic?: boolean;
+  /** Contenido estilado por tramos. Presente solo si texto o estilo cambiaron. */
+  runs?: StyledRun[];
   /** Tamaño en puntos PDF. */
   fontSize?: number;
   /** Cambiar de familia abandona la fuente embebida → bucket estándar. */
@@ -125,7 +137,9 @@ export interface SegmentEdit {
   /** Nueva baseline (mover). */
   baseline?: number;
   /** Snapshot del nodo original para que el bake pueda localizarlo sin
-   *  ambigüedad (y, si hay sustitución de fuente, imitar su estilo). */
+   *  ambigüedad (y, si hay sustitución de fuente, imitar su estilo).
+   *  `runs` trae el estilo ORIGINAL por tramo con su x — el bake lo usa para
+   *  saber qué recurso de fuente del PDF corresponde a cada estilo. */
   original: {
     text: string;
     x: number;
@@ -135,5 +149,6 @@ export interface SegmentEdit {
     bucket?: FontBucket;
     bold?: boolean;
     italic?: boolean;
+    runs?: Array<{ x: number; bold: boolean; italic: boolean }>;
   };
 }

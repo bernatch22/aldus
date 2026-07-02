@@ -31,7 +31,7 @@ import {
   decodePDFRawStream,
   rgb,
 } from 'pdf-lib';
-import type { FontBucket, SegmentEdit } from '../model.js';
+import type { FontBucket, SegmentEdit, StyledRun } from '../model.js';
 import { walkTextOps, type ShowOp } from './textWalk.js';
 import { parseToUnicode, type ReverseEncoder } from './toUnicode.js';
 
@@ -251,24 +251,11 @@ export async function bakeSegmentEdits(pdfBytes: Uint8Array, edits: SegmentEdit[
       const newX = edit.x ?? edit.original.x;
       const newBaseline = edit.baseline ?? edit.original.baseline;
       const textChanged = edit.text !== edit.original.text;
-      const styleChanged = edit.font !== undefined || edit.bold !== undefined || edit.italic !== undefined;
-
-      const pushFallback = () => {
-        fallbackDraws.push({
-          page: pageNum,
-          text: edit.text,
-          x: newX,
-          y: newBaseline,
-          size: (edit.fontSize ?? edit.original.fontSize),
-          bucket: edit.font ?? edit.original.bucket ?? 'sans',
-          bold: edit.bold ?? edit.original.bold ?? false,
-          italic: edit.italic ?? edit.original.italic ?? false,
-        });
-      };
+      const familyChanged = edit.font !== undefined;
 
       for (const o of ops) removals.push([o.record.start, o.record.end]);
 
-      if (!textChanged && !styleChanged) {
+      if (!textChanged && !familyChanged && !edit.runs) {
         // A: mover/escalar — verbatim reubicado.
         for (const o of ops) {
           blocks.push(reemitBlock(o, src, ratio,
@@ -276,22 +263,57 @@ export async function bakeSegmentEdits(pdfBytes: Uint8Array, edits: SegmentEdit[
             newBaseline + (o.y - edit.original.baseline) * ratio));
         }
         applied.push(`${edit.segmentId}: reubicado/escalado (${ops.length} op${ops.length > 1 ? 's' : ''})`);
-      } else if (!styleChanged) {
-        // B: texto nuevo con la fuente original.
-        const dom = ops[0];
-        const bytes = encoderForFont(doc, page, dom.fontName, encCache)?.encode(edit.text) ?? null;
-        if (bytes) {
-          blocks.push(newTextBlock(dom, ratio, newX, newBaseline, bytes));
-          applied.push(`${edit.segmentId}: texto reescrito con la fuente original`);
-        } else {
-          pushFallback();
-          warnings.push(`${edit.segmentId}: el subset de la fuente no cubre el texto nuevo — sustituida por estándar`);
-        }
-      } else {
-        // C: cambio de familia/estilo → fuente estándar.
-        pushFallback();
-        applied.push(`${edit.segmentId}: redibujado con fuente estándar (cambio de estilo/familia)`);
+        continue;
       }
+
+      // B/C: contenido o estilo nuevos — SIEMPRE por run estilado. El estilo de
+      // cada tramo decide la FUENTE: el mapa estilo→recurso sale de los runs
+      // originales (x + bold/italic) matcheados contra los ops del stream — el
+      // PDF ya tiene la variante bold y la regular como recursos propios.
+      const runsToEmit: StyledRun[] = edit.runs ?? [{
+        text: edit.text,
+        bold: edit.original.bold ?? false,
+        italic: edit.original.italic ?? false,
+        dx: 0,
+      }];
+      const fontForStyle = new Map<string, string>();
+      for (const or of edit.original.runs ?? []) {
+        const op = ops.find(o => Math.abs(o.x - or.x) <= 2.5);
+        const key = `${or.bold}|${or.italic}`;
+        if (op && !fontForStyle.has(key)) fontForStyle.set(key, op.fontName);
+      }
+
+      let substituted = 0;
+      for (const sr of runsToEmit) {
+        if (!sr.text) continue;
+        const x = newX + sr.dx * ratio;
+        const fontName = familyChanged ? undefined : fontForStyle.get(`${sr.bold}|${sr.italic}`);
+        const bytes = fontName ? encoderForFont(doc, page, fontName, encCache)?.encode(sr.text) ?? null : null;
+        if (fontName && bytes) {
+          const op = ops.find(o => o.fontName === fontName) ?? ops[0];
+          blocks.push(newTextBlock(op, ratio, x, newBaseline, bytes));
+        } else {
+          if (!/^\s+$/.test(sr.text)) {
+            fallbackDraws.push({
+              page: pageNum,
+              text: sr.text,
+              x,
+              y: newBaseline,
+              size: edit.fontSize ?? edit.original.fontSize,
+              bucket: edit.font ?? edit.original.bucket ?? 'sans',
+              bold: sr.bold,
+              italic: sr.italic,
+            });
+          }
+          substituted++;
+        }
+      }
+      if (substituted && !familyChanged) {
+        warnings.push(`${edit.segmentId}: ${substituted} tramo${substituted > 1 ? 's' : ''} sin fuente original disponible (estilo nuevo o subset insuficiente) — sustituido por estándar`);
+      }
+      applied.push(familyChanged
+        ? `${edit.segmentId}: redibujado con fuente estándar (cambio de familia)`
+        : `${edit.segmentId}: reescrito por tramos (${runsToEmit.length})`);
     }
 
     if (removals.length || blocks.length) {

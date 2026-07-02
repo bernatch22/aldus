@@ -8,6 +8,12 @@
  * texto de la izquierda crezca (tab-stop gratis). La segmentación y sus
  * umbrales viven en @aldus/core (tokens.ts).
  *
+ * ESTILO POR TRAMO: bold/italic viven a nivel de StyledRun, nunca del segmento.
+ * Los spans sembrados llevan data-b/data-i (la fuente embebida bold no "se ve"
+ * bold para el browser, así que tags/font-weight solos no alcanzan); la
+ * serialización preserva el estilo de cada tramo, y el render de un segmento
+ * editado usa la fuente ORIGINAL del PDF que corresponde a cada estilo.
+ *
  * Pixel-perfect por construcción:
  *  - Cada box se posiciona desde su geometría PDF exacta (baseline +
  *    ascent/descent del font real) vía pdfRectToCss — una sola cuenta.
@@ -17,12 +23,8 @@
  *  - Fit horizontal a lo pdf.js-text-layer: cada run se mide y la diferencia
  *    contra su ancho PDF real se reparte como letter-spacing.
  *
- * Ediciones: SegmentEdit acumula overrides (texto, bold/italic, tamaño,
- *  familia, x/baseline) vía mergeSegmentEdit (core). Un segmento editado se
- *  dibuja en su geometría EFECTIVA y una máscara blanca tapa el lugar original.
- *
  * Interacción: click = seleccionar · seleccionado + arrastrar = mover ·
- *  doble click = editar texto in situ.
+ *  doble click = editar texto in situ · grip = escalar.
  */
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
@@ -30,12 +32,16 @@ import {
   classifyGap,
   effectiveGeometry,
   mergeSegmentEdit,
+  originalStyledRuns,
   pdfRectToCss,
+  styledRunsEqual,
+  styledText,
   type FontBucket,
   type PageGraph,
   type SegmentEdit,
   type SegmentNode,
   type SegmentPatch,
+  type StyledRun,
   type TextRunNode,
 } from '@aldus/core';
 
@@ -50,15 +56,15 @@ interface Props {
   onEdit: (action: EditAction) => void;
 }
 
-// Espacios múltiples se siembran como NBSP: un contentEditable colapsa espacios
-// planos consecutivos al editar; la serialización los vuelve espacios reales.
-const NBSP = ' ';
+// Espacios múltiples se siembran como NBSP (un contentEditable colapsa espacios
+// planos consecutivos); la serialización los vuelve espacios reales.
+// fromCharCode para que el carácter jamás se corrompa en el source.
+const NBSP = String.fromCharCode(0xa0);
+const NBSP_RE = new RegExp(NBSP, 'g');
+
 const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
    .replace(/ {2,}/g, m => NBSP.repeat(m.length));
-
-const serialize = (el: HTMLElement): string =>
-  el.innerText.replace(/ /g, ' ').replace(/\n+/g, ' ').replace(/\s+$/, '');
 
 const round1 = (v: number) => Math.round(v * 10) / 10;
 
@@ -71,11 +77,6 @@ function bucketFallback(b: FontBucket): string {
 const family = (r: TextRunNode) => `'${r.font.loadedName}',${bucketFallback(r.font.bucket)}`;
 
 // ── Fit horizontal (la técnica del text layer de pdf.js) ────────────────────
-// El PDF posiciona con ajustes que el browser no reproduce (Tc/Tw/Tz, TJ de
-// justificado), así que el mismo texto con la misma fuente puede ocupar OTRO
-// ancho. Medimos cada run con canvas.measureText y repartimos la diferencia
-// contra el ancho REAL del PDF como letter-spacing → el run del overlay ocupa
-// exactamente su espacio original (y no deforma glifos como scaleX).
 let measureCtx: CanvasRenderingContext2D | null = null;
 
 function measureWidth(text: string, cssFont: string): number {
@@ -92,44 +93,68 @@ function fitLetterSpacing(r: TextRunNode, text: string, scale: number): number {
   const measured = measureWidth(text, `${fontStyle}${fontWeight}${(r.fontSize * scale).toFixed(2)}px ${family(r)}`);
   if (measured <= 0) return 0;
   const spacing = (r.width * scale - measured) / text.length;
-  // Un desvío enorme = la fuente ni siquiera está disponible (fallback lejano):
-  // mejor sin tracking que glifos encimados.
   return Math.abs(spacing) > r.fontSize * scale * 0.4 ? 0 : spacing;
-}
-
-function runStyle(r: TextRunNode, scale: number, letterSpacing = 0): string {
-  // Si el font está embebido, sus glifos YA son bold/italic — pedirle además
-  // font-weight:bold al browser lo haría sintetizar un doble-bold.
-  const weight = !r.font.embedded && r.font.bold ? 'font-weight:bold;' : '';
-  const style = !r.font.embedded && r.font.italic ? 'font-style:italic;' : '';
-  const tracking = letterSpacing !== 0 ? `letter-spacing:${letterSpacing.toFixed(3)}px;` : '';
-  return `font-family:${family(r)};font-size:${(r.fontSize * scale).toFixed(2)}px;${weight}${style}${tracking}`;
 }
 
 function dominantRun(seg: SegmentNode): TextRunNode {
   return seg.runs.reduce((a, b) => (b.width > a.width ? b : a));
 }
 
-/** Tipografía del CONTENEDOR editable: la dominante del segmento con los
- *  overrides de la edición aplicados. Todo texto que el browser inserte fuera
- *  de los spans sembrados hereda esto — nunca el system font del UI. */
+/** El run original cuyo estilo coincide (su familia embebida YA es bold/italic),
+ *  o el dominante con estilo sintetizado si el segmento nunca tuvo ese estilo. */
+function styleBase(seg: SegmentNode, bold: boolean, italic: boolean): { base: TextRunNode; exact: boolean } {
+  const match = seg.runs.find(r => r.font.bold === bold && r.font.italic === italic);
+  return { base: match ?? dominantRun(seg), exact: !!match };
+}
+
+function styledSpanStyle(seg: SegmentNode, sr: { bold: boolean; italic: boolean }, sizeRatio: number, scale: number): string {
+  const { base, exact } = styleBase(seg, sr.bold, sr.italic);
+  const synthBold = sr.bold && (!exact || !base.font.embedded);
+  const synthItalic = sr.italic && (!exact || !base.font.embedded);
+  return `font-family:${family(base)};font-size:${(base.fontSize * sizeRatio * scale).toFixed(2)}px;` +
+    (synthBold ? 'font-weight:700;' : '') + (synthItalic ? 'font-style:italic;' : '');
+}
+
+/** Font shorthand para MEDIR un tramo (en pt: tamaño original × ratio). */
+function measureFontFor(seg: SegmentNode, sr: { bold: boolean; italic: boolean }, sizeRatio: number): string {
+  const { base, exact } = styleBase(seg, sr.bold, sr.italic);
+  const st = (sr.italic && (!exact || !base.font.embedded)) ? 'italic ' : '';
+  const wt = (sr.bold && (!exact || !base.font.embedded)) ? '700 ' : '';
+  return `${st}${wt}${(base.fontSize * sizeRatio).toFixed(2)}px ${family(base)}`;
+}
+
+function runStyle(r: TextRunNode, scale: number, letterSpacing = 0): string {
+  const weight = !r.font.embedded && r.font.bold ? 'font-weight:bold;' : '';
+  const style = !r.font.embedded && r.font.italic ? 'font-style:italic;' : '';
+  const tracking = letterSpacing !== 0 ? `letter-spacing:${letterSpacing.toFixed(3)}px;` : '';
+  return `font-family:${family(r)};font-size:${(r.fontSize * scale).toFixed(2)}px;${weight}${style}${tracking}`;
+}
+
+/** Tipografía del CONTENEDOR editable: la dominante del segmento (con tamaño/
+ *  familia de la edición). Todo texto que el browser inserte fuera de los spans
+ *  hereda esto — nunca el system font del UI. */
 function containerStyle(seg: SegmentNode, edit: SegmentEdit | null, scale: number): CSSProperties {
   const dom = dominantRun(seg);
   const ratio = (edit?.fontSize ?? seg.fontSize) / seg.fontSize;
   return {
     fontFamily: edit?.font ? bucketFallback(edit.font) : family(dom),
     fontSize: `${(dom.fontSize * ratio * scale).toFixed(2)}px`,
-    fontWeight: (edit?.bold ?? (!dom.font.embedded && dom.font.bold)) ? 700 : 400,
-    fontStyle: (edit?.italic ?? (!dom.font.embedded && dom.font.italic)) ? 'italic' : 'normal',
+    fontWeight: !dom.font.embedded && dom.font.bold ? 700 : 400,
+    fontStyle: !dom.font.embedded && dom.font.italic ? 'italic' : 'normal',
   };
 }
 
-/** HTML inicial del box. Sin edición: un span por run con su fuente real +
- *  letter-spacing de fit (ocupa EXACTAMENTE el ancho PDF del run); espacios de
- *  palabra como caracteres, micro-gaps de kerning como margin (solo render).
- *  Con edición: solo el texto — la tipografía la da el contenedor. */
+/** HTML inicial del box. Sin edición: un span por run con su fuente real, su
+ *  fit y su estilo en data-b/data-i. Con edición: un span por TRAMO estilado. */
 function seedHtml(seg: SegmentNode, edit: SegmentEdit | null, scale: number): string {
-  if (edit) return esc(edit.text) || '<br>';
+  if (edit) {
+    const ratio = (edit.fontSize ?? seg.fontSize) / seg.fontSize;
+    const dom = dominantRun(seg);
+    const source: StyledRun[] = edit.runs ?? [{ text: edit.text, bold: dom.font.bold, italic: dom.font.italic, dx: 0 }];
+    return source.map(sr =>
+      `<span data-b="${sr.bold ? 1 : 0}" data-i="${sr.italic ? 1 : 0}" style="${styledSpanStyle(seg, sr, ratio, scale)}">${esc(sr.text)}</span>`,
+    ).join('') || '<br>';
+  }
   const runs = seg.runs;
   let html = '';
   for (let i = 0; i < runs.length; i++) {
@@ -143,9 +168,50 @@ function seedHtml(seg: SegmentNode, edit: SegmentEdit | null, scale: number): st
       if (cls === 'space') space = ' ';
       else if (gap > 0.5) margin = `margin-left:${(gap * scale).toFixed(2)}px;`;
     }
-    html += `<span style="${margin}${runStyle(r, scale, fitLetterSpacing(r, r.text, scale))}">${esc(space + r.text)}</span>`;
+    html += `<span data-b="${r.font.bold ? 1 : 0}" data-i="${r.font.italic ? 1 : 0}" style="${margin}${runStyle(r, scale, fitLetterSpacing(r, r.text, scale))}">${esc(space + r.text)}</span>`;
   }
   return html || '<br>';
+}
+
+/** DOM editado → runs estilados. data-b/data-i de los spans sembrados manda;
+ *  también se respetan <b>/<i>/font-weight por si el browser los inserta. */
+function serializeStyled(root: HTMLElement, seg: SegmentNode, sizeRatio: number): StyledRun[] {
+  const parts: Array<{ text: string; bold: boolean; italic: boolean }> = [];
+  const push = (t: string, bold: boolean, italic: boolean) => {
+    if (!t) return;
+    const last = parts[parts.length - 1];
+    if (last && last.bold === bold && last.italic === italic) last.text += t;
+    else parts.push({ text: t, bold, italic });
+  };
+  const walk = (node: Node, bold: boolean, italic: boolean) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      push((node.textContent ?? '').replace(NBSP_RE, ' ').replace(/\n+/g, ' '), bold, italic);
+      return;
+    }
+    if (!(node instanceof HTMLElement) || node.tagName === 'BR') return;
+    let b = bold, i = italic;
+    if (node.tagName === 'B' || node.tagName === 'STRONG') b = true;
+    if (node.tagName === 'I' || node.tagName === 'EM') i = true;
+    const fw = node.style.fontWeight;
+    if (fw) b = fw === 'bold' || fw === 'bolder' || parseInt(fw) >= 600;
+    const fs = node.style.fontStyle;
+    if (fs) i = fs === 'italic' || fs === 'oblique';
+    if (node.dataset.b !== undefined) b = node.dataset.b === '1';
+    if (node.dataset.i !== undefined) i = node.dataset.i === '1';
+    node.childNodes.forEach(child => walk(child, b, i));
+  };
+  walk(root, false, false);
+  while (parts.length && /^\s+$/.test(parts[parts.length - 1].text)) parts.pop();
+  if (parts.length) parts[parts.length - 1].text = parts[parts.length - 1].text.replace(/\s+$/, '');
+
+  // dx de cada tramo = suma de anchos medidos (pt) de los tramos anteriores.
+  const out: StyledRun[] = [];
+  let dx = 0;
+  for (const p of parts) {
+    out.push({ ...p, dx: round1(dx) });
+    dx += measureWidth(p.text, measureFontFor(seg, p, sizeRatio));
+  }
+  return out;
 }
 
 export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit }: Props) {
@@ -212,14 +278,20 @@ function SegmentBox({ seg, pageHeight, scale, selected, editing, edit, onSelect,
     sel?.addRange(range);
   }, [editing]);
 
-  // Con edición pendiente (o en curso) el box se vuelve opaco: tapa los glifos
-  // originales del canvas y muestra el texto vivo con la fuente real del PDF.
   const masked = editing || edit != null;
   const html = seedHtml(seg, edit, scale);
 
+  const commitFromDom = (el: HTMLElement) => {
+    const sizeRatio = (edit?.fontSize ?? seg.fontSize) / seg.fontSize;
+    const runs = serializeStyled(el, seg, sizeRatio);
+    onPatch({
+      text: styledText(runs),
+      runs: styledRunsEqual(runs, originalStyledRuns(seg)) ? null : runs,
+    });
+  };
+
   return (
     <>
-      {/* El segmento se movió/achicó: tapar los glifos originales del canvas. */}
       {edit != null && (
         <div className="seg-mask" style={{ left: originalRect.left, top: originalRect.top, width: originalRect.width, height: originalRect.height }} />
       )}
@@ -241,7 +313,6 @@ function SegmentBox({ seg, pageHeight, scale, selected, editing, edit, onSelect,
         onClick={e => { e.stopPropagation(); onSelect(); }}
         onDoubleClick={e => { e.stopPropagation(); onStartEdit(); }}
         onPointerDown={e => {
-          // Mover: requiere estar SELECCIONADO (el primer click solo selecciona).
           if (editing || !selected || e.button !== 0) return;
           e.preventDefault();
           e.stopPropagation();
@@ -282,7 +353,7 @@ function SegmentBox({ seg, pageHeight, scale, selected, editing, edit, onSelect,
             onBlur={e => {
               if (!editing) return;
               onStopEdit();
-              onPatch({ text: serialize(e.currentTarget) });
+              commitFromDom(e.currentTarget);
             }}
             onKeyDown={e => {
               if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
@@ -293,7 +364,6 @@ function SegmentBox({ seg, pageHeight, scale, selected, editing, edit, onSelect,
             }}
           />
         )}
-        {/* Grip de resize: arrastrar escala el tamaño de fuente proporcionalmente. */}
         {selected && !editing && (
           <div
             className="seg-grip"

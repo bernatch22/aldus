@@ -4,7 +4,19 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
-### feat(core): BAKE del content stream — Tier 0 completo, con tests (5/5)
+### fix(core+editor): el estilo es POR TRAMO — quitar bold a una parte no pisa el resto
+Bug de diseño: bold/italic eran overrides de TODO el segmento, así que en un nodo mixto
+("**Total:** 125.00") togglear B aplicaba/quitaba la negrita al segmento entero. Ahora el
+estilo vive en `StyledRun {text, bold, italic, dx}`: `SegmentEdit.runs` guarda los tramos,
+`originalStyledRuns(seg)` deriva los tramos originales (única fuente para el noop-check), y
+el panel muestra **cada tramo con sus propios B/I** además de los toggles globales. En el
+DOM editable cada span lleva `data-b`/`data-i` (la fuente embebida bold no "se ve" bold para
+el browser); la serialización preserva el estilo por tramo y mide el `dx` de cada uno. El
+bake re-codifica **cada tramo con el recurso de fuente del propio PDF que ya usaba ese
+estilo** (mapa estilo→fuente por x contra los ops); si el estilo es nuevo o el subset no
+alcanza, sustitución estándar explícita por tramo. Test nuevo: PDF con bold+regular en un
+segmento → quitar bold de una parte → re-extraer y verificar que ningún tramo quedó bold
+y el resto intacto (6/6).
 Las ediciones ahora se aplican AL PDF de verdad, sin paint-over: tokenizador completo del
 content stream (`bake/tokenizer.ts`, strings/hex/arrays/dicts/inline-images con offsets de
 bytes), máquina de estado de texto ISO 32000 §9.4 (`bake/textWalk.ts`: Tm/Td/TD/T*/TL/Tf/

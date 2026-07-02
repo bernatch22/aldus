@@ -113,6 +113,52 @@ export function EditorPage() {
     return { size, bucket };
   }, [graph]);
 
+  // ── Historial UNIFICADO (texto + imágenes + campos + highlights): Ctrl+Z
+  //    deshace, Ctrl+Shift+Z / Ctrl+Y rehace. Snapshots de los cuatro maps.
+  //    Definido ANTES de docOp/onEdit porque esos lo usan. ──
+  interface Snap { e: Map<string, SegmentEdit>; i: Map<string, ImageEdit>; w: Map<string, WidgetEdit>; h: PendingHighlight[] }
+  const editsRef = useRef(edits);
+  const imageEditsRef = useRef(imageEdits);
+  const widgetEditsRef = useRef(widgetEdits);
+  const highlightsRef = useRef(pendingHighlights);
+  editsRef.current = edits;
+  imageEditsRef.current = imageEdits;
+  widgetEditsRef.current = widgetEdits;
+  highlightsRef.current = pendingHighlights;
+  const snapNow = (): Snap => ({ e: editsRef.current, i: imageEditsRef.current, w: widgetEditsRef.current, h: highlightsRef.current });
+  const restoreSnap = (s: Snap) => {
+    setEdits(s.e);
+    setImageEdits(s.i);
+    setWidgetEdits(s.w);
+    setPendingHighlights(s.h);
+  };
+  const undoStack = useRef<Snap[]>([]);
+  const redoStack = useRef<Snap[]>([]);
+  const [histTick, setHistTick] = useState(0); // fuerza re-render para habilitar botones
+  const pushHistory = useCallback(() => {
+    undoStack.current.push(snapNow());
+    if (undoStack.current.length > 100) undoStack.current.shift();
+    redoStack.current = [];
+    setHistTick(t => t + 1);
+  }, []);
+  const undo = useCallback(() => {
+    const snap = undoStack.current.pop();
+    if (!snap) return;
+    redoStack.current.push(snapNow());
+    restoreSnap(snap);
+    setSelectedId(null);
+    setHistTick(t => t + 1);
+  }, []);
+  const redo = useCallback(() => {
+    const snap = redoStack.current.pop();
+    if (!snap) return;
+    undoStack.current.push(snapNow());
+    restoreSnap(snap);
+    setSelectedId(null);
+    setHistTick(t => t + 1);
+  }, []);
+  void histTick;
+
   // ── INSERTAR: paleta → modo colocación → click en la página crea el nodo. ──
   const [placing, setPlacing] = useState<Placing>(null);
   const imageFileRef = useRef<HTMLInputElement>(null);
@@ -192,51 +238,6 @@ export function EditorPage() {
     })().catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'No se pudo generar el preview'); });
     return () => { cancelled = true; };
   }, [baseBytes, imageEdits, widgetEdits, pendingHighlights]);
-
-  // ── Historial UNIFICADO (texto + imágenes + campos): Ctrl+Z deshace,
-  //    Ctrl+Shift+Z / Ctrl+Y rehace. Snapshots de los tres maps. ──
-  interface Snap { e: Map<string, SegmentEdit>; i: Map<string, ImageEdit>; w: Map<string, WidgetEdit>; h: PendingHighlight[] }
-  const editsRef = useRef(edits);
-  const imageEditsRef = useRef(imageEdits);
-  const widgetEditsRef = useRef(widgetEdits);
-  const highlightsRef = useRef(pendingHighlights);
-  editsRef.current = edits;
-  imageEditsRef.current = imageEdits;
-  widgetEditsRef.current = widgetEdits;
-  highlightsRef.current = pendingHighlights;
-  const snapNow = (): Snap => ({ e: editsRef.current, i: imageEditsRef.current, w: widgetEditsRef.current, h: highlightsRef.current });
-  const restoreSnap = (s: Snap) => {
-    setEdits(s.e);
-    setImageEdits(s.i);
-    setWidgetEdits(s.w);
-    setPendingHighlights(s.h);
-  };
-  const undoStack = useRef<Snap[]>([]);
-  const redoStack = useRef<Snap[]>([]);
-  const [histTick, setHistTick] = useState(0); // fuerza re-render para habilitar botones
-  const pushHistory = useCallback(() => {
-    undoStack.current.push(snapNow());
-    if (undoStack.current.length > 100) undoStack.current.shift();
-    redoStack.current = [];
-    setHistTick(t => t + 1);
-  }, []);
-  const undo = useCallback(() => {
-    const snap = undoStack.current.pop();
-    if (!snap) return;
-    redoStack.current.push(snapNow());
-    restoreSnap(snap);
-    setSelectedId(null);
-    setHistTick(t => t + 1);
-  }, []);
-  const redo = useCallback(() => {
-    const snap = redoStack.current.pop();
-    if (!snap) return;
-    undoStack.current.push(snapNow());
-    restoreSnap(snap);
-    setSelectedId(null);
-    setHistTick(t => t + 1);
-  }, []);
-  void histTick;
 
   const onEdit = useCallback((edit: SegmentEdit | { segmentId: string; revert: true }) => {
     pushHistory();

@@ -12,7 +12,7 @@
  *  el evento SELECTION_STYLE_EVENT cuando hay un box en edición.
  */
 
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState, type CSSProperties } from 'react';
 import {
   cssPointToPdf,
   effectiveGeometry,
@@ -319,18 +319,204 @@ function ObjectBar({ rect, pageWidth, width, onAlign, onZ, onDelete }: {
   );
 }
 
+// ── TextEditLayer: EL editor de texto (singleton, imperativo) ────────────────
+// Patrón del "edit box manager" de pdf.js / textarea de Excalidraw: UN solo
+// contentEditable montado UNA vez en la raíz del overlay, que se abre/cierra
+// imperativamente. Vive FUERA del subtree reactivo de los boxes: ningún grafo
+// nuevo, preview o re-render puede desmontarlo, resembrarlo ni robarle el foco.
+interface EditSession {
+  seg: SegmentNode;
+  edit: SegmentEdit | null;
+  scale: number;
+  pageHeight: number;
+  /** min-width extra (px CSS) — el área tipeable ampliada por el grip. */
+  minWidthCss: number;
+  onPatch: (patch: SegmentPatch) => void;
+  onAddText: (req: AddTextRequest) => void;
+}
+
+export interface TextEditLayerHandle {
+  open(s: EditSession): void;
+  isOpen(): boolean;
+}
+
+const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(function TextEditLayer({ onClosed }, ref) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
+  const sessionRef = useRef<EditSession | null>(null);
+
+  const close = useCallback(() => {
+    if (hostRef.current) hostRef.current.style.display = 'none';
+    sessionRef.current = null;
+    onClosed();
+  }, [onClosed]);
+
+  const commit = useCallback(() => {
+    const s = sessionRef.current;
+    const inner = innerRef.current;
+    if (!s || !inner) return;
+    const ratio = (s.edit?.fontSize ?? s.seg.fontSize) / s.seg.fontSize;
+    const runs = serializeStyled(inner, s.seg, ratio, s.edit?.color);
+    s.onPatch({
+      text: styledText(runs),
+      runs: styledRunsEqual(runs, originalStyledRuns(s.seg)) ? null : runs,
+    });
+  }, []);
+
+  useImperativeHandle(ref, () => ({
+    open(s: EditSession) {
+      const host = hostRef.current;
+      const inner = innerRef.current;
+      if (!host || !inner) return;
+      sessionRef.current = s;
+      const eff = effectiveGeometry(s.seg, s.edit);
+      const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, s.pageHeight, s.scale);
+      host.style.display = 'block';
+      host.style.left = `${rect.left}px`;
+      host.style.top = `${rect.top}px`;
+      host.style.minWidth = `${Math.max(rect.width, s.minWidthCss)}px`;
+      host.style.height = `${rect.height}px`;
+      host.style.lineHeight = `${rect.height}px`;
+      Object.assign(inner.style, containerStyle(s.seg, s.edit, s.scale));
+      inner.innerHTML = seedHtml(s.seg, s.edit, s.scale);
+      // Ítem de lista recién creado (solo el marcador): sembrar el GAP (2 NBSP)
+      // — el PDF no persiste espacios finales sin contenido detrás.
+      if (isBareListMarker(inner.textContent ?? '')) {
+        inner.appendChild(document.createTextNode(String.fromCharCode(0xa0, 0xa0)));
+      }
+      inner.focus();
+      const range = document.createRange();
+      range.selectNodeContents(inner);
+      range.collapse(false);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      console.log('[aldus:edit-open]', s.seg.id, 'layer:', JSON.stringify((inner.textContent ?? '').slice(0, 30)), 'focus:', document.activeElement === inner);
+    },
+    isOpen: () => sessionRef.current != null,
+  }), [close]);
+
+  // Listeners nativos, atados UNA sola vez al div (nunca se re-atan).
+  useEffect(() => {
+    const inner = innerRef.current;
+    if (!inner) return;
+    const onBlur = () => {
+      if (!sessionRef.current) return;
+      console.log('[aldus:blur] layer cierra y comitea', sessionRef.current.seg.id);
+      commit();
+      close();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      const s = sessionRef.current;
+      if (!s) return;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const ratio = (s.edit?.fontSize ?? s.seg.fontSize) / s.seg.fontSize;
+        const marker = nextListMarker(styledText(serializeStyled(inner, s.seg, ratio)));
+        commit();
+        close(); // el blur natural posterior encuentra session=null y no re-comitea
+        if (marker) {
+          const effNow = effectiveGeometry(s.seg, s.edit);
+          const size = s.edit?.fontSize ?? s.seg.fontSize;
+          s.onAddText({
+            page: s.seg.page,
+            x: effNow.x,
+            baseline: round1(effNow.baseline - size * 1.4),
+            text: marker,
+            size,
+            bucket: dominantRun(s.seg).font.bucket,
+          });
+        }
+        inner.blur();
+        return;
+      }
+      if (e.key === 'Escape') {
+        // Descartar lo tipeado en ESTA sesión: re-sembrar y cerrar (el commit
+        // del blur serializa el seed = igual al estado previo = noop).
+        inner.innerHTML = seedHtml(s.seg, s.edit, s.scale);
+        inner.blur();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'b' || e.key === 'i')) {
+        e.preventDefault();
+        applySelectionStyle(inner, s.seg, s.edit, s.scale, e.key === 'b' ? 'bold' : 'italic');
+      }
+    };
+    const onBeforeInput = (ev: InputEvent) => {
+      const s = sessionRef.current;
+      if (!s) return;
+      const t = ev.inputType || '';
+      if (t === 'formatBold' || t === 'formatItalic') {
+        ev.preventDefault();
+        applySelectionStyle(inner, s.seg, s.edit, s.scale, t === 'formatBold' ? 'bold' : 'italic');
+      } else if (t.startsWith('format') || t === 'historyUndo' || t === 'historyRedo') {
+        ev.preventDefault();
+      }
+    };
+    const onStyle = (ev: Event) => {
+      const s = sessionRef.current;
+      if (!s) return;
+      const detail = (ev as CustomEvent<{ key?: 'bold' | 'italic' | 'color'; color?: string }>).detail;
+      if (detail?.key === 'bold' || detail?.key === 'italic') applySelectionStyle(inner, s.seg, s.edit, s.scale, detail.key);
+      else if (detail?.key === 'color' && detail.color) applySelectionColor(inner, s.seg, s.edit, s.scale, detail.color);
+    };
+    inner.addEventListener('blur', onBlur);
+    inner.addEventListener('keydown', onKeyDown);
+    inner.addEventListener('beforeinput', onBeforeInput as EventListener);
+    window.addEventListener(SELECTION_STYLE_EVENT, onStyle);
+    return () => {
+      inner.removeEventListener('blur', onBlur);
+      inner.removeEventListener('keydown', onKeyDown);
+      inner.removeEventListener('beforeinput', onBeforeInput as EventListener);
+      window.removeEventListener(SELECTION_STYLE_EVENT, onStyle);
+    };
+  }, [commit, close]);
+
+  return (
+    <div ref={hostRef} className="seg-box editing masked" style={{ display: 'none', position: 'absolute', zIndex: 40 }}>
+      <div ref={innerRef} className="seg-text" contentEditable suppressContentEditableWarning spellCheck={false} />
+    </div>
+  );
+});
+
 export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, areaWidths, onAreaWidth, editRequestId, onEditRequestHandled, onEditingChange }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
-  useEffect(() => setEditingId(null), [graph.page]);
   useEffect(() => { onEditingChange(editingId != null); }, [editingId, onEditingChange]);
+  // Cambio de página con editor abierto: cerrarlo (con commit) via blur.
+  useEffect(() => { activeEditingBox()?.blur(); }, [graph.page]);
+
+  // EL editor (singleton, imperativo). Los boxes solo piden abrirlo.
+  const layerRef = useRef<TextEditLayerHandle>(null);
+  const editsRef = useRef(edits);
+  editsRef.current = edits;
+  const onLayerClosed = useCallback(() => setEditingId(null), []);
+  const openSegEditor = (seg: SegmentNode) => {
+    const edit = editsRef.current.get(seg.id) ?? null;
+    setEditingId(seg.id);
+    layerRef.current?.open({
+      seg,
+      edit,
+      scale,
+      pageHeight: graph.height,
+      minWidthCss: (areaWidths.get(seg.id) ?? 0) * scale,
+      onPatch: patch => {
+        const merged = mergeSegmentEdit(seg, editsRef.current.get(seg.id) ?? null, patch);
+        onEdit(merged ?? { segmentId: seg.id, revert: true });
+      },
+      onAddText,
+    });
+  };
 
   // Ítem de lista recién creado (Enter): abrirlo en edición apenas el grafo
   // lo traiga — el flujo de tipeo sigue sin "doble click" en el medio.
   useEffect(() => {
-    if (editRequestId && graph.segments.some(s => s.id === editRequestId)) {
-      setEditingId(editRequestId);
+    if (!editRequestId) return;
+    const seg = graph.segments.find(s => s.id === editRequestId);
+    if (seg) {
+      openSegEditor(seg);
       onEditRequestHandled();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editRequestId, graph, onEditRequestHandled]);
 
   // Cuando una FontFace termina de cargar (las estables del fontRegistry son
@@ -405,8 +591,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           areaWidth={areaWidths.get(seg.id) ?? null}
           onAreaWidth={w => onAreaWidth(seg.id, w)}
           onSelect={() => selectNode(seg.id)}
-          onStartEdit={() => { selectNode(seg.id); setEditingId(seg.id); }}
-          onStopEdit={() => setEditingId(null)}
+          onStartEdit={() => { selectNode(seg.id); openSegEditor(seg); }}
           onPatch={patch => {
             const merged = mergeSegmentEdit(seg, edits.get(seg.id) ?? null, patch);
             onEdit(merged ?? { segmentId: seg.id, revert: true });
@@ -439,6 +624,9 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           }}
         />
       ))}
+      {/* EL editor de texto: singleton imperativo, SIEMPRE montado — inmune al
+          churn de grafos/previews (ver TextEditLayer arriba). */}
+      <TextEditLayer ref={layerRef} onClosed={onLayerClosed} />
     </div>
   );
 }
@@ -734,7 +922,6 @@ interface SegmentBoxProps {
   onAreaWidth: (w: number | null) => void;
   onSelect: () => void;
   onStartEdit: () => void;
-  onStopEdit: () => void;
   onPatch: (patch: SegmentPatch) => void;
   onDocOp: (action: string, params: Record<string, unknown>) => void;
   onRequestLink: (target: { page: number; x: number; y: number; width: number; height: number }) => void;
@@ -743,71 +930,17 @@ interface SegmentBoxProps {
   onHighlightColor: (c: string) => void;
 }
 
-function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, isLocked, onDragging, areaWidth, onAreaWidth, onSelect, onStartEdit, onStopEdit, onPatch, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: SegmentBoxProps) {
+function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, isLocked, onDragging, areaWidth, onAreaWidth, onSelect, onStartEdit, onPatch, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: SegmentBoxProps) {
   const eff = effectiveGeometry(seg, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
-  const editRef = useRef<HTMLDivElement>(null);
   const dragStart = useRef<{ px: number; py: number; moved: boolean } | null>(null);
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
   const gripStart = useRef<number | null>(null);
   // Ancho de área en vivo mientras se arrastra el grip (px CSS).
   const [gripW, setGripW] = useState<number | null>(null);
 
-  useEffect(() => {
-    if (!editing) return;
-    const el = editRef.current;
-    if (!el) return;
-    el.focus();
-    // Ítem de lista recién creado (solo el marcador): sembrar el GAP (2 NBSP)
-    // para que el tipeo arranque separado de la viñeta. El PDF no persiste
-    // espacios finales sin contenido — el gap nace acá y, con texto detrás,
-    // se vuelve interior y se hornea. Sin tipeo, el commit lo recorta = noop.
-    if (isBareListMarker(el.textContent ?? '')) {
-      el.appendChild(document.createTextNode(String.fromCharCode(0xa0, 0xa0)));
-    }
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    range.collapse(false);
-    const sel = window.getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(range);
-    console.log('[aldus:edit-open]', seg.id, 'contenido:', JSON.stringify((el.textContent ?? '').slice(0, 30)), 'focus:', document.activeElement === el);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editing]);
-
-  // El panel de propiedades pide "estilo a la selección" con un evento: solo
-  // el box EN EDICIÓN lo atiende (el botón preserva la selección con
-  // preventDefault en su mousedown). Y `beforeinput` intercepta el formato que
-  // llega SIN teclado (menú Formato del sistema, menú contextual, dictado):
-  // inputType formatBold/formatItalic → nuestro modelo; el resto de format* y
-  // el undo nativo se bloquean — el browser jamás muta el DOM por su cuenta.
-  useEffect(() => {
-    // Solo el box editando Y seleccionado atiende el evento de estilo — evita
-    // que un editor viejo (aún abierto) reciba la B destinada a otro nodo.
-    if (!editing || !selected) return;
-    const el = editRef.current;
-    if (!el) return;
-    const onStyle = (ev: Event) => {
-      const detail = (ev as CustomEvent<{ key?: 'bold' | 'italic' | 'color'; color?: string }>).detail;
-      if (detail?.key === 'bold' || detail?.key === 'italic') applySelectionStyle(el, seg, edit, scale, detail.key);
-      else if (detail?.key === 'color' && detail.color) applySelectionColor(el, seg, edit, scale, detail.color);
-    };
-    const onBeforeInput = (ev: InputEvent) => {
-      const t = ev.inputType || '';
-      if (t === 'formatBold' || t === 'formatItalic') {
-        ev.preventDefault();
-        applySelectionStyle(el, seg, edit, scale, t === 'formatBold' ? 'bold' : 'italic');
-      } else if (t.startsWith('format') || t === 'historyUndo' || t === 'historyRedo') {
-        ev.preventDefault();
-      }
-    };
-    window.addEventListener(SELECTION_STYLE_EVENT, onStyle);
-    el.addEventListener('beforeinput', onBeforeInput as EventListener);
-    return () => {
-      window.removeEventListener(SELECTION_STYLE_EVENT, onStyle);
-      el.removeEventListener('beforeinput', onBeforeInput as EventListener);
-    };
-  }, [editing, selected, seg, edit, scale]);
+  // La EDICIÓN vive en el TextEditLayer (singleton imperativo, arriba) — este
+  // box solo la solicita (onStartEdit) y se cubre con el layer mientras dura.
 
   // DEBUG temporal: cada vez que un segmento EDITADO se re-renderiza (cambia
   // el edit o llega el seg fantasma del grafo nuevo), volcar sus estilos.
@@ -827,23 +960,9 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
 
   // Un segmento con edición pendiente fue EXTIRPADO del preview: este box
   // fantasma dibuja el estado nuevo (transparente — flota sobre lo que haya).
+  // Mientras el TextEditLayer está abierto sobre él, su fondo blanco lo cubre.
   const masked = editing || edit != null || drag != null;
   const html = seedHtml(seg, edit, scale);
-  // Mientras se EDITA, React NO puede tocar el DOM del contentEditable: si el
-  // html recalculado cambia (una FontFace que carga re-mide el letter-spacing,
-  // llega un grafo nuevo…), React pisaría lo tipeado y mataría el caret. El
-  // html queda CONGELADO al entrar en edición; el modelo lo lee en el commit.
-  const frozenHtml = useRef(html);
-  if (!editing) frozenHtml.current = html;
-
-  const commitFromDom = (el: HTMLElement) => {
-    const sizeRatio = (edit?.fontSize ?? seg.fontSize) / seg.fontSize;
-    const runs = serializeStyled(el, seg, sizeRatio, edit?.color);
-    onPatch({
-      text: styledText(runs),
-      runs: styledRunsEqual(runs, originalStyledRuns(seg)) ? null : runs,
-    });
-  };
 
   return (
     <>
@@ -921,61 +1040,9 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
       >
         {masked && (
           <div
-            ref={editRef}
             className="seg-text"
             style={containerStyle(seg, edit, scale)}
-            contentEditable={editing}
-            suppressContentEditableWarning
-            spellCheck={false}
-            dangerouslySetInnerHTML={{ __html: editing ? frozenHtml.current : html }}
-            onBlur={e => {
-              if (!editing) {
-                // blur con editing=false = el contentEditable se apagó ANTES
-                // del blur (editingId limpiado por otro camino) — tipeo perdido.
-                console.warn('[aldus:blur-huerfano]', seg.id, 'texto descartado:', JSON.stringify((e.currentTarget.textContent ?? '').slice(0, 30)));
-                return;
-              }
-              // DEBUG temporal: un .blur() PROGRAMÁTICO despacha síncrono — el
-              // stack de este trace muestra al culpable. Click al body = stack vacío.
-              console.log('[aldus:blur]', seg.id, '→', (e.relatedTarget as HTMLElement | null)?.className ?? e.relatedTarget?.constructor.name ?? 'nadie (focus perdido)');
-              console.trace('[aldus:blur-stack]');
-              onStopEdit();
-              commitFromDom(e.currentTarget);
-            }}
-            onKeyDown={e => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                // Enter en un ítem de LISTA → commit + crear el SIGUIENTE ítem
-                // con el marcador incrementado (• → •, "3." → "4.", "b)" → "c)").
-                const el = e.currentTarget;
-                const sizeRatio = (edit?.fontSize ?? seg.fontSize) / seg.fontSize;
-                const marker = nextListMarker(styledText(serializeStyled(el, seg, sizeRatio)));
-                el.blur();
-                if (marker) {
-                  const effNow = effectiveGeometry(seg, edit);
-                  const size = edit?.fontSize ?? seg.fontSize;
-                  onAddText({
-                    page: seg.page,
-                    x: effNow.x,
-                    baseline: round1(effNow.baseline - size * 1.4),
-                    text: marker,
-                    size,
-                    bucket: dominantRun(seg).font.bucket,
-                  });
-                }
-                return;
-              }
-              if (e.key === 'Escape') {
-                e.currentTarget.innerHTML = seedHtml(seg, edit, scale);
-                e.currentTarget.blur();
-              }
-              // Cmd/Ctrl+B / +I: estilo a la SELECCIÓN, vía el modelo — nunca
-              // el execCommand del browser (parte los spans y pierde data-b).
-              if ((e.metaKey || e.ctrlKey) && (e.key === 'b' || e.key === 'i')) {
-                e.preventDefault();
-                applySelectionStyle(e.currentTarget, seg, edit, scale, e.key === 'b' ? 'bold' : 'italic');
-              }
-            }}
+            dangerouslySetInnerHTML={{ __html: html }}
           />
         )}
         {selected && !editing && (

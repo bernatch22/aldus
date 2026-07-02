@@ -286,6 +286,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           selected={selectedId === w.id}
           edit={widgetEdits.get(w.id) ?? null}
           isLocked={locked.has(w.id)}
+          snapshot={snapshot}
           onSelect={() => onSelect(w.id)}
           onPatch={patch => {
             const merged = mergeWidgetEdit(w, widgetEdits.get(w.id) ?? null, patch);
@@ -305,6 +306,7 @@ interface WidgetBoxProps {
   selected: boolean;
   edit: WidgetEdit | null;
   isLocked: boolean;
+  snapshot: { url: string; width: number; height: number } | null;
   onSelect: () => void;
   onPatch: (patch: WidgetPatch) => void;
 }
@@ -316,9 +318,10 @@ const WIDGET_LABEL: Record<WidgetNode['widgetType'], string> = {
 
 /** Un campo de formulario: seleccionar, arrastrar (mover), grip (escalar).
  *  La edición se aplica al instante (reescritura del /Rect de la anotación). */
-function WidgetBox({ widget, pageWidth, pageHeight, scale, selected, edit, isLocked, onSelect, onPatch }: WidgetBoxProps) {
+function WidgetBox({ widget, pageWidth, pageHeight, scale, selected, edit, isLocked, snapshot, onSelect, onPatch }: WidgetBoxProps) {
   const eff = effectiveWidgetRect(widget, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
+  const orig = pdfRectToCss({ x: widget.x, y: widget.y, width: widget.width, height: widget.height }, pageHeight, scale);
   const dragStart = useRef<{ px: number; py: number; moved: boolean } | null>(null);
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
   const gripStart = useRef<{ px: number; py: number } | null>(null);
@@ -327,16 +330,33 @@ function WidgetBox({ widget, pageWidth, pageHeight, scale, selected, edit, isLoc
   if (eff.removed) {
     return (
       <div
-        className="img-removed"
+        className={`img-removed${selected ? ' selected' : ''}`}
         style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height }}
+        title="Campo eliminado — se aplica con el botón Aplicar; restaurable desde el panel"
+        onClick={e => { e.stopPropagation(); onSelect(); }}
       >
-        <span className="ghost-label">eliminando…</span>
+        <span className="ghost-label">se elimina al Aplicar</span>
       </div>
     );
   }
 
+  // Mientras se arrastra o hay un move/resize pendiente: el box viaja con los
+  // PÍXELES reales del widget (crop del snapshot) y el lugar original se
+  // enmascara — sin esto se movía el frame teal y el input pintado quedaba.
+  const moved = edit != null && (edit.x !== undefined || edit.y !== undefined || edit.width !== undefined || edit.height !== undefined);
+  const showPixels = moved || drag != null;
+  const pixels = showPixels && snapshot && orig.width > 0 && orig.height > 0
+    ? {
+        backgroundImage: `url(${snapshot.url})`,
+        backgroundSize: `${(snapshot.width * rect.width) / orig.width}px ${(snapshot.height * rect.height) / orig.height}px`,
+        backgroundPosition: `${(-orig.left * rect.width) / orig.width}px ${(-orig.top * rect.height) / orig.height}px`,
+      }
+    : undefined;
   return (
     <>
+      {showPixels && (
+        <div className="seg-mask" style={{ left: orig.left, top: orig.top, width: orig.width, height: orig.height }} />
+      )}
       {selected && !isLocked && (
         <ObjectBar
           rect={rect} pageWidth={pageWidth} width={eff.width}
@@ -352,6 +372,7 @@ function WidgetBox({ widget, pageWidth, pageHeight, scale, selected, edit, isLoc
         width: gripDelta ? rect.width + gripDelta.dx : rect.width,
         height: gripDelta ? rect.height + gripDelta.dy : rect.height,
         transform: drag ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
+        ...pixels,
       }}
       title={`Campo ${WIDGET_LABEL[widget.widgetType]} · ${widget.fieldName}`}
       onClick={e => { e.stopPropagation(); onSelect(); }}
@@ -456,17 +477,18 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
       <div
         className={`img-removed${selected ? ' selected' : ''}`}
         style={{ left: orig.left, top: orig.top, width: orig.width, height: orig.height }}
-        title="Eliminando imagen…"
+        title="Imagen eliminada — se aplica con el botón Aplicar; restaurable desde el panel"
         onClick={e => { e.stopPropagation(); onSelect(); }}
       >
-        <span className="ghost-label">eliminando…</span>
+        <span className="ghost-label">se elimina al Aplicar</span>
       </div>
     );
   }
 
-  const ghost = eff.moved;
-  // Los píxeles del preview: crop del snapshot de la página, reescalado al
-  // tamaño efectivo del box (background-position/size hacen el crop).
+  // Preview con PÍXELES reales (crop del snapshot) mientras se arrastra o hay
+  // una edición pendiente; el lugar original se enmascara en blanco — salvo
+  // que la imagen sea casi de página completa (taparía el texto de arriba).
+  const ghost = eff.moved || drag != null;
   const ghostPixels = ghost && snapshot && orig.width > 0 && orig.height > 0
     ? {
         backgroundImage: `url(${snapshot.url})`,
@@ -474,8 +496,13 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
         backgroundPosition: `${(-orig.left * rect.width) / orig.width}px ${(-orig.top * rect.height) / orig.height}px`,
       }
     : undefined;
+  const coverage = (img.width * img.height) / (pageWidth * pageHeight);
+  const maskOriginal = ghost && coverage < 0.8;
   return (
     <>
+      {maskOriginal && (
+        <div className="seg-mask" style={{ left: orig.left, top: orig.top, width: orig.width, height: orig.height }} />
+      )}
       {selected && !isLocked && (
         <ObjectBar
           rect={rect} pageWidth={pageWidth} width={eff.width}
@@ -525,7 +552,6 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
           });
         }}
       >
-        {ghost && <span className="ghost-label">aplicando…</span>}
         {selected && (
           <div
             className="seg-grip"

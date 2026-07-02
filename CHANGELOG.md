@@ -4,6 +4,19 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### fix(editor): unlock accesible, drag de widgets con píxeles, y NADA se guarda solo
+- **Unlock**: candadito clickeable en cada fila del esquema (Campos/Imágenes/Texto) — se
+  bloquea/desbloquea con un click, sin necesidad de seleccionar el nodo (que estando
+  bloqueado no responde en el lienzo).
+- **Drag de inputs con píxeles**: mismo bug de "se mueve el frame y el elemento queda" —
+  ahora el widget viaja con los PÍXELES reales (crop del snapshot) y su lugar original se
+  enmascara. Las imágenes también muestran píxeles DURANTE el drag (antes solo tras soltar),
+  con máscara del original salvo imágenes casi full-page (taparían el texto).
+- **Se acabó el auto-save**: mover/escalar/eliminar imágenes y campos ya NO hornea al
+  instante — TODO acumula y se escribe únicamente con el botón Aplicar (contador = texto +
+  imágenes + campos). El historial undo/redo ahora es UNIFICADO sobre los tres tipos.
+  Etiquetas "se elimina al Aplicar" + Restaurar campo en el panel.
+
 ### feat(editor): undo/redo, toolbar flotante en imágenes/campos, highlight visible + color picker
 - **Undo/Redo** de las ediciones de texto: `Ctrl/Cmd+Z` deshace, `Ctrl+Shift+Z`/`Ctrl+Y`
   rehace (historial de snapshots del map de ediciones, hasta 100), + botones en la top bar.

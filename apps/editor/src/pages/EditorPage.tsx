@@ -156,67 +156,75 @@ export function EditorPage() {
     return () => { cancelled = true; void task.destroy(); };
   }, [id, docVersion]);
 
-  // ── Historial de ediciones de TEXTO (Ctrl+Z / Ctrl+Shift+Z · Ctrl+Y). Los
-  //    snapshots son del map completo `edits` — undo/redo lo restauran entero. ──
-  const undoStack = useRef<Map<string, SegmentEdit>[]>([]);
-  const redoStack = useRef<Map<string, SegmentEdit>[]>([]);
+  // ── Historial UNIFICADO (texto + imágenes + campos): Ctrl+Z deshace,
+  //    Ctrl+Shift+Z / Ctrl+Y rehace. Snapshots de los tres maps. ──
+  interface Snap { e: Map<string, SegmentEdit>; i: Map<string, ImageEdit>; w: Map<string, WidgetEdit> }
+  const editsRef = useRef(edits);
+  const imageEditsRef = useRef(imageEdits);
+  const widgetEditsRef = useRef(widgetEdits);
+  editsRef.current = edits;
+  imageEditsRef.current = imageEdits;
+  widgetEditsRef.current = widgetEdits;
+  const undoStack = useRef<Snap[]>([]);
+  const redoStack = useRef<Snap[]>([]);
   const [histTick, setHistTick] = useState(0); // fuerza re-render para habilitar botones
-  const onEdit = useCallback((edit: SegmentEdit | { segmentId: string; revert: true }) => {
-    setEdits(prev => {
-      undoStack.current.push(prev);
-      if (undoStack.current.length > 100) undoStack.current.shift();
-      redoStack.current = [];
-      const next = new Map(prev);
-      if ('revert' in edit) next.delete(edit.segmentId); else next.set(edit.segmentId, edit);
-      return next;
-    });
+  const pushHistory = useCallback(() => {
+    undoStack.current.push({ e: editsRef.current, i: imageEditsRef.current, w: widgetEditsRef.current });
+    if (undoStack.current.length > 100) undoStack.current.shift();
+    redoStack.current = [];
     setHistTick(t => t + 1);
   }, []);
   const undo = useCallback(() => {
-    if (!undoStack.current.length) return;
-    setEdits(prev => { redoStack.current.push(prev); return undoStack.current.pop()!; });
+    const snap = undoStack.current.pop();
+    if (!snap) return;
+    redoStack.current.push({ e: editsRef.current, i: imageEditsRef.current, w: widgetEditsRef.current });
+    setEdits(snap.e);
+    setImageEdits(snap.i);
+    setWidgetEdits(snap.w);
     setSelectedId(null);
     setHistTick(t => t + 1);
   }, []);
   const redo = useCallback(() => {
-    if (!redoStack.current.length) return;
-    setEdits(prev => { undoStack.current.push(prev); return redoStack.current.pop()!; });
+    const snap = redoStack.current.pop();
+    if (!snap) return;
+    undoStack.current.push({ e: editsRef.current, i: imageEditsRef.current, w: widgetEditsRef.current });
+    setEdits(snap.e);
+    setImageEdits(snap.i);
+    setWidgetEdits(snap.w);
     setSelectedId(null);
     setHistTick(t => t + 1);
   }, []);
   void histTick;
 
-  // Las ediciones de IMAGEN/CAMPO se aplican AL INSTANTE (bake inmediato + recarga).
-  const imgBusy = useRef(false);
+  const onEdit = useCallback((edit: SegmentEdit | { segmentId: string; revert: true }) => {
+    pushHistory();
+    setEdits(prev => {
+      const next = new Map(prev);
+      if ('revert' in edit) next.delete(edit.segmentId); else next.set(edit.segmentId, edit);
+      return next;
+    });
+  }, [pushHistory]);
+
+  // Las ediciones de IMAGEN y CAMPO también ACUMULAN (nada se guarda solo):
+  // el documento se escribe únicamente con el botón Aplicar. El preview en el
+  // lienzo usa píxeles reales del snapshot, así que se ven movidas de verdad.
   const onImageEdit = useCallback((edit: ImageEdit | { imageId: string; revert: true }) => {
-    if ('revert' in edit) {
-      setImageEdits(prev => { const n = new Map(prev); n.delete(edit.imageId); return n; });
-      return;
-    }
-    if (imgBusy.current) return;
-    imgBusy.current = true;
-    setImageEdits(prev => new Map(prev).set(edit.imageId, edit));
-    setError('');
-    api.bake(id, [], [edit])
-      .then(r => { setDocVersion(v => v + 1); setNotice(r.warnings.length ? `Imagen: ${r.warnings.join(' · ')}` : 'Imagen aplicada'); })
-      .catch(e => setError(e instanceof Error ? e.message : 'No se pudo aplicar la imagen'))
-      .finally(() => { imgBusy.current = false; setImageEdits(prev => { const n = new Map(prev); n.delete(edit.imageId); return n; }); });
-  }, [id]);
+    pushHistory();
+    setImageEdits(prev => {
+      const next = new Map(prev);
+      if ('revert' in edit) next.delete(edit.imageId); else next.set(edit.imageId, edit);
+      return next;
+    });
+  }, [pushHistory]);
 
   const onWidgetEdit = useCallback((edit: WidgetEdit | { widgetId: string; revert: true }) => {
-    if ('revert' in edit) {
-      setWidgetEdits(prev => { const n = new Map(prev); n.delete(edit.widgetId); return n; });
-      return;
-    }
-    if (imgBusy.current) return;
-    imgBusy.current = true;
-    setWidgetEdits(prev => new Map(prev).set(edit.widgetId, edit));
-    setError('');
-    api.bake(id, [], [], [edit])
-      .then(r => { setDocVersion(v => v + 1); setNotice(r.warnings.length ? `Campo: ${r.warnings.join(' · ')}` : 'Campo aplicado'); })
-      .catch(e => setError(e instanceof Error ? e.message : 'No se pudo aplicar el campo'))
-      .finally(() => { imgBusy.current = false; setWidgetEdits(prev => { const n = new Map(prev); n.delete(edit.widgetId); return n; }); });
-  }, [id]);
+    pushHistory();
+    setWidgetEdits(prev => {
+      const next = new Map(prev);
+      if ('revert' in edit) next.delete(edit.widgetId); else next.set(edit.widgetId, edit);
+      return next;
+    });
+  }, [pushHistory]);
 
   // Convertir un segmento/rect en link: abre el modal (no más window.prompt).
   const requestLink = useCallback((target: { page: number; x: number; y: number; width: number; height: number }) => {
@@ -284,8 +292,10 @@ export function EditorPage() {
     setBaking(true);
     setError('');
     try {
-      const r = await api.bake(id, [...edits.values()], []);
+      const r = await api.bake(id, [...edits.values()], [...imageEdits.values()], [...widgetEdits.values()]);
       setEdits(new Map());
+      setImageEdits(new Map());
+      setWidgetEdits(new Map());
       undoStack.current = [];
       redoStack.current = [];
       setSelectedId(null);
@@ -296,10 +306,10 @@ export function EditorPage() {
     } finally {
       setBaking(false);
     }
-  }, [id, edits]);
+  }, [id, edits, imageEdits, widgetEdits]);
 
   const numPages = pdf?.numPages ?? 0;
-  const totalEdits = edits.size;
+  const totalEdits = edits.size + imageEdits.size + widgetEdits.size;
   const pageEdits = useMemo(() => new Map([...edits].filter(([, e]) => e.page === pageNum)), [edits, pageNum]);
   const pageImageEdits = useMemo(() => new Map([...imageEdits].filter(([, e]) => e.page === pageNum)), [imageEdits, pageNum]);
   const pageWidgetEdits = useMemo(() => new Map([...widgetEdits].filter(([, e]) => e.page === pageNum)), [widgetEdits, pageNum]);

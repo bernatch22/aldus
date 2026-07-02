@@ -78,19 +78,41 @@ function StyledPreview({ seg, edit }: { seg: SegmentNode; edit: SegmentEdit | nu
   return <span>{styled.map((r, i) => <span key={i} style={{ fontWeight: r.bold ? 700 : 400, fontStyle: r.italic ? 'italic' : 'normal' }}>{r.text}</span>)}</span>;
 }
 
-/** Fila clickeable del esquema. */
-function OutlineItem({ icon, label, meta, active, edited, locked, onClick, right }:
-  { icon: ReactNode; label: ReactNode; meta?: string; active?: boolean; edited?: boolean; locked?: boolean; onClick?: () => void; right?: ReactNode }) {
+/** Fila clickeable del esquema, con toggle de candado a la derecha. */
+function OutlineItem({ icon, label, meta, active, edited, onClick, right, lockable }:
+  {
+    icon: ReactNode; label: ReactNode; meta?: string; active?: boolean; edited?: boolean;
+    onClick?: () => void; right?: ReactNode;
+    lockable?: { locked: boolean; onToggle: () => void };
+  }) {
   return (
-    <button onClick={onClick} className={cx('group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors', active ? 'bg-blue-50' : 'hover:bg-neutral-50')}>
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={e => { if (e.key === 'Enter') onClick?.(); }}
+      className={cx('group flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors', active ? 'bg-blue-50' : 'hover:bg-neutral-50')}
+    >
       <span className={cx('shrink-0', edited ? 'text-amber-600' : 'text-neutral-400')}>{icon}</span>
       <span className="min-w-0 flex-1">
         <span className={cx('block truncate text-[12.5px]', edited ? 'text-amber-700' : 'text-neutral-700')}>{label}</span>
         {meta && <span className="block truncate text-[10.5px] tabular-nums text-neutral-400">{meta}</span>}
       </span>
-      {locked && <Lock size={12} className="shrink-0 text-neutral-400" />}
+      {lockable && (
+        <button
+          title={lockable.locked ? 'Desbloquear' : 'Bloquear'}
+          aria-label={lockable.locked ? 'Desbloquear' : 'Bloquear'}
+          onClick={e => { e.stopPropagation(); lockable.onToggle(); }}
+          className={cx(
+            'grid h-6 w-6 shrink-0 place-items-center rounded transition-opacity hover:bg-neutral-200/60',
+            lockable.locked ? 'text-blue-600 opacity-100' : 'text-neutral-400 opacity-0 group-hover:opacity-100',
+          )}
+        >
+          {lockable.locked ? <Lock size={13} /> : <Unlock size={13} />}
+        </button>
+      )}
       {right}
-    </button>
+    </div>
   );
 }
 
@@ -140,7 +162,8 @@ export function Inspector(props: Props) {
         <Section title={`Campos (${graph.widgets.length})`}>
           {graph.widgets.map(w => (
             <OutlineItem key={w.id} icon={<TextCursorInput size={14} />} onClick={() => onSelect(w.id)}
-              edited={widgetEdits.has(w.id)} locked={locked.has(w.id)}
+              edited={widgetEdits.has(w.id)}
+              lockable={{ locked: locked.has(w.id), onToggle: () => onToggleLock(w.id) }}
               label={w.fieldName || '(sin nombre)'} meta={`${WIDGET_TYPE_LABEL[w.widgetType]} · x ${n1(w.x)} · y ${n1(w.y)}`} />
           ))}
         </Section>
@@ -158,7 +181,8 @@ export function Inspector(props: Props) {
         <Section title={`Imágenes (${graph.images.length})`}>
           {graph.images.map(im => (
             <OutlineItem key={im.id} icon={<ImageIcon size={14} />} onClick={() => onSelect(im.id)}
-              edited={imageEdits.has(im.id)} locked={locked.has(im.id)}
+              edited={imageEdits.has(im.id)}
+              lockable={{ locked: locked.has(im.id), onToggle: () => onToggleLock(im.id) }}
               label={`${Math.round(im.width)}×${Math.round(im.height)} pt${imageEdits.get(im.id)?.remove ? ' · eliminada' : ''}`}
               meta={`x ${n1(im.x)} · y ${n1(im.y)}${im.rotated ? ' · rotada' : ''}`} />
           ))}
@@ -166,7 +190,8 @@ export function Inspector(props: Props) {
       )}
       <Section title={`Texto (${graph.segments.length})`}>
         {graph.lines.map(l => l.segments.map(s => (
-          <OutlineItem key={s.id} icon={<Type size={14} />} onClick={() => onSelect(s.id)} edited={edits.has(s.id)} locked={locked.has(s.id)}
+          <OutlineItem key={s.id} icon={<Type size={14} />} onClick={() => onSelect(s.id)} edited={edits.has(s.id)}
+            lockable={{ locked: locked.has(s.id), onToggle: () => onToggleLock(s.id) }}
             label={<StyledPreview seg={s} edit={edits.get(s.id) ?? null} />} meta={`x ${n1(s.x)} · y ${n1(s.baseline)} · ${n1(s.fontSize)} pt`} />
         )))}
       </Section>
@@ -339,8 +364,10 @@ function WidgetProps({ widget, edit, onWidgetEdit, onDocOp }: { widget: WidgetNo
         </Section>
       )}
       <Section title="Acciones">
-        <Button variant="danger" className="w-full" onClick={() => commit({ remove: true })}>
-          <Trash2 size={14} /> {widget.widgetType === 'radio' ? 'Eliminar grupo completo' : 'Eliminar campo'}
+        <Button variant="danger" className="w-full" onClick={() => commit({ remove: edit?.remove ? null : true })}>
+          {edit?.remove
+            ? <><RotateCcw size={14} /> Restaurar campo</>
+            : <><Trash2 size={14} /> {widget.widgetType === 'radio' ? 'Eliminar grupo completo' : 'Eliminar campo'}</>}
         </Button>
       </Section>
     </>

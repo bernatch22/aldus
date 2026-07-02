@@ -4,6 +4,16 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### fix(editor): texto movido transparente + velo esmerilado + campos creados con estilo moderno
+- Un segmento editado (sin estar en edición) ya NO lleva fondo blanco: el texto flota
+  TRANSPARENTE sobre lo que haya debajo (imagen incluida) — fiel a lo que hará el bake.
+  El blanco queda solo mientras se EDITA (legibilidad del contentEditable).
+- La máscara sobre los glifos originales pasa de bloque blanco duro a velo esmerilado
+  (rgba .93 + blur): invisible sobre página blanca, atenúa sin cuadrado brutal sobre imagen.
+- Los campos CREADOS por Aldus ahora nacen con apariencia moderna (borde fino gris-azulado
+  1pt + fondo apenas tintado, font 10 en text fields) en vez de la caja negra default de
+  pdf-lib — consistentes con los AcroForm de templates modernos.
+
 ### fix(editor): LOOP de re-render (pantalla parpadeando) + CLAUDE.md del proyecto
 `resolveHighlights` (que captura `graph`) estaba en las deps del effect del preview:
 render → extract → graph nuevo → effect → nuevo PDF → render… loop infinito = todo

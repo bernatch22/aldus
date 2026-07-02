@@ -51,6 +51,15 @@ function uniqueName(existing: Set<string>, base: string): string {
   return `${base}_${n}`;
 }
 
+/** Apariencia MODERNA para los widgets creados (como los templates actuales):
+ *  borde fino gris-azulado + fondo apenas tintado — nada de la caja negra
+ *  default de pdf-lib. */
+const MODERN_WIDGET = {
+  borderWidth: 1,
+  borderColor: rgb(0.72, 0.77, 0.85),
+  backgroundColor: rgb(0.955, 0.965, 0.985),
+} as const;
+
 /** Campo de FIRMA a mano: field dict FT /Sig que es a la vez su widget. */
 function addSignatureField(doc: PDFDocument, page: PDFPage, name: string, rect: [number, number, number, number]): void {
   const ctx = doc.context;
@@ -89,37 +98,39 @@ export async function addFormField(pdfBytes: Uint8Array, spec: NewFieldSpec): Pr
   const height = spec.height ?? size.height;
   const rect = { x: spec.x, y: spec.y, width, height };
 
+  const styled = { ...rect, ...MODERN_WIDGET };
   switch (spec.type) {
     case 'text': {
       const f = form.createTextField(name);
-      f.addToPage(page, rect);
+      f.addToPage(page, styled);
+      try { f.setFontSize(10); } catch { /* auto-size */ }
       break;
     }
     case 'checkbox': {
       const f = form.createCheckBox(name);
-      f.addToPage(page, rect);
+      f.addToPage(page, styled);
       break;
     }
     case 'radio': {
       const f = form.createRadioGroup(name);
-      f.addOptionToPage('opcion_1', page, rect);
+      f.addOptionToPage('opcion_1', page, styled);
       break;
     }
     case 'select': {
       const f = form.createDropdown(name);
       f.addOptions(['Opción 1']);
-      f.addToPage(page, rect);
+      f.addToPage(page, styled);
       break;
     }
     case 'list': {
       const f = form.createOptionList(name);
       f.addOptions(['Opción 1']);
-      f.addToPage(page, rect);
+      f.addToPage(page, styled);
       break;
     }
     case 'button': {
       const f = form.createButton(name);
-      f.addToPage(name, page, rect);
+      f.addToPage(name, page, styled);
       break;
     }
     case 'signature': {
@@ -185,7 +196,7 @@ export async function addRadioOption(
     value = `opcion_${n}`;
   }
   const size = FIELD_DEFAULT_SIZE.radio;
-  group.addOptionToPage(value, page, { x: spec.x, y: spec.y, width: size.width, height: size.height });
+  group.addOptionToPage(value, page, { x: spec.x, y: spec.y, width: size.width, height: size.height, ...MODERN_WIDGET });
   try {
     form.updateFieldAppearances();
   } catch {

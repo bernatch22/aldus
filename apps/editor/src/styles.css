@@ -53,14 +53,22 @@ body {
 .seg-box.selected { outline-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .seg-box.selected:not(.editing) { cursor: move; }
 .seg-box.editing { cursor: text; }
-.seg-box.masked { background: #fff; cursor: text; }
-.seg-box.masked:hover { background: #fff; }
-/* Un segmento editado se ve NORMAL (el texto nuevo sobre fondo blanco); el
-   estado "pendiente" se comunica en el panel/Aplicar, no con un borde amarillo. */
+/* Mientras se EDITA: superficie blanca (legibilidad + tapa sus propios glifos
+   en el lugar). Editado SIN editar: TRANSPARENTE — el texto flota sobre lo que
+   haya debajo (imagen incluida), igual que hará el bake. */
+.seg-box.editing.masked { background: #fff; }
+.seg-box.masked { cursor: text; }
 .seg-box.edited { outline-color: transparent; }
 .seg-box.edited.selected { outline-color: var(--accent); }
 .seg-text { white-space: pre; outline: none; min-height: 100%; width: max-content; color: #000; }
-.seg-mask { position: absolute; background: #fff; }
+/* Velo sobre los glifos ORIGINALES de un nodo movido/editado: esmerilado, no
+   un bloque blanco duro — sobre página blanca es invisible; sobre una imagen
+   atenúa el texto viejo sin el cuadrado brutal. */
+.seg-mask {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.93);
+  backdrop-filter: blur(1.5px);
+}
 
 /* Handle de resize compartido */
 .seg-grip {

@@ -567,8 +567,13 @@ export async function bakeSegmentEdits(
         const x = newX + sr.dx * ratio;
         const fontName = familyChanged ? undefined : fontForStyle.get(`${sr.bold}|${sr.italic}`);
         const bytes = fontName ? encoderForFont(doc, page, fontName, encCache)?.encode(sr.text) ?? null : null;
+        // Color POR TRAMO (selección) > override del segmento > el del op original.
+        const runOv: TextStyleOverrides = {
+          ...styleOv,
+          colorRaw: sr.color ? hexToRg(sr.color) : styleOv.colorRaw,
+        };
         const inlineBlock = fontName && bytes
-          ? newTextBlock(ops.find(o => o.fontName === fontName) ?? firstOp, ratio, x, newBaseline, bytes, styleOv)
+          ? newTextBlock(ops.find(o => o.fontName === fontName) ?? firstOp, ratio, x, newBaseline, bytes, runOv)
           : null;
         if (inlineBlock) {
           inlineBlocks.push(inlineBlock);
@@ -577,7 +582,11 @@ export async function bakeSegmentEdits(
             // Preservar el COLOR original (del op) salvo override explícito —
             // sin esto la sustitución de fuente pintaba todo en negro.
             const srcOp = ops.find(o => o.fontName === fontName) ?? firstOp;
-            const color = edit.color ? hexToRgbObj(edit.color) : rawFillToRgb(srcOp?.fillColorRaw) ?? undefined;
+            const color = sr.color
+              ? hexToRgbObj(sr.color)
+              : edit.color
+                ? hexToRgbObj(edit.color)
+                : rawFillToRgb(srcOp?.fillColorRaw) ?? undefined;
             fallbackDraws.push({
               page: pageNum,
               text: sr.text,

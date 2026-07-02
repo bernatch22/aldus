@@ -13,6 +13,7 @@
 import {
   classifyGap,
   originalStyledRuns,
+  setStyleRange,
   styledText,
   toggleStyleRange,
   type FontBucket,
@@ -82,21 +83,28 @@ function styleBase(seg: SegmentNode, bold: boolean, italic: boolean): { base: Te
   return { base: match ?? dominantRun(seg), exact: !!match };
 }
 
-export function styledSpanStyle(seg: SegmentNode, sr: { bold: boolean; italic: boolean }, sizeRatio: number, scale: number): string {
+export function styledSpanStyle(seg: SegmentNode, sr: { bold: boolean; italic: boolean; color?: string }, sizeRatio: number, scale: number): string {
   const { base, exact } = styleBase(seg, sr.bold, sr.italic);
+  // Sin run original con este estilo: NO usar la familia embebida (podría ser
+  // la BOLD — des-boldear un segmento 100% bold quedaba en bold igual). Se cae
+  // al fallback del bucket con weight/style sintéticos según el tramo.
+  const fam = exact ? family(base) : bucketFallback(base.font.bucket);
   const synthBold = sr.bold && (!exact || !base.font.embedded);
   const synthItalic = sr.italic && (!exact || !base.font.embedded);
-  const color = base.color ? `color:${base.color};` : '';
-  return `font-family:${family(base)};font-size:${(base.fontSize * sizeRatio * scale).toFixed(2)}px;${color}` +
-    (synthBold ? 'font-weight:700;' : '') + (synthItalic ? 'font-style:italic;' : '');
+  const weight = exact ? (synthBold ? 'font-weight:700;' : '') : `font-weight:${sr.bold ? 700 : 400};`;
+  const style = exact ? (synthItalic ? 'font-style:italic;' : '') : `font-style:${sr.italic ? 'italic' : 'normal'};`;
+  const colorVal = sr.color ?? base.color;
+  const color = colorVal ? `color:${colorVal};` : '';
+  return `font-family:${fam};font-size:${(base.fontSize * sizeRatio * scale).toFixed(2)}px;${color}${weight}${style}`;
 }
 
 /** Font shorthand para MEDIR un tramo (en pt: tamaño original × ratio). */
 function measureFontFor(seg: SegmentNode, sr: { bold: boolean; italic: boolean }, sizeRatio: number): string {
   const { base, exact } = styleBase(seg, sr.bold, sr.italic);
-  const st = (sr.italic && (!exact || !base.font.embedded)) ? 'italic ' : '';
-  const wt = (sr.bold && (!exact || !base.font.embedded)) ? '700 ' : '';
-  return `${st}${wt}${(base.fontSize * sizeRatio).toFixed(2)}px ${family(base)}`;
+  const fam = exact ? family(base) : bucketFallback(base.font.bucket);
+  const st = sr.italic && (!exact || !base.font.embedded) ? 'italic ' : '';
+  const wt = sr.bold && (!exact || !base.font.embedded) ? '700 ' : '';
+  return `${st}${wt}${(base.fontSize * sizeRatio).toFixed(2)}px ${fam}`;
 }
 
 export function runStyle(r: TextRunNode, scale: number, letterSpacing = 0): string {
@@ -111,7 +119,7 @@ export function runStyle(r: TextRunNode, scale: number, letterSpacing = 0): stri
  *  data-b/data-i y la fuente real de ese estilo). */
 export function runsToHtml(seg: SegmentNode, runs: StyledRun[], sizeRatio: number, scale: number): string {
   return runs.map(sr =>
-    `<span data-b="${sr.bold ? 1 : 0}" data-i="${sr.italic ? 1 : 0}" style="${styledSpanStyle(seg, sr, sizeRatio, scale)}">${esc(sr.text)}</span>`,
+    `<span data-b="${sr.bold ? 1 : 0}" data-i="${sr.italic ? 1 : 0}"${sr.color ? ` data-c="${sr.color}"` : ''} style="${styledSpanStyle(seg, sr, sizeRatio, scale)}">${esc(sr.text)}</span>`,
   ).join('') || '<br>';
 }
 
@@ -145,28 +153,38 @@ export function seedHtml(seg: SegmentNode, edit: SegmentEdit | null, scale: numb
       const gap = r.x - (prev.x + prev.width);
       if (classifyGap(gap, prev, r) === 'none' && gap > 0.5) margin = `margin-left:${(gap * scale).toFixed(2)}px;`;
     }
-    html += `<span data-b="${r.font.bold ? 1 : 0}" data-i="${r.font.italic ? 1 : 0}" style="${margin}${runStyle(r, scale, fitLetterSpacing(r, r.text, scale))}">${esc(texts[i])}</span>`;
+    html += `<span data-b="${r.font.bold ? 1 : 0}" data-i="${r.font.italic ? 1 : 0}"${r.color ? ` data-c="${r.color}"` : ''} style="${margin}${runStyle(r, scale, fitLetterSpacing(r, r.text, scale))}">${esc(texts[i])}</span>`;
   }
   return html || '<br>';
 }
 
 /** DOM editado → runs estilados. data-b/data-i de los spans sembrados manda;
  *  también se respetan <b>/<i>/font-weight por si el browser los inserta. */
+/** 'rgb(r, g, b)' o '#hex' → '#rrggbb' (o undefined si no se entiende). */
+function cssColorToHex(v: string): string | undefined {
+  const hex = /^#([0-9a-f]{6})$/i.exec(v.trim());
+  if (hex) return v.trim().toLowerCase();
+  const m = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/i.exec(v.trim());
+  if (!m) return undefined;
+  const h = (n: string) => Math.min(255, parseInt(n, 10)).toString(16).padStart(2, '0');
+  return `#${h(m[1])}${h(m[2])}${h(m[3])}`;
+}
+
 export function serializeStyled(root: HTMLElement, seg: SegmentNode, sizeRatio: number): StyledRun[] {
-  const parts: Array<{ text: string; bold: boolean; italic: boolean }> = [];
-  const push = (t: string, bold: boolean, italic: boolean) => {
+  const parts: Array<{ text: string; bold: boolean; italic: boolean; color?: string }> = [];
+  const push = (t: string, bold: boolean, italic: boolean, color?: string) => {
     if (!t) return;
     const last = parts[parts.length - 1];
-    if (last && last.bold === bold && last.italic === italic) last.text += t;
-    else parts.push({ text: t, bold, italic });
+    if (last && last.bold === bold && last.italic === italic && last.color === color) last.text += t;
+    else parts.push({ text: t, bold, italic, color });
   };
-  const walk = (node: Node, bold: boolean, italic: boolean) => {
+  const walk = (node: Node, bold: boolean, italic: boolean, color?: string) => {
     if (node.nodeType === Node.TEXT_NODE) {
-      push((node.textContent ?? '').replace(NBSP_RE, ' ').replace(/\n+/g, ' '), bold, italic);
+      push((node.textContent ?? '').replace(NBSP_RE, ' ').replace(/\n+/g, ' '), bold, italic, color);
       return;
     }
     if (!(node instanceof HTMLElement) || node.tagName === 'BR') return;
-    let b = bold, i = italic;
+    let b = bold, i = italic, c = color;
     if (node.tagName === 'B' || node.tagName === 'STRONG') b = true;
     if (node.tagName === 'I' || node.tagName === 'EM') i = true;
     const fw = node.style.fontWeight;
@@ -175,9 +193,11 @@ export function serializeStyled(root: HTMLElement, seg: SegmentNode, sizeRatio: 
     if (fs) i = fs === 'italic' || fs === 'oblique';
     if (node.dataset.b !== undefined) b = node.dataset.b === '1';
     if (node.dataset.i !== undefined) i = node.dataset.i === '1';
-    node.childNodes.forEach(child => walk(child, b, i));
+    if (node.dataset.c !== undefined) c = node.dataset.c || undefined;
+    else if (node.style.color) c = cssColorToHex(node.style.color) ?? c;
+    node.childNodes.forEach(child => walk(child, b, i, c));
   };
-  walk(root, false, false);
+  walk(root, false, false, undefined);
   while (parts.length && /^\s+$/.test(parts[parts.length - 1].text)) parts.pop();
   if (parts.length) parts[parts.length - 1].text = parts[parts.length - 1].text.replace(/\s+$/, '');
 
@@ -270,6 +290,32 @@ export function applySelectionStyle(
   }
   if (end <= start) return;
   const next = toggleStyleRange(runs, start, end, key);
+  el.innerHTML = runsToHtml(seg, next, sizeRatio, scale);
+  restoreSelection(el, start, end);
+}
+
+/** Color a la SELECCIÓN actual (o a todo el box si no hay selección), vía el
+ *  modelo: setStyleRange + re-seed + restauración. null = quitar el override. */
+export function applySelectionColor(
+  el: HTMLElement,
+  seg: SegmentNode,
+  edit: SegmentEdit | null,
+  scale: number,
+  color: string | null,
+): void {
+  const sizeRatio = (edit?.fontSize ?? seg.fontSize) / seg.fontSize;
+  const runs = serializeStyled(el, seg, sizeRatio);
+  const total = styledText(runs).length;
+  const sel = window.getSelection();
+  const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+  const within = range && el.contains(range.commonAncestorContainer);
+  let { start, end } = within ? flatOffsets(el, range) : { start: 0, end: total };
+  if (end <= start) {
+    start = 0;
+    end = total;
+  }
+  if (end <= start) return;
+  const next = setStyleRange(runs, start, end, { color });
   el.innerHTML = runsToHtml(seg, next, sizeRatio, scale);
   restoreSelection(el, start, end);
 }

@@ -200,6 +200,8 @@ export interface StyledRun {
   text: string;
   bold: boolean;
   italic: boolean;
+  /** Color hex (#rrggbb) del tramo. Ausente = el del segmento/original. */
+  color?: string;
   /** Offset horizontal (pt) desde el origen del segmento, medido en el editor. */
   dx: number;
 }

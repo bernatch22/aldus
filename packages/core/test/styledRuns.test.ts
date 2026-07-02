@@ -1,5 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import { nextListMarker, toggleStyleRange, type StyledRun } from '../src/index.js';
+import { nextListMarker, setStyleRange, toggleStyleRange, type StyledRun } from '../src/index.js';
+
+describe('setStyleRange (color a la selección)', () => {
+  const R = (text: string, bold = false): StyledRun => ({ text, bold, italic: false, dx: 0 });
+  it('colorea SOLO la parte seleccionada', () => {
+    const out = setStyleRange([R('Hola mundo')], 5, 10, { color: '#ff0000' });
+    expect(out.map(r => [r.text, r.color])).toEqual([
+      ['Hola ', undefined],
+      ['mundo', '#ff0000'],
+    ]);
+  });
+  it('no rompe los estilos existentes ni fusiona colores distintos', () => {
+    const runs: StyledRun[] = [{ text: 'AB', bold: true, italic: false, dx: 0 }, { text: 'CD', bold: false, italic: false, dx: 0 }];
+    const out = setStyleRange(runs, 1, 3, { color: '#00ff00' });
+    expect(out.map(r => [r.text, r.bold, r.color])).toEqual([
+      ['A', true, undefined],
+      ['B', true, '#00ff00'],
+      ['C', false, '#00ff00'],
+      ['D', false, undefined],
+    ]);
+  });
+  it('color null limpia el override del rango', () => {
+    const runs: StyledRun[] = [{ text: 'rojo', bold: false, italic: false, color: '#ff0000', dx: 0 }];
+    const out = setStyleRange(runs, 0, 4, { color: null });
+    expect(out).toHaveLength(1);
+    expect(out[0].text).toBe('rojo');
+    expect(out[0].color).toBeUndefined();
+  });
+});
 
 describe('nextListMarker (Enter continúa la lista)', () => {
   it('incrementa números, letras y repite bullets', () => {

@@ -42,6 +42,7 @@ import {
 import { AlignLeft, AlignCenter, AlignRight, Bold, Italic, Highlighter, Link2, Trash2, SendToBack, BringToFront } from 'lucide-react';
 import {
   activeEditingBox,
+  applySelectionColor,
   applySelectionStyle,
   bucketFallback,
   dominantRun,
@@ -179,11 +180,22 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
   const eff = effectiveGeometry(seg, edit);
   const MARGIN = 40;
   const alignTo = (x: number) => onPatch({ x: Math.abs(x - seg.x) < 0.05 ? null : round1(x) });
-  const bbox = { page: seg.page, x: eff.x, y: eff.y, width: eff.width, height: eff.height };
+  // El highlight lleva el segmentId: si después movés el texto, el resaltado
+  // LO SIGUE (se resuelve contra la geometría efectiva al previsualizar/aplicar).
+  const bbox = { page: seg.page, segmentId: seg.id, x: eff.x, y: eff.y, width: eff.width, height: eff.height };
 
   const dom = dominantRun(seg);
   const textColor = edit?.color ?? dom.color ?? '#000000';
   const effSize = edit?.fontSize ?? seg.fontSize;
+  // Con el editor abierto, el color va a la SELECCIÓN (por tramo); si no, al
+  // segmento entero (override clásico).
+  const applyColor = (v: string) => {
+    if (activeEditingBox()) {
+      window.dispatchEvent(new CustomEvent(SELECTION_STYLE_EVENT, { detail: { key: 'color', color: v } }));
+      return;
+    }
+    onPatch({ color: v.toLowerCase() === (dom.color ?? '#000000').toLowerCase() ? null : v });
+  };
 
   return (
     <FloatingWrap rect={rect}>
@@ -205,8 +217,8 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
         }}
         onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
       />
-      <button className="fb-swatch" title="Color del texto" style={{ background: textColor }} onMouseDown={e => e.preventDefault()} onClick={e => e.stopPropagation()}>
-        <input type="color" value={textColor} onChange={e => onPatch({ color: e.target.value.toLowerCase() === (dom.color ?? '#000000').toLowerCase() ? null : e.target.value })} />
+      <button className="fb-swatch" title="Color del texto (a la selección si estás editando)" style={{ background: textColor }} onMouseDown={e => e.preventDefault()} onClick={e => e.stopPropagation()}>
+        <input type="color" value={textColor} onChange={e => applyColor(e.target.value)} />
       </button>
       <FbSep />
       <FbBtn label="Alinear a la izquierda" onClick={() => alignTo(MARGIN)}><AlignLeft size={14} /></FbBtn>
@@ -675,8 +687,9 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
     const el = editRef.current;
     if (!el) return;
     const onStyle = (ev: Event) => {
-      const key = (ev as CustomEvent<{ key?: 'bold' | 'italic' }>).detail?.key;
-      if (key === 'bold' || key === 'italic') applySelectionStyle(el, seg, edit, scale, key);
+      const detail = (ev as CustomEvent<{ key?: 'bold' | 'italic' | 'color'; color?: string }>).detail;
+      if (detail?.key === 'bold' || detail?.key === 'italic') applySelectionStyle(el, seg, edit, scale, detail.key);
+      else if (detail?.key === 'color' && detail.color) applySelectionColor(el, seg, edit, scale, detail.color);
     };
     const onBeforeInput = (ev: InputEvent) => {
       const t = ev.inputType || '';

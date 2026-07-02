@@ -4,6 +4,20 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### fix(editor): color POR SELECCIÓN, highlights que siguen al texto, y des-boldear de verdad
+- **Color a la selección**: `StyledRun` ahora tiene `color` por tramo, end-to-end —
+  `setStyleRange` en core (corta el rango y aplica color/estilo, testeado), los spans
+  llevan `data-c`, la serialización lo preserva, y el bake lo emite por tramo (prioridad:
+  color del tramo > override del segmento > color del op original). El swatch de la toolbar
+  aplica a la selección cuando el editor está abierto.
+- **El highlight sigue al texto**: lleva `segmentId` y su rect se resuelve contra la
+  geometría EFECTIVA (con la edición pendiente) al previsualizar y al aplicar — mover el
+  grafo mueve el resaltado; se acabó la máscara amarilla stale en la posición vieja.
+- **Des-boldear un segmento 100% bold**: el preview usaba la familia embebida (bold) por
+  falta de un run regular del cual tomar la fuente — ahora, sin match exacto de estilo, cae
+  al fallback del bucket con font-weight/style sintéticos del tramo (igual que hará el bake
+  con la sustitución estándar).
+
 ### fix(editor): editor huérfano, toolbar durante la edición, y drag de imagen full-page
 - **Seleccionar otro nodo CIERRA el editor abierto** (con commit): el preventDefault de los
   pointerdown impedía el blur natural, y la B de la toolbar del nodo nuevo le pegaba al

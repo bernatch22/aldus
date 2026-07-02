@@ -31,7 +31,7 @@ type Dialog =
   | { kind: 'headerFooter' }
   | { kind: 'link'; target: { page: number; x: number; y: number; width: number; height: number } };
 
-interface PendingHighlight { page: number; x: number; y: number; width: number; height: number; color?: string }
+interface PendingHighlight { page: number; segmentId?: string; x: number; y: number; width: number; height: number; color?: string }
 
 interface NavTool { id: string; icon: LucideIcon; label: string; placing: Placing }
 const NAV_GROUPS: Array<{ label: string; tools: NavTool[] }> = [
@@ -213,6 +213,18 @@ export function EditorPage() {
     return () => { cancelled = true; };
   }, [id, docVersion]);
 
+  // Un highlight atado a un segmento SIGUE al texto: su rect se resuelve
+  // contra la geometría efectiva (con la edición pendiente aplicada).
+  const resolveHighlights = useCallback((): PendingHighlight[] => {
+    return pendingHighlights.map(h => {
+      if (!h.segmentId || !graph || graph.page !== h.page) return h;
+      const seg = graph.segments.find(s => s.id === h.segmentId);
+      if (!seg) return h;
+      const eff = effectiveGeometry(seg, edits.get(seg.id) ?? null);
+      return { ...h, x: eff.x, y: eff.y, width: eff.width, height: eff.height };
+    });
+  }, [pendingHighlights, graph, edits]);
+
   // ── PREVIEW HORNEADO LOCALMENTE: las ediciones pendientes de imágenes,
   //    campos y highlights se aplican EN EL BROWSER (el mismo bake de core)
   //    sobre una copia, y se renderiza ESO. WYSIWYG real, sin máscaras ni
@@ -227,7 +239,7 @@ export function EditorPage() {
         const { bakeSegmentEdits, addHighlight } = await import('@aldus/core/bake');
         const r = await bakeSegmentEdits(baseBytes.slice(), [], [...imageEdits.values()], [...widgetEdits.values()]);
         bytes = r.pdf;
-        for (const h of pendingHighlights) ({ pdf: bytes } = await addHighlight(bytes, h));
+        for (const h of resolveHighlights()) ({ pdf: bytes } = await addHighlight(bytes, h));
       }
       if (cancelled) return;
       // pdf.js TRANSFIERE el buffer al worker → siempre una copia.
@@ -237,7 +249,7 @@ export function EditorPage() {
       setPdf(prev => { void prev?.destroy(); return doc; });
     })().catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'No se pudo generar el preview'); });
     return () => { cancelled = true; };
-  }, [baseBytes, imageEdits, widgetEdits, pendingHighlights]);
+  }, [baseBytes, imageEdits, widgetEdits, pendingHighlights, resolveHighlights]);
 
   const onEdit = useCallback((edit: SegmentEdit | { segmentId: string; revert: true }) => {
     pushHistory();
@@ -335,7 +347,7 @@ export function EditorPage() {
     setBaking(true);
     setError('');
     try {
-      const r = await api.bake(id, [...edits.values()], [...imageEdits.values()], [...widgetEdits.values()], pendingHighlights as unknown as Array<Record<string, unknown>>);
+      const r = await api.bake(id, [...edits.values()], [...imageEdits.values()], [...widgetEdits.values()], resolveHighlights() as unknown as Array<Record<string, unknown>>);
       setEdits(new Map());
       setImageEdits(new Map());
       setWidgetEdits(new Map());
@@ -350,7 +362,7 @@ export function EditorPage() {
     } finally {
       setBaking(false);
     }
-  }, [id, edits, imageEdits, widgetEdits, pendingHighlights]);
+  }, [id, edits, imageEdits, widgetEdits, resolveHighlights]);
 
   const numPages = pdf?.numPages ?? 0;
   const totalEdits = edits.size + imageEdits.size + widgetEdits.size + pendingHighlights.length;

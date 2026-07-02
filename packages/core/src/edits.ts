@@ -47,11 +47,11 @@ export function originalStyledRuns(seg: SegmentNode): StyledRun[] {
       }
     }
     const last = out[out.length - 1];
-    if (last && last.bold === r.font.bold && last.italic === r.font.italic) {
+    if (last && last.bold === r.font.bold && last.italic === r.font.italic && last.color === r.color) {
       last.text += space + r.text;
     } else {
       if (last && space) last.text += space;
-      out.push({ text: r.text, bold: r.font.bold, italic: r.font.italic, dx: r.x - seg.x });
+      out.push({ text: r.text, bold: r.font.bold, italic: r.font.italic, color: r.color, dx: r.x - seg.x });
     }
   }
   return out;
@@ -60,7 +60,7 @@ export function originalStyledRuns(seg: SegmentNode): StyledRun[] {
 export function styledRunsEqual(a: StyledRun[], b: StyledRun[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
-    if (a[i].text !== b[i].text || a[i].bold !== b[i].bold || a[i].italic !== b[i].italic) return false;
+    if (a[i].text !== b[i].text || a[i].bold !== b[i].bold || a[i].italic !== b[i].italic || a[i].color !== b[i].color) return false;
   }
   return true;
 }
@@ -86,13 +86,8 @@ export function nextListMarker(text: string): string | null {
  *  destino (si TODO el rango ya tiene el estilo → quitarlo; si no → ponerlo),
  *  lo aplica solo adentro y fusiona adyacentes. Operación pura — el editor la
  *  usa para Cmd+B/Cmd+I sobre la selección, sin execCommand del browser. */
-export function toggleStyleRange(
-  runs: StyledRun[],
-  start: number,
-  end: number,
-  key: 'bold' | 'italic',
-): StyledRun[] {
-  if (end <= start) return runs;
+/** Corta los runs en los límites [start, end) del texto plano. */
+function splitAt(runs: StyledRun[], start: number, end: number): Array<{ run: StyledRun; from: number }> {
   const pieces: Array<{ run: StyledRun; from: number }> = [];
   let pos = 0;
   for (const r of runs) {
@@ -106,19 +101,59 @@ export function toggleStyleRange(
     }
     pos += r.text.length;
   }
+  return pieces;
+}
+
+const sameStyle = (a: StyledRun, b: StyledRun) => a.bold === b.bold && a.italic === b.italic && a.color === b.color;
+
+function mergeAdjacent(pieces: StyledRun[], firstDx: number): StyledRun[] {
+  const out: StyledRun[] = [];
+  for (const r of pieces) {
+    const last = out[out.length - 1];
+    if (last && sameStyle(last, r)) last.text += r.text;
+    else out.push({ ...r, dx: 0 });
+  }
+  if (out.length) out[0].dx = firstDx;
+  return out;
+}
+
+export function toggleStyleRange(
+  runs: StyledRun[],
+  start: number,
+  end: number,
+  key: 'bold' | 'italic',
+): StyledRun[] {
+  if (end <= start) return runs;
+  const pieces = splitAt(runs, start, end);
   const inRange = (p: { from: number; run: StyledRun }) => p.from >= start && p.from < end;
   const selected = pieces.filter(inRange);
   if (!selected.length) return runs;
   const target = !selected.every(p => p.run[key]);
-  const out: StyledRun[] = [];
-  for (const p of pieces) {
-    const r = inRange(p) ? { ...p.run, [key]: target } : p.run;
-    const last = out[out.length - 1];
-    if (last && last.bold === r.bold && last.italic === r.italic) last.text += r.text;
-    else out.push({ ...r, dx: 0 });
-  }
-  if (out.length) out[0].dx = runs[0]?.dx ?? 0;
-  return out;
+  return mergeAdjacent(pieces.map(p => (inRange(p) ? { ...p.run, [key]: target } : p.run)), runs[0]?.dx ?? 0);
+}
+
+/** Aplica un estilo ARBITRARIO (color/bold/italic) al rango [start, end). */
+export function setStyleRange(
+  runs: StyledRun[],
+  start: number,
+  end: number,
+  style: { bold?: boolean; italic?: boolean; color?: string | null },
+): StyledRun[] {
+  if (end <= start) return runs;
+  const pieces = splitAt(runs, start, end);
+  const inRange = (p: { from: number; run: StyledRun }) => p.from >= start && p.from < end;
+  if (!pieces.some(inRange)) return runs;
+  const apply = (r: StyledRun): StyledRun => {
+    const next = { ...r };
+    if (style.bold !== undefined) next.bold = style.bold;
+    if (style.italic !== undefined) next.italic = style.italic;
+    if (style.color !== undefined) {
+      if (style.color === null) delete next.color;
+      else next.color = style.color;
+    }
+    return next;
+  };
+  return mergeAdjacent(pieces.map(p => (inRange(p) ? apply(p.run) : p.run)), runs[0]?.dx ?? 0);
 }
 
 export function mergeSegmentEdit(

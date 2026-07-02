@@ -20,7 +20,7 @@ export { extractPageGraph, groupIntoLines } from './extractGraph.js';
 export type { PdfJsPage, PdfJsTextItem } from './extractGraph.js';
 export { classifyGap, avgCharWidth, splitSegments, segmentText } from './tokens.js';
 export type { GapClass } from './tokens.js';
-export { mergeSegmentEdit, effectiveGeometry, originalStyledRuns, styledRunsEqual, styledText, toggleStyleRange, mergeImageEdit, effectiveImageRect, mergeWidgetEdit, effectiveWidgetRect, nextListMarker } from './edits.js';
+export { mergeSegmentEdit, effectiveGeometry, originalStyledRuns, styledRunsEqual, styledText, toggleStyleRange, setStyleRange, mergeImageEdit, effectiveImageRect, mergeWidgetEdit, effectiveWidgetRect, nextListMarker } from './edits.js';
 export type { SegmentPatch, ImagePatch, WidgetPatch } from './edits.js';
 export { pdfRectToCss, cssPointToPdf } from './coords.js';
 export type { PdfRect, CssRect } from './coords.js';

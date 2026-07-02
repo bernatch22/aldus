@@ -153,9 +153,10 @@ export interface ImagePatch {
   width?: number | null;
   height?: number | null;
   remove?: boolean | null;
+  zOrder?: 'front' | 'back' | null;
 }
 
-const IMAGE_KEYS = ['x', 'y', 'width', 'height', 'remove'] as const;
+const IMAGE_KEYS = ['x', 'y', 'width', 'height', 'remove', 'zOrder'] as const;
 
 export function mergeImageEdit(img: ImageNode, prev: ImageEdit | null, patch: ImagePatch): ImageEdit | null {
   const next: ImageEdit = prev

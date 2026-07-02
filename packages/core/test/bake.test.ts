@@ -147,6 +147,35 @@ describe('imágenes', () => {
     expect(segByText(g2, 'Texto encima del fondo').x).toBeCloseTo(72, 0);
   });
 
+  it('enviar al fondo reordena el op al principio del stream', async () => {
+    // Texto primero, imagen después (la imagen quedó ARRIBA del texto).
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    const helv = await doc.embedFont(StandardFonts.Helvetica);
+    const png = await doc.embedPng(Buffer.from(PNG_1PX, 'base64'));
+    page.drawText('Texto tapado', { x: 72, y: 700, size: 12, font: helv });
+    page.drawImage(png, { x: 0, y: 0, width: 612, height: 792 });
+    const pdf = await doc.save();
+
+    const g = await graphOf(pdf);
+    const img = g.images[0];
+    const { pdf: baked, warnings } = await bakeSegmentEdits(pdf, [], [{
+      imageId: img.id, page: 1, zOrder: 'back',
+      original: { x: img.x, y: img.y, width: img.width, height: img.height },
+    }]);
+    expect(warnings).toEqual([]);
+
+    const doc2 = await PDFDocument.load(baked);
+    const raw = doc2.getPages()[0].node.get(PDFName.of('Contents'));
+    const stream = raw instanceof PDFRef ? doc2.context.lookup(raw) : raw;
+    if (!(stream instanceof PDFRawStream)) throw new Error('stream inesperado');
+    const walk = walkContent(decodePDFRawStream(stream).decode());
+    // Ahora la imagen se dibuja ANTES que el texto (quedó de fondo).
+    expect(walk.xobjects[0].record.start).toBeLessThan(walk.shows[0].record.start);
+    const g2 = await graphOf(baked);
+    expect(g2.images[0].width).toBeCloseTo(612, 0);
+  });
+
   it('elimina la imagen', async () => {
     const pdf = await makePdfWithImage();
     const g = await graphOf(pdf);

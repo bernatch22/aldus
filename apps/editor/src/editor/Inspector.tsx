@@ -280,6 +280,11 @@ function ImageProperties({ img, edit, onClose, onImageEdit }: ImagePropsPanelPro
           </label>
         ))}
       </div>
+      <label className="prop-label">Orden (z)</label>
+      <div className="prop-row">
+        <button onClick={() => commit({ zOrder: 'back' })}>Enviar al fondo</button>
+        <button onClick={() => commit({ zOrder: 'front' })}>Traer al frente</button>
+      </div>
       <button
         className="danger"
         onClick={() => commit({ remove: eff.removed ? null : true })}

@@ -251,9 +251,9 @@ interface Splice {
   text: string;
 }
 
-function rebuild(src: Uint8Array, splices: Splice[]): Uint8Array {
+function rebuild(src: Uint8Array, splices: Splice[], prepend = '', append = ''): Uint8Array {
   const sorted = [...splices].sort((a, b) => a.start - b.start);
-  let out = '';
+  let out = prepend ? `${prepend}\n` : '';
   let pos = 0;
   for (const s of sorted) {
     if (s.start < pos) continue; // solapado (defensivo): el primero gana
@@ -262,6 +262,7 @@ function rebuild(src: Uint8Array, splices: Splice[]): Uint8Array {
     pos = s.end;
   }
   out += latin1(src, pos, src.length);
+  if (append) out += `\n${append}\n`;
   return toBytes(out);
 }
 
@@ -379,6 +380,10 @@ export async function bakeSegmentEdits(
     const { shows, xobjects } = walkContent(src);
     const encCache = new Map<string, ReverseEncoder | null>();
     const splices: Splice[] = [];
+    // Bloques reordenados: al PRINCIPIO del stream (fondo) o al FINAL (frente).
+    // En los bordes del stream el CTM es identidad → matriz absoluta directa.
+    const prependBlocks: string[] = [];
+    const appendBlocks: string[] = [];
 
     // ── imágenes: mover/escalar REEMPLAZA el Do en su lugar por
     //    `q cm /Nombre Do Q` (z-order intacto); eliminar solo lo borra ──
@@ -411,6 +416,18 @@ export async function bakeSegmentEdits(
       const nd = d * (newH / r.height);
       const ne = newX - Math.min(0, na);
       const nf = newY - Math.min(0, nd);
+      const abs: [number, number, number, number, number, number] = [na, 0, 0, nd, ne, nf];
+
+      if (edit.zOrder) {
+        // Reordenar: extirpar el op y re-emitirlo en el borde del stream (CTM
+        // identidad ahí → matriz absoluta).
+        splices.push({ start: op.record.start, end: op.record.end, text: '' });
+        const block = `q ${fmt(abs[0])} ${fmt(abs[1])} ${fmt(abs[2])} ${fmt(abs[3])} ${fmt(abs[4])} ${fmt(abs[5])} cm /${op.name} Do Q`;
+        (edit.zOrder === 'back' ? prependBlocks : appendBlocks).push(block);
+        applied.push(`${edit.imageId}: enviada ${edit.zOrder === 'back' ? 'al fondo' : 'al frente'}`);
+        continue;
+      }
+
       // La matriz emitida es RELATIVA al CTM vigente en el Do (el q/cm original
       // sigue en el stream alrededor del reemplazo).
       const inv = invert(op.matrix);
@@ -418,7 +435,7 @@ export async function bakeSegmentEdits(
         warnings.push(`${edit.imageId}: matriz degenerada — sin cambios`);
         continue;
       }
-      const rel = mul([na, 0, 0, nd, ne, nf], inv);
+      const rel = mul(abs, inv);
       splices.push({
         start: op.record.start,
         end: op.record.end,
@@ -518,8 +535,8 @@ export async function bakeSegmentEdits(
         : `${edit.segmentId}: reescrito por tramos (${runsToEmit.length})`);
     }
 
-    if (splices.length) {
-      setPageContents(doc, page, rebuild(src, splices));
+    if (splices.length || prependBlocks.length || appendBlocks.length) {
+      setPageContents(doc, page, rebuild(src, splices, prependBlocks.join('\n'), appendBlocks.join('\n')));
     }
   }
 

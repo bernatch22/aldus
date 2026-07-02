@@ -102,7 +102,7 @@ export interface ImageNode {
   rotated: boolean;
 }
 
-/** Una edición pendiente sobre una imagen: mover/escalar/eliminar. */
+/** Una edición pendiente sobre una imagen: mover/escalar/eliminar/reordenar. */
 export interface ImageEdit {
   imageId: string;
   page: number;
@@ -111,6 +111,9 @@ export interface ImageEdit {
   width?: number;
   height?: number;
   remove?: boolean;
+  /** Reordenar en el stream: 'back' = primer op dibujado (fondo),
+   *  'front' = último (al frente). */
+  zOrder?: 'front' | 'back';
   /** Snapshot para que el bake localice el Do sin ambigüedad. */
   original: { x: number; y: number; width: number; height: number };
 }

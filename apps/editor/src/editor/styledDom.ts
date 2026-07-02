@@ -398,6 +398,9 @@ export function applySelectionColor(
  *  el estilo a la selección en vez de al modelo del segmento entero). */
 export function activeEditingBox(): HTMLElement | null {
   const a = document.activeElement;
+  // El editor es un TEXTAREA singleton (TextEditLayer); se conserva la
+  // detección de contentEditable por compatibilidad con los tests.
+  if (a instanceof HTMLTextAreaElement && a.classList.contains('seg-text')) return a;
   return a instanceof HTMLElement && a.classList.contains('seg-text') && a.isContentEditable ? a : null;
 }
 

@@ -65,6 +65,11 @@ body {
    texto soltado sobre un campo quedaba bajo su tinte — "cambiaba de color". */
 .seg-box.selected, .seg-box.editing, .seg-box.edited { z-index: 20; }
 .seg-text { white-space: pre; outline: none; min-height: 100%; width: max-content; color: #000; }
+/* EL editor (TextEditLayer): un textarea plano — nada de contentEditable. */
+textarea.seg-textarea {
+  display: block; background: transparent; border: 0; outline: none;
+  padding: 0; margin: 0; resize: none; overflow: hidden; white-space: pre;
+}
 /* Velo esmerilado sobre la posición ORIGINAL de una imagen/widget MIENTRAS se
    arrastra (al soltar, el preview horneado extirpa el original y el velo se va).
    El texto editado ya no lo usa: sus operadores se extirpan del preview local. */

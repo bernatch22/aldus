@@ -70,6 +70,57 @@ export const styledText = (runs: StyledRun[]): string => runs.map(r => r.text).j
 /** Si el texto arranca con un marcador de LISTA, devuelve el marcador del
  *  SIGUIENTE ítem (comportamiento Word/Acrobat: Enter continúa la lista):
  *  "• " → "• " · "3. " → "4. " · "b) " → "c) " · "B) " → "C) ". null = no es lista. */
+/** Re-mapea los tramos estilados a un TEXTO NUEVO por diff de prefijo/sufijo
+ *  común (el editor tipea en un textarea PLANO — los estilos viven acá, no en
+ *  el DOM): lo insertado hereda el estilo del tramo donde empieza el cambio. */
+export function applyTextDiff(runs: StyledRun[], newText: string): StyledRun[] {
+  const oldText = styledText(runs);
+  if (oldText === newText) return runs;
+  if (!runs.length) return newText ? [{ text: newText, bold: false, italic: false, dx: 0 }] : runs;
+  let p = 0;
+  while (p < oldText.length && p < newText.length && oldText[p] === newText[p]) p++;
+  let s = 0;
+  while (s < oldText.length - p && s < newText.length - p && oldText[oldText.length - 1 - s] === newText[newText.length - 1 - s]) s++;
+  const inserted = newText.slice(p, newText.length - s);
+  // Estilo del punto de inserción: el tramo que contiene el offset p (o el
+  // último si p cae al final).
+  let styleSrc = runs[runs.length - 1];
+  let pos = 0;
+  for (const r of runs) {
+    if (p < pos + r.text.length || (p === pos + r.text.length && r === runs[runs.length - 1])) { styleSrc = r; break; }
+    pos += r.text.length;
+  }
+  const out: StyledRun[] = [];
+  let cursor = 0;
+  const pushPiece = (piece: StyledRun) => {
+    const last = out[out.length - 1];
+    if (last && sameStyle(last, piece)) last.text += piece.text;
+    else out.push({ ...piece });
+  };
+  // prefijo intacto
+  for (const r of runs) {
+    if (cursor >= p) break;
+    const take = Math.min(r.text.length, p - cursor);
+    if (take > 0) pushPiece({ ...r, text: r.text.slice(0, take) });
+    cursor += r.text.length;
+  }
+  // lo insertado
+  if (inserted) pushPiece({ ...styleSrc, text: inserted });
+  // sufijo intacto
+  const sufStart = oldText.length - s;
+  cursor = 0;
+  for (const r of runs) {
+    const end = cursor + r.text.length;
+    if (end > sufStart) {
+      const from = Math.max(0, sufStart - cursor);
+      pushPiece({ ...r, text: r.text.slice(from) });
+    }
+    cursor = end;
+  }
+  // dx recalculado por el caller (serialización) — acá solo texto+estilos.
+  return out.filter(r => r.text.length > 0);
+}
+
 /** Marcador de lista al frente del texto: viñeta, "3.", "b)", "C)"… */
 const LIST_MARKER_RE = /^(\s*)(?:[•·▪‣*-]|\d{1,3}[.)]|[a-zA-Z][.)])(\s+)/;
 

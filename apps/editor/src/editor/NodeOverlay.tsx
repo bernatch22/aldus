@@ -14,6 +14,7 @@
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState, type CSSProperties } from 'react';
 import {
+  applyTextDiff,
   cssPointToPdf,
   effectiveGeometry,
   effectiveImageRect,
@@ -25,7 +26,9 @@ import {
   isBareListMarker,
   nextListMarker,
   originalStyledRuns,
+  setStyleRange,
   toggleListMarker,
+  toggleStyleRange,
   pdfRectToCss,
   styledRunsEqual,
   styledText,
@@ -45,17 +48,14 @@ import {
 import { AlignLeft, AlignCenter, AlignRight, Bold, Italic, Highlighter, Link2, List, Trash2, SendToBack, BringToFront } from 'lucide-react';
 import {
   activeEditingBox,
-  applySelectionColor,
-  applySelectionStyle,
   bucketFallback,
   dominantRun,
   family,
+  measureWidth,
   round1,
   seedHtml,
   selectionStyle,
-  serializeStyled,
   SELECTION_STYLE_EVENT,
-  toggleListMarkerInDom,
 } from './styledDom';
 import { stableFontFamily } from './fontRegistry';
 
@@ -236,16 +236,15 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
 
   // Lista = un FORMATO más del texto: toggle del marcador "•  " al frente
   // (Enter en edición continúa la lista con el marcador incrementado).
-  // Con el editor ABIERTO, el toggle MUTA el DOM en vivo (mismo principio que
-  // B/I/color: el DOM manda durante la edición; el html está congelado y un
-  // patch de modelo no se vería hasta cerrar). El commit lo serializa después.
+  // Con el editor ABIERTO, el toggle va por evento al TextEditLayer (muta el
+  // textarea en vivo — mismo principio que B/I/color). Cerrado: por el modelo.
   const [, bumpListTick] = useState(0);
   const liveBox = activeEditingBox();
-  const isList = hasListMarker(liveBox ? (liveBox.textContent ?? '') : styledText(styled));
+  const liveText = liveBox instanceof HTMLTextAreaElement ? liveBox.value : liveBox?.textContent;
+  const isList = hasListMarker(liveText ?? styledText(styled));
   const toggleList = () => {
-    const el = activeEditingBox();
-    if (el) {
-      toggleListMarkerInDom(el);
+    if (activeEditingBox()) {
+      window.dispatchEvent(new CustomEvent(SELECTION_STYLE_EVENT, { detail: { key: 'list' } }));
       bumpListTick(t => t + 1); // refresca el estado del botón
       return;
     }
@@ -320,10 +319,12 @@ function ObjectBar({ rect, pageWidth, width, onAlign, onZ, onDelete }: {
 }
 
 // ── TextEditLayer: EL editor de texto (singleton, imperativo) ────────────────
-// Patrón del "edit box manager" de pdf.js / textarea de Excalidraw: UN solo
-// contentEditable montado UNA vez en la raíz del overlay, que se abre/cierra
-// imperativamente. Vive FUERA del subtree reactivo de los boxes: ningún grafo
-// nuevo, preview o re-render puede desmontarlo, resembrarlo ni robarle el foco.
+// Patrón textarea de Excalidraw + "edit box manager" de pdf.js: UN solo
+// <textarea> PLANO montado UNA vez en la raíz del overlay, abierto/cerrado
+// imperativamente. Un textarea nativo no colapsa espacios, no crea spans
+// fantasma y su caret es indestructible; los ESTILOS por tramo viven en el
+// MODELO (StyledRun[] de la sesión, offsets planos de selectionStart/End) y
+// se sincronizan por diff en cada input — nunca en el DOM.
 interface EditSession {
   seg: SegmentNode;
   edit: SegmentEdit | null;
@@ -335,6 +336,16 @@ interface EditSession {
   onAddText: (req: AddTextRequest) => void;
 }
 
+interface LiveSession extends EditSession {
+  /** Los tramos estilados EN VIVO (se re-mapean por diff en cada input). */
+  runs: StyledRun[];
+  seedText: string;
+  seedRuns: StyledRun[];
+  /** Font shorthand para medir el ancho del textarea. */
+  fontCss: string;
+  minW: number;
+}
+
 export interface TextEditLayerHandle {
   open(s: EditSession): void;
   isOpen(): boolean;
@@ -342,8 +353,8 @@ export interface TextEditLayerHandle {
 
 const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(function TextEditLayer({ onClosed }, ref) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const innerRef = useRef<HTMLDivElement>(null);
-  const sessionRef = useRef<EditSession | null>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const sessionRef = useRef<LiveSession | null>(null);
 
   const close = useCallback(() => {
     if (hostRef.current) hostRef.current.style.display = 'none';
@@ -351,14 +362,23 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
     onClosed();
   }, [onClosed]);
 
+  // Ancho del textarea al contenido (medido con la fuente real).
+  const fit = useCallback(() => {
+    const s = sessionRef.current;
+    const ta = taRef.current;
+    if (!s || !ta) return;
+    const w = measureWidth(ta.value, s.fontCss);
+    ta.style.width = `${Math.max(s.minW, Math.ceil(w) + 8)}px`;
+  }, []);
+
   const commit = useCallback(() => {
     const s = sessionRef.current;
-    const inner = innerRef.current;
-    if (!s || !inner) return;
-    const ratio = (s.edit?.fontSize ?? s.seg.fontSize) / s.seg.fontSize;
-    const runs = serializeStyled(inner, s.seg, ratio, s.edit?.color);
+    const ta = taRef.current;
+    if (!s || !ta) return;
+    const text = ta.value.replace(/\s+$/, '');
+    const runs = applyTextDiff(s.runs, text);
     s.onPatch({
-      text: styledText(runs),
+      text,
       runs: styledRunsEqual(runs, originalStyledRuns(s.seg)) ? null : runs,
     });
   }, []);
@@ -366,40 +386,53 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
   useImperativeHandle(ref, () => ({
     open(s: EditSession) {
       const host = hostRef.current;
-      const inner = innerRef.current;
-      if (!host || !inner) return;
-      sessionRef.current = s;
+      const ta = taRef.current;
+      if (!host || !ta) return;
+      const seedRuns = s.edit?.runs ?? originalStyledRuns(s.seg);
+      const seedText = styledText(seedRuns);
+      // Ítem de lista pelado: sembrar el GAP (espacios REALES — el textarea no
+      // los colapsa). Con tipeo detrás quedan interiores y se hornean; sin
+      // tipeo, el commit los recorta = noop.
+      const value = isBareListMarker(seedText) ? `${seedText.replace(/\s+$/, '')}  ` : seedText;
       const eff = effectiveGeometry(s.seg, s.edit);
       const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, s.pageHeight, s.scale);
+      const style = containerStyle(s.seg, s.edit, s.scale);
+      const live: LiveSession = {
+        ...s,
+        seedText,
+        seedRuns,
+        runs: seedRuns,
+        fontCss: `${style.fontStyle === 'italic' ? 'italic ' : ''}${style.fontWeight === 700 ? '700 ' : ''}${style.fontSize} ${style.fontFamily}`,
+        minW: Math.max(rect.width, s.minWidthCss),
+      };
+      sessionRef.current = live;
       host.style.display = 'block';
       host.style.left = `${rect.left}px`;
       host.style.top = `${rect.top}px`;
-      host.style.minWidth = `${Math.max(rect.width, s.minWidthCss)}px`;
       host.style.height = `${rect.height}px`;
-      host.style.lineHeight = `${rect.height}px`;
-      Object.assign(inner.style, containerStyle(s.seg, s.edit, s.scale));
-      inner.innerHTML = seedHtml(s.seg, s.edit, s.scale);
-      // Ítem de lista recién creado (solo el marcador): sembrar el GAP (2 NBSP)
-      // — el PDF no persiste espacios finales sin contenido detrás.
-      if (isBareListMarker(inner.textContent ?? '')) {
-        inner.appendChild(document.createTextNode(String.fromCharCode(0xa0, 0xa0)));
-      }
-      inner.focus();
-      const range = document.createRange();
-      range.selectNodeContents(inner);
-      range.collapse(false);
-      const sel = window.getSelection();
-      sel?.removeAllRanges();
-      sel?.addRange(range);
-      console.log('[aldus:edit-open]', s.seg.id, 'layer:', JSON.stringify((inner.textContent ?? '').slice(0, 30)), 'focus:', document.activeElement === inner);
+      Object.assign(ta.style, style);
+      ta.style.height = `${rect.height}px`;
+      ta.style.lineHeight = `${rect.height}px`;
+      ta.value = value;
+      live.runs = applyTextDiff(seedRuns, value);
+      fit();
+      ta.focus();
+      ta.setSelectionRange(value.length, value.length);
+      console.log('[aldus:edit-open]', s.seg.id, 'layer(textarea):', JSON.stringify(value.slice(0, 30)), 'focus:', document.activeElement === ta);
     },
     isOpen: () => sessionRef.current != null,
-  }), [close]);
+  }), [fit]);
 
-  // Listeners nativos, atados UNA sola vez al div (nunca se re-atan).
+  // Listeners nativos, atados UNA sola vez (nunca se re-atan).
   useEffect(() => {
-    const inner = innerRef.current;
-    if (!inner) return;
+    const ta = taRef.current;
+    if (!ta) return;
+    const syncRuns = () => {
+      const s = sessionRef.current;
+      if (!s) return;
+      s.runs = applyTextDiff(s.runs, ta.value);
+      fit();
+    };
     const onBlur = () => {
       if (!sessionRef.current) return;
       console.log('[aldus:blur] layer cierra y comitea', sessionRef.current.seg.id);
@@ -411,8 +444,7 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       if (!s) return;
       if (e.key === 'Enter') {
         e.preventDefault();
-        const ratio = (s.edit?.fontSize ?? s.seg.fontSize) / s.seg.fontSize;
-        const marker = nextListMarker(styledText(serializeStyled(inner, s.seg, ratio)));
+        const marker = nextListMarker(ta.value);
         commit();
         close(); // el blur natural posterior encuentra session=null y no re-comitea
         if (marker) {
@@ -427,54 +459,71 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
             bucket: dominantRun(s.seg).font.bucket,
           });
         }
-        inner.blur();
+        ta.blur();
         return;
       }
       if (e.key === 'Escape') {
-        // Descartar lo tipeado en ESTA sesión: re-sembrar y cerrar (el commit
-        // del blur serializa el seed = igual al estado previo = noop).
-        inner.innerHTML = seedHtml(s.seg, s.edit, s.scale);
-        inner.blur();
+        // Descartar lo de ESTA sesión: volver al seed y cerrar (commit noop).
+        ta.value = s.seedText;
+        s.runs = s.seedRuns;
+        ta.blur();
         return;
       }
       if ((e.metaKey || e.ctrlKey) && (e.key === 'b' || e.key === 'i')) {
         e.preventDefault();
-        applySelectionStyle(inner, s.seg, s.edit, s.scale, e.key === 'b' ? 'bold' : 'italic');
-      }
-    };
-    const onBeforeInput = (ev: InputEvent) => {
-      const s = sessionRef.current;
-      if (!s) return;
-      const t = ev.inputType || '';
-      if (t === 'formatBold' || t === 'formatItalic') {
-        ev.preventDefault();
-        applySelectionStyle(inner, s.seg, s.edit, s.scale, t === 'formatBold' ? 'bold' : 'italic');
-      } else if (t.startsWith('format') || t === 'historyUndo' || t === 'historyRedo') {
-        ev.preventDefault();
+        const { selectionStart, selectionEnd } = ta;
+        if (selectionStart !== selectionEnd) {
+          s.runs = toggleStyleRange(s.runs, selectionStart, selectionEnd, e.key === 'b' ? 'bold' : 'italic');
+        }
       }
     };
     const onStyle = (ev: Event) => {
       const s = sessionRef.current;
       if (!s) return;
-      const detail = (ev as CustomEvent<{ key?: 'bold' | 'italic' | 'color'; color?: string }>).detail;
-      if (detail?.key === 'bold' || detail?.key === 'italic') applySelectionStyle(inner, s.seg, s.edit, s.scale, detail.key);
-      else if (detail?.key === 'color' && detail.color) applySelectionColor(inner, s.seg, s.edit, s.scale, detail.color);
+      const detail = (ev as CustomEvent<{ key?: 'bold' | 'italic' | 'color' | 'list'; color?: string }>).detail;
+      const { selectionStart, selectionEnd } = ta;
+      if (detail?.key === 'bold' || detail?.key === 'italic') {
+        if (selectionStart !== selectionEnd) s.runs = toggleStyleRange(s.runs, selectionStart, selectionEnd, detail.key);
+      } else if (detail?.key === 'color' && detail.color) {
+        if (selectionStart !== selectionEnd) s.runs = setStyleRange(s.runs, selectionStart, selectionEnd, { color: detail.color });
+      } else if (detail?.key === 'list') {
+        // Toggle de viñeta en vivo: manipulación de string plano — trivial.
+        const m = /^(\s*)(?:[•·▪‣*-]|\d{1,3}[.)]|[a-zA-Z][.)])(\s*)/.exec(ta.value);
+        const before = ta.selectionStart;
+        if (m) {
+          ta.value = ta.value.slice(m[0].length);
+          ta.setSelectionRange(Math.max(0, before - m[0].length), Math.max(0, before - m[0].length));
+        } else {
+          const marker = `${String.fromCharCode(0x2022)}  `;
+          ta.value = marker + ta.value;
+          ta.setSelectionRange(before + marker.length, before + marker.length);
+        }
+        syncRuns();
+      }
     };
-    inner.addEventListener('blur', onBlur);
-    inner.addEventListener('keydown', onKeyDown);
-    inner.addEventListener('beforeinput', onBeforeInput as EventListener);
+    ta.addEventListener('blur', onBlur);
+    ta.addEventListener('keydown', onKeyDown);
+    ta.addEventListener('input', syncRuns);
     window.addEventListener(SELECTION_STYLE_EVENT, onStyle);
     return () => {
-      inner.removeEventListener('blur', onBlur);
-      inner.removeEventListener('keydown', onKeyDown);
-      inner.removeEventListener('beforeinput', onBeforeInput as EventListener);
+      ta.removeEventListener('blur', onBlur);
+      ta.removeEventListener('keydown', onKeyDown);
+      ta.removeEventListener('input', syncRuns);
       window.removeEventListener(SELECTION_STYLE_EVENT, onStyle);
     };
-  }, [commit, close]);
+  }, [commit, close, fit]);
 
   return (
     <div ref={hostRef} className="seg-box editing masked" style={{ display: 'none', position: 'absolute', zIndex: 40 }}>
-      <div ref={innerRef} className="seg-text" contentEditable suppressContentEditableWarning spellCheck={false} />
+      <textarea
+        ref={taRef}
+        className="seg-text seg-textarea"
+        rows={1}
+        wrap="off"
+        spellCheck={false}
+        autoCorrect="off"
+        autoCapitalize="off"
+      />
     </div>
   );
 });

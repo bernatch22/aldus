@@ -4,6 +4,21 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### refactor(editor): el TextEditLayer pasa a TEXTAREA plano (patrón Excalidraw) — adiós contentEditable
+Idea del usuario, y es la correcta: un `<textarea>` nativo no colapsa espacios (el gap de
+lista son espacios REALES, sin NBSP), no crea spans fantasma, y su caret es indestructible.
+Los ESTILOS por tramo salen del DOM y pasan al MODELO de la sesión:
+- `applyTextDiff(runs, newText)` (core, puro + 5 tests): re-mapea los tramos al texto
+  nuevo por diff de prefijo/sufijo común — lo insertado hereda el estilo del punto de
+  cambio. Se sincroniza en cada `input`.
+- B/I/color a la selección: `toggleStyleRange`/`setStyleRange` con `selectionStart/End`
+  (offsets planos nativos del textarea) — muere `serializeStyled`/`applySelection*` en
+  el camino de edición (siguen para tests/compat).
+- Toggle de lista en vivo: manipulación de string plano + re-sync (evento `list` al layer).
+- El textarea se auto-ajusta al contenido midiendo con la fuente real (`measureWidth`).
+- `activeEditingBox` reconoce el textarea; `selectionStyle` degrada a null con él (los
+  toggles muestran el estado del segmento).
+
 ### refactor(editor): TextEditLayer — EL editor de texto como singleton imperativo (patrón pdf.js edit-box-manager)
 Tras tres parches al churn (preview congelado, html congelado, freeze de lifts) el editor
 inline seguía muriendo (edit-open ×3, blur "nadie": REMOUNTS del SegmentBox que ninguna

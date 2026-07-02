@@ -1,5 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { hasListMarker, nextListMarker, setStyleRange, toggleListMarker, toggleStyleRange, type StyledRun } from '../src/index.js';
+import { applyTextDiff, hasListMarker, nextListMarker, setStyleRange, toggleListMarker, toggleStyleRange, type StyledRun } from '../src/index.js';
+
+describe('applyTextDiff (textarea plano → estilos re-mapeados)', () => {
+  const R = (text: string, bold = false): StyledRun => ({ text, bold, italic: false, dx: 0 });
+  it('tipear en el medio hereda el estilo del tramo donde empieza el cambio', () => {
+    const out = applyTextDiff([R('Total: ', true), R('125.00')], 'Total: extra 125.00');
+    expect(out.map(r => [r.text, r.bold])).toEqual([['Total: ', true], ['extra 125.00', false]]);
+  });
+  it('borrar el frente conserva los estilos del resto', () => {
+    const out = applyTextDiff([R('AB', true), R('CD')], 'BCD');
+    expect(out.map(r => [r.text, r.bold])).toEqual([['B', true], ['CD', false]]);
+  });
+  it('reemplazo total = un solo tramo con el estilo del punto de cambio', () => {
+    const out = applyTextDiff([R('Hola', true)], 'Chau');
+    expect(out.map(r => [r.text, r.bold])).toEqual([['Chau', true]]);
+  });
+  it('texto idéntico → misma referencia (noop)', () => {
+    const runs = [R('abc')];
+    expect(applyTextDiff(runs, 'abc')).toBe(runs);
+  });
+  it('agregar al final extiende el último tramo', () => {
+    const out = applyTextDiff([R('• ', false), R('item', true)], '• items');
+    expect(out.map(r => [r.text, r.bold])).toEqual([['• ', false], ['items', true]]);
+  });
+});
 
 describe('toggleListMarker (lista como formato)', () => {
   const R = (text: string, bold = false): StyledRun => ({ text, bold, italic: false, dx: 0 });

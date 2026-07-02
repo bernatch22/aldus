@@ -4,6 +4,19 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### fix(editor): los fantasmas perdían TODOS los estilos al soltar — fuentes embebidas bajo nombres ESTABLES
+pdf.js registra cada fuente embebida como FontFace bajo su `loadedName` (g_d0_f3), un id
+POR DOCUMENTO: el preview crea un doc nuevo por edición y destruye el anterior (sus
+FontFace se van), y el segmento extirpado ni siquiera carga su fuente en el doc nuevo.
+El fantasma quedaba huérfano → font por defecto, letter-spacing con la métrica
+equivocada (texto "deformado", tamaño/color aparente distintos). Fix:
+- `fontRegistry.ts` (nuevo): re-registra cada fuente embebida UNA vez por sesión bajo
+  `aldus-<postScriptName>` (estable entre documentos) con sus bytes reales
+  (`page.commonObjs` + `fontExtraProperties: true` en getDocument).
+- `styledDom.family()`: `'<loadedName>', '<aldus-ps>', <bucket fallback>` — si el
+  loadedName murió con su documento, el nombre estable responde con los glifos REALES.
+- `PdfCanvas`: registra las fuentes del grafo tras cada extracción.
+
 ### feat(editor): drag natural — LIFT pre-horneado en la selección, cero pipeline durante el gesto
 Rediseño de la interacción de mover texto siguiendo el patrón del annotation editor de
 pdf.js (el canvas NO se toca durante un gesto; el elemento viaja como DOM y el render

@@ -286,7 +286,9 @@ export function EditorPage() {
       const bytes = pending ? await bakePending() : baseBytes;
       if (cancelled) return;
       // pdf.js TRANSFIERE el buffer al worker → siempre una copia.
-      const task = getDocument({ data: bytes.slice() });
+      // fontExtraProperties: el fontRegistry necesita font.data para
+      // re-registrar las embebidas bajo nombres estables.
+      const task = getDocument({ data: bytes.slice(), fontExtraProperties: true });
       const doc = await task.promise;
       if (cancelled) { void doc.destroy(); return; }
       setPdf(prev => { void prev?.destroy(); return doc; });
@@ -311,7 +313,7 @@ export function EditorPage() {
     (async () => {
       const bytes = await bakePending(seg);
       if (cancelled) return;
-      const doc = await getDocument({ data: bytes.slice() }).promise;
+      const doc = await getDocument({ data: bytes.slice(), fontExtraProperties: true }).promise;
       if (cancelled) { void doc.destroy(); return; }
       setLift(prev => { void prev?.doc.destroy(); return { segId: seg.id, doc }; });
     })().catch(() => { /* sin lift: el drag cae al camino lento (blit al aterrizar) */ });

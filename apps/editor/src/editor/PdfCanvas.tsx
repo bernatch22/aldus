@@ -11,6 +11,7 @@ import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
 import { extractPageGraph, type ImageEdit, type PageGraph, type PdfJsPage, type SegmentEdit, type SegmentNode, type WidgetEdit } from '@aldus/core';
 import { NodeOverlay, type AddTextRequest, type EditAction, type ImageEditAction, type WidgetEditAction } from './NodeOverlay';
 import { sampleRunColors } from './sampleColor';
+import { registerPageFonts } from './fontRegistry';
 
 interface Props {
   pdf: PDFDocumentProxy;
@@ -121,6 +122,9 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
       const page = await pdf.getPage(pageNum);
       const g = await extractPageGraph(page as unknown as PdfJsPage);
       if (cancelled) return;
+      // Las fuentes embebidas, bajo nombres ESTABLES (sobreviven al destroy
+      // del documento — los fantasmas dependen de esto).
+      try { registerPageFonts(page as unknown as { commonObjs: { get(id: string): unknown } }, g); } catch { /* best-effort */ }
       // Muestrear el color de cada run del canvas ya pintado (para el display).
       try { sampleRunColors(g, back, scale); } catch { /* best-effort */ }
       onGraph(g);

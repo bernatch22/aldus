@@ -22,6 +22,7 @@ import {
   type StyledRun,
   type TextRunNode,
 } from '@aldus/core';
+import { stableFontFamily } from './fontRegistry';
 
 // Espacios múltiples se siembran como NBSP (un contentEditable colapsa espacios
 // planos consecutivos); la serialización los vuelve espacios reales.
@@ -41,7 +42,13 @@ export function bucketFallback(b: FontBucket): string {
     : 'Helvetica, Arial, sans-serif';
 }
 
-export const family = (r: TextRunNode) => `'${r.font.loadedName}',${bucketFallback(r.font.bucket)}`;
+// El loadedName (g_dN_fM) muere con su documento (el preview los recrea y
+// destruye); el nombre ESTABLE del fontRegistry sobrevive — sin él, los
+// fantasmas perdían la fuente embebida al aterrizar cada preview.
+export const family = (r: TextRunNode) => {
+  const stable = r.font.postScriptName ? `'${stableFontFamily(r.font.postScriptName)}',` : '';
+  return `'${r.font.loadedName}',${stable}${bucketFallback(r.font.bucket)}`;
+};
 
 // ── Medición (canvas; en jsdom no hay 2d context → 0, inofensivo) ───────────
 let measureCtx: CanvasRenderingContext2D | null | false = null;

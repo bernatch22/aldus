@@ -47,14 +47,35 @@ apps/server      @aldus/server  — Express (:4100): upload de PDFs, servir byte
 
 Dev: `pnpm install && pnpm dev` (server :4100 + editor :5190).
 
-## Roadmap (en orden, sin saltear)
+## Roadmap (tiers según el research de editores pro — Acrobat/Foxit/PDF Expert/Nitro)
 
-1. **Grafos de texto** — parsear y reescribir operadores de texto in situ, pixel-perfect.
-   UI: boxes que NO se desacomodan al click. ← *foco actual*
-2. **Imágenes** — XObjects: mover, reemplazar, escalar.
-3. **Forms** — AcroForm nativo: widgets como nodos del grafo.
-4. **Firmas** — cajas de firma, placement anclado.
-5. **LLM** — el agente completo sobre todo lo anterior.
+Hecho ✅: grafo tipado (run→segmento→línea), editor por segmentos anclados (gaps =
+fronteras, tab-stop gratis), fuente embebida + fit por letter-spacing, object
+properties (texto/B/I/tamaño/familia/x/baseline), mover por drag, server de edits.
+
+- **Tier 0 — núcleo (bloqueante):** (1) **bake del content stream** (reflow DENTRO del
+  bounding box del párrafo — la caja es la unidad de reflow, la página no se mueve);
+  (2) **matriz de fuentes de 3 niveles** (instalada / embebida-subset: solo atributos,
+  no glifos nuevos / no disponible: sustitución con warning) en el picker.
+- **Tier 1 — table-stakes:** toolbar de formato (font/size/color/B/I/alineación; panel
+  fijo + floating mínima sobre selección), panel derecho con Geometría+Apariencia,
+  8 handles de resize, nudge por teclado, multi-select; **imágenes** (insert/replace/
+  move/resize/delete).
+- **Tier 2 — edición seria:** underline/sub-superscript/spacings; **listas** (Enter =
+  nuevo ítem + renumeración, Tab = indent — alcance Acrobat, no Word); **Link/Join/
+  Split de segmentos** (el feature estrella de Foxit — natural con nuestro modelo);
+  smart guides + align/distribute.
+- **Tier 3 — anotaciones (/Annots, ortogonal al bake):** highlight/underline/strikeout/
+  squiggly anclados a quads de segmentos; shapes; FreeText; links (go-to-page/URL).
+- **Tier 4 — form fields:** los 7 tipos AcroForm (text/checkbox/radio/combo/list/
+  button/signature; date = text+format) con propiedades General/Appearance/Options
+  (export values de radios incl.); luego Format/Validate/Calculate.
+- **Tier 5 — pro batch:** watermark, header/footer, page numbers, crop/rotate/opacity
+  de imagen, z-order, redacción (exige bake maduro), Bates.
+
+Clave arquitectural del spec (ISO 32000): **`/Contents` (content stream) y `/Annots`
+son capas distintas** — el bake solo aplica a la primera; el grafo distingue
+content-nodes de annotation-nodes desde el modelo.
 
 ## Origen (mapa de extracción desde signwax)
 

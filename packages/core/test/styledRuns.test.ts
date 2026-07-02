@@ -1,5 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { nextListMarker, setStyleRange, toggleStyleRange, type StyledRun } from '../src/index.js';
+import { hasListMarker, nextListMarker, setStyleRange, toggleListMarker, toggleStyleRange, type StyledRun } from '../src/index.js';
+
+describe('toggleListMarker (lista como formato)', () => {
+  const R = (text: string, bold = false): StyledRun => ({ text, bold, italic: false, dx: 0 });
+  it('sin marcador → prepende viñeta con gap (2 espacios) al primer tramo', () => {
+    const out = toggleListMarker([R('Hola', true), R(' mundo')]);
+    expect(out.map(r => [r.text, r.bold])).toEqual([['•  Hola', true], [' mundo', false]]);
+    expect(hasListMarker(out.map(r => r.text).join(''))).toBe(true);
+  });
+  it('con viñeta → la quita (marcador + gap completos)', () => {
+    const out = toggleListMarker([R('•  Hola')]);
+    expect(out.map(r => r.text)).toEqual(['Hola']);
+  });
+  it('con marcador numerado → también lo quita, incluso partido en tramos', () => {
+    const out = toggleListMarker([R('3. '), R('Item', true)]);
+    expect(out.map(r => [r.text, r.bold])).toEqual([['Item', true]]);
+  });
+  it('marcador solo (sin contenido) → no vacía el segmento', () => {
+    const runs = [R('•  ')];
+    expect(toggleListMarker(runs)).toBe(runs);
+  });
+});
 
 describe('setStyleRange (color a la selección)', () => {
   const R = (text: string, bold = false): StyledRun => ({ text, bold, italic: false, dx: 0 });

@@ -4,6 +4,21 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### feat(editor): lista = FORMATO del texto (no un componente) + grip que amplía el ÁREA tipeable (no escala)
+- **Lista como formatter**: fuera el tool "Lista" del palette (creaba un componente
+  aparte, sin gap, y Enter paría otro componente suelto — "muy raro"). Ahora es un
+  toggle (ícono lista) en la barra flotante de CUALQUIER texto: `toggleListMarker`
+  (core, puro + tests) prepende `"•  "` (viñeta + 2 espacios = gap real) al primer
+  tramo o quita el marcador existente (viñeta, "3.", "b)"…). Va por el flujo de
+  ediciones pendientes como todo lo demás.
+- **Enter fluido**: al continuar una lista (Enter), el ítem nuevo se abre EN EDICIÓN
+  automáticamente apenas el grafo lo trae (match por geometría x/baseline ±3pt) — se
+  acabó el "doble click para editarlo" en medio del tipeo.
+- **Grip = área, no escala**: arrastrar el grip ya no agranda la letra (eso vive en el
+  input de tamaño de la barra); ahora AMPLÍA el área tipeable de la línea (min-width
+  del box, en pt, por segmento — `areaWidths`, persistido por documento). Espacio para
+  escribir sin salto de línea; volver al ancho natural la limpia.
+
 ### fix(core): "Al fondo" REAL — inserta tras el papel blanco (backstop), no en el byte 0
 Enviar una imagen al fondo la prependeaba al inicio del stream, ANTES del relleno blanco
 full-page con que los PDFs de generadores (JotForm) pintan la hoja → el papel opaco la

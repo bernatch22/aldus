@@ -70,6 +70,28 @@ export const styledText = (runs: StyledRun[]): string => runs.map(r => r.text).j
 /** Si el texto arranca con un marcador de LISTA, devuelve el marcador del
  *  SIGUIENTE ítem (comportamiento Word/Acrobat: Enter continúa la lista):
  *  "• " → "• " · "3. " → "4. " · "b) " → "c) " · "B) " → "C) ". null = no es lista. */
+/** Marcador de lista al frente del texto: viñeta, "3.", "b)", "C)"… */
+const LIST_MARKER_RE = /^(\s*)(?:[•·▪‣*-]|\d{1,3}[.)]|[a-zA-Z][.)])(\s+)/;
+
+export const hasListMarker = (text: string): boolean => LIST_MARKER_RE.test(text);
+
+/** Toggle de viñeta sobre los tramos (operación pura): sin marcador → prepende
+ *  "•  " (con DOS espacios — el gap real de una lista, no la viñeta pegada) al
+ *  primer tramo (hereda su estilo); con marcador (cualquiera) → lo quita. */
+export function toggleListMarker(runs: StyledRun[]): StyledRun[] {
+  if (!runs.length) return runs;
+  const m = LIST_MARKER_RE.exec(styledText(runs));
+  if (!m) return runs.map((r, i) => (i === 0 ? { ...r, text: `•  ${r.text}` } : r));
+  let toCut = m[0].length;
+  const out: StyledRun[] = [];
+  for (const r of runs) {
+    if (toCut >= r.text.length) { toCut -= r.text.length; continue; }
+    out.push(toCut > 0 ? { ...r, text: r.text.slice(toCut) } : r);
+    toCut = 0;
+  }
+  return out.length ? out : runs; // marcador solo (sin contenido): no vaciar
+}
+
 export function nextListMarker(text: string): string | null {
   const m = /^(\s*)(?:([•·▪‣*-])|(\d{1,3})([.)])|([a-z])([.)])|([A-Z])([.)]))(\s+)/.exec(text);
   if (!m) return null;

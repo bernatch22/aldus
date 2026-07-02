@@ -21,8 +21,10 @@ import {
   mergeImageEdit,
   mergeSegmentEdit,
   mergeWidgetEdit,
+  hasListMarker,
   nextListMarker,
   originalStyledRuns,
+  toggleListMarker,
   pdfRectToCss,
   styledRunsEqual,
   styledText,
@@ -39,7 +41,7 @@ import {
   type WidgetNode,
   type WidgetPatch,
 } from '@aldus/core';
-import { AlignLeft, AlignCenter, AlignRight, Bold, Italic, Highlighter, Link2, Trash2, SendToBack, BringToFront } from 'lucide-react';
+import { AlignLeft, AlignCenter, AlignRight, Bold, Italic, Highlighter, Link2, List, Trash2, SendToBack, BringToFront } from 'lucide-react';
 import {
   activeEditingBox,
   applySelectionColor,
@@ -121,6 +123,12 @@ interface Props {
   /** Arranque/fin del arrastre de un segmento. En el fin, `committed` dice si
       el drop produjo una edición (false = no-op → restaurar el canvas). */
   onDragging: (segId: string, active: boolean, committed?: boolean) => void;
+  /** Ancho de ÁREA tipeable por segmento (pt) — el grip la amplía. */
+  areaWidths: Map<string, number>;
+  onAreaWidth: (segId: string, w: number | null) => void;
+  /** Abrir este segmento en edición apenas exista en el grafo. */
+  editRequestId: string | null;
+  onEditRequestHandled: () => void;
 }
 
 /** Botón chico de una toolbar flotante. */
@@ -222,10 +230,19 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
     onPatch({ color: v.toLowerCase() === (dom.color ?? '#000000').toLowerCase() ? null : v });
   };
 
+  // Lista = un FORMATO más del texto: toggle del marcador "•  " al frente
+  // (Enter en edición continúa la lista con el marcador incrementado).
+  const isList = hasListMarker(styledText(styled));
+  const toggleList = () => {
+    const next = toggleListMarker(styled);
+    if (next !== styled) onPatch({ runs: next, text: styledText(next) });
+  };
+
   return (
     <FloatingWrap rect={rect}>
       <FbBtn label="Negrita" onClick={() => toggle('bold')} active={allBold}><Bold size={14} /></FbBtn>
       <FbBtn label="Itálica" onClick={() => toggle('italic')} active={allItalic}><Italic size={14} /></FbBtn>
+      <FbBtn label="Lista con viñeta (Enter en edición agrega el siguiente ítem)" onClick={toggleList} active={isList}><List size={14} /></FbBtn>
       <input
         className="fb-input"
         type="number"
@@ -287,9 +304,18 @@ function ObjectBar({ rect, pageWidth, width, onAlign, onZ, onDelete }: {
   );
 }
 
-export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging }: Props) {
+export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, areaWidths, onAreaWidth, editRequestId, onEditRequestHandled }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => setEditingId(null), [graph.page]);
+
+  // Ítem de lista recién creado (Enter): abrirlo en edición apenas el grafo
+  // lo traiga — el flujo de tipeo sigue sin "doble click" en el medio.
+  useEffect(() => {
+    if (editRequestId && graph.segments.some(s => s.id === editRequestId)) {
+      setEditingId(editRequestId);
+      onEditRequestHandled();
+    }
+  }, [editRequestId, graph, onEditRequestHandled]);
 
   // Cuando una FontFace termina de cargar (las estables del fontRegistry son
   // async), re-render: los fantasmas re-siembran su HTML midiendo con la
@@ -357,6 +383,8 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           edit={edits.get(seg.id) ?? null}
           isLocked={locked.has(seg.id)}
           onDragging={(active, committed) => onDragging(seg.id, active, committed)}
+          areaWidth={areaWidths.get(seg.id) ?? null}
+          onAreaWidth={w => onAreaWidth(seg.id, w)}
           onSelect={() => selectNode(seg.id)}
           onStartEdit={() => { selectNode(seg.id); setEditingId(seg.id); }}
           onStopEdit={() => setEditingId(null)}
@@ -682,6 +710,9 @@ interface SegmentBoxProps {
   edit: SegmentEdit | null;
   isLocked: boolean;
   onDragging: (active: boolean, committed?: boolean) => void;
+  /** Ancho de área tipeable (pt) fijado por el grip, o null (= ancho natural). */
+  areaWidth: number | null;
+  onAreaWidth: (w: number | null) => void;
   onSelect: () => void;
   onStartEdit: () => void;
   onStopEdit: () => void;
@@ -693,14 +724,15 @@ interface SegmentBoxProps {
   onHighlightColor: (c: string) => void;
 }
 
-function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, isLocked, onDragging, onSelect, onStartEdit, onStopEdit, onPatch, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: SegmentBoxProps) {
+function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, isLocked, onDragging, areaWidth, onAreaWidth, onSelect, onStartEdit, onStopEdit, onPatch, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: SegmentBoxProps) {
   const eff = effectiveGeometry(seg, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
   const editRef = useRef<HTMLDivElement>(null);
   const dragStart = useRef<{ px: number; py: number; moved: boolean } | null>(null);
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
   const gripStart = useRef<number | null>(null);
-  const [gripRatio, setGripRatio] = useState<number | null>(null);
+  // Ancho de área en vivo mientras se arrastra el grip (px CSS).
+  const [gripW, setGripW] = useState<number | null>(null);
 
   useEffect(() => {
     if (!editing) return;
@@ -789,14 +821,12 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
         style={{
           left: rect.left,
           top: rect.top,
-          minWidth: rect.width,
+          // El ÁREA tipeable: el grip la amplía más allá del ancho natural del
+          // texto (espacio para escribir en la línea sin que "salte").
+          minWidth: gripW ?? Math.max(rect.width, areaWidth != null ? areaWidth * scale : 0),
           height: rect.height,
           lineHeight: `${rect.height}px`,
-          transform: drag
-            ? `translate(${drag.dx}px, ${drag.dy}px)`
-            : gripRatio
-              ? `scale(${gripRatio})`
-              : undefined,
+          transform: drag ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
           transformOrigin: 'left bottom',
         }}
         onClick={e => { e.stopPropagation(); onSelect(); }}
@@ -908,7 +938,7 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
         {selected && !editing && (
           <div
             className="seg-grip"
-            title="Arrastrar para escalar el texto"
+            title="Ampliar el área de texto (la letra no cambia; el tamaño se ajusta en la barra)"
             onPointerDown={e => {
               e.preventDefault();
               e.stopPropagation();
@@ -918,18 +948,20 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
             onPointerMove={e => {
               if (gripStart.current == null) return;
               e.stopPropagation();
-              const ratio = Math.max(0.2, (rect.width + e.clientX - gripStart.current) / rect.width);
-              setGripRatio(ratio);
+              const from = Math.max(rect.width, areaWidth != null ? areaWidth * scale : 0);
+              setGripW(Math.max(rect.width, from + e.clientX - gripStart.current));
             }}
             onPointerUp={e => {
               e.stopPropagation();
               const start = gripStart.current;
               gripStart.current = null;
-              setGripRatio(null);
+              setGripW(null);
               if (start == null) return;
-              const ratio = Math.max(0.2, (rect.width + e.clientX - start) / rect.width);
-              const size = Math.max(4, round1(eff.fontSize * ratio));
-              onPatch({ fontSize: size === round1(seg.fontSize) ? null : size });
+              const from = Math.max(rect.width, areaWidth != null ? areaWidth * scale : 0);
+              const w = Math.max(rect.width, from + e.clientX - start);
+              const wPt = round1(w / scale);
+              // Volver al ancho natural (o menos) limpia el área extendida.
+              onAreaWidth(wPt <= round1(eff.width) + 1 ? null : wPt);
             }}
             onClick={e => e.stopPropagation()}
             onDoubleClick={e => e.stopPropagation()}

@@ -41,6 +41,12 @@ interface Props {
   lift: { segId: string; doc: PDFDocumentProxy } | null;
   /** Segmento en arrastre (si coincide con el lift, se blitea su buffer). */
   draggingId: string | null;
+  /** Ancho de ÁREA tipeable por segmento (pt) — el grip la amplía. */
+  areaWidths: Map<string, number>;
+  onAreaWidth: (segId: string, w: number | null) => void;
+  /** Segmento a abrir en edición apenas exista (ítem de lista recién creado). */
+  editRequestId: string | null;
+  onEditRequestHandled: () => void;
 }
 
 /** Renderiza una página de pdf.js en un canvas offscreen (HiDPI). */
@@ -68,7 +74,7 @@ async function renderToBackBuffer(doc: PDFDocumentProxy, pageNum: number, scale:
   return back;
 }
 
-export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, lift, draggingId }: Props) {
+export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, lift, draggingId, areaWidths, onAreaWidth, editRequestId, onEditRequestHandled }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
   const liftTaskRef = useRef<RenderTask | null>(null);
@@ -200,6 +206,10 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
           onHighlightColor={onHighlightColor}
           phantomSegments={phantomSegments}
           onDragging={onDragging}
+          areaWidths={areaWidths}
+          onAreaWidth={onAreaWidth}
+          editRequestId={editRequestId}
+          onEditRequestHandled={onEditRequestHandled}
         />
       )}
     </div>

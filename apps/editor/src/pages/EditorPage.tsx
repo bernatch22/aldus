@@ -6,7 +6,7 @@ import {
   type ImageEdit, type PageGraph, type SegmentEdit, type SegmentNode, type WidgetEdit, type WidgetKind,
 } from '@aldus/core';
 import {
-  MousePointer2, Pilcrow, List, TextCursorInput, SquareCheck, CircleDot,
+  MousePointer2, Pilcrow, TextCursorInput, SquareCheck, CircleDot,
   SquareChevronDown, Signature, ImagePlus, Droplets, PanelTop,
   ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Check, Undo2, Redo2, type LucideIcon,
 } from 'lucide-react';
@@ -22,7 +22,7 @@ const r1 = (v: number) => Math.round(v * 10) / 10;
 type Placing =
   | { kind: 'field'; type: WidgetKind }
   | { kind: 'image'; file: File }
-  | { kind: 'text'; bullet: boolean }
+  | { kind: 'text' }
   | null;
 
 type Dialog =
@@ -38,8 +38,9 @@ const NAV_GROUPS: Array<{ label: string; tools: NavTool[] }> = [
   {
     label: 'Texto',
     tools: [
-      { id: 'text', icon: Pilcrow, label: 'Párrafo de texto (Enter continúa listas)', placing: { kind: 'text', bullet: false } },
-      { id: 'bullet', icon: List, label: 'Lista con viñeta (Enter agrega el siguiente ítem)', placing: { kind: 'text', bullet: true } },
+      // Lista = un FORMATO del texto (toggle de viñeta en la barra flotante),
+      // no un componente aparte.
+      { id: 'text', icon: Pilcrow, label: 'Texto (la viñeta se activa desde la barra del objeto; Enter continúa listas)', placing: { kind: 'text' } },
     ],
   },
   {
@@ -135,6 +136,22 @@ export function EditorPage() {
     });
   }, [graph, id]);
 
+  // ── ÁREA de texto por segmento (pt): el grip AMPLÍA el área tipeable de la
+  //    línea (no escala la letra) — espacio para escribir sin salto. Solo
+  //    afordance del editor (el PDF no tiene "cajas"); persiste por documento. ──
+  const [areaWidths, setAreaWidths] = useState<Map<string, number>>(() => {
+    try { return new Map(Object.entries(JSON.parse(localStorage.getItem(`aldus-areas-${id}`) || '{}') as Record<string, number>)); }
+    catch { return new Map(); }
+  });
+  const onAreaWidth = useCallback((segId: string, w: number | null) => {
+    setAreaWidths(prev => {
+      const next = new Map(prev);
+      if (w == null) next.delete(segId); else next.set(segId, w);
+      localStorage.setItem(`aldus-areas-${id}`, JSON.stringify(Object.fromEntries(next)));
+      return next;
+    });
+  }, [id]);
+
   // El estilo DOMINANTE de la página (mediana de tamaño + bucket más común):
   // el texto nuevo nace pareciéndose a los grafos existentes, no a Helvetica 11.
   const pageTextStyle = useMemo(() => {
@@ -210,7 +227,7 @@ export function EditorPage() {
         ? api.insertImage(id, p.file, { page: pageNum, x: r1(x), y: r1(y) })
         : api.docOp(id, 'addText', {
             page: pageNum, x: r1(x), y: r1(y),
-            text: p.bullet ? '•  Elemento nuevo' : 'Texto nuevo',
+            text: 'Texto nuevo',
             size: pageTextStyle.size, bucket: pageTextStyle.bucket,
           });
     run
@@ -218,11 +235,15 @@ export function EditorPage() {
       .catch(e => setError(e instanceof Error ? e.message : 'No se pudo crear'));
   }, [placing, id, pageNum, pageTextStyle]);
 
-  // Enter al final de un ítem de lista → crear el siguiente ítem debajo.
+  // Enter al final de un ítem de lista → crear el siguiente ítem debajo y
+  // ABRIRLO en edición apenas aparezca en el grafo (nada de "doble click").
+  const pendingItemRef = useRef<{ page: number; x: number; baseline: number } | null>(null);
+  const [editRequestId, setEditRequestId] = useState<string | null>(null);
   const onAddText = useCallback((req: AddTextRequest) => {
+    pendingItemRef.current = { page: req.page, x: r1(req.x), baseline: r1(req.baseline) };
     api.docOp(id, 'addText', { page: req.page, x: r1(req.x), y: r1(req.baseline + req.size), text: req.text, size: req.size, bucket: req.bucket })
-      .then(() => { setDocVersion(v => v + 1); setNotice('Ítem agregado — doble click para editarlo'); })
-      .catch(e => setError(e instanceof Error ? e.message : 'No se pudo agregar'));
+      .then(() => setDocVersion(v => v + 1))
+      .catch(e => { pendingItemRef.current = null; setError(e instanceof Error ? e.message : 'No se pudo agregar'); });
   }, [id]);
 
   // Operaciones de documento. HIGHLIGHT acumula (preview local, se escribe con
@@ -372,12 +393,22 @@ export function EditorPage() {
   }, []);
 
   // El grafo nuevo llega = el preview aterrizó: si había un drop en vuelo,
-  // el documento visible ya es el re-horneado — descartar el lift.
+  // el documento visible ya es el re-horneado — descartar el lift. Y si hay
+  // un ítem de lista recién creado (Enter), abrirlo en edición directamente.
   const handleGraph = useCallback((g: PageGraph) => {
     setGraph(g);
     if (dropPendingRef.current) {
       dropPendingRef.current = false;
       setLift(prev => { void prev?.doc.destroy(); return null; });
+    }
+    const pend = pendingItemRef.current;
+    if (pend && g.page === pend.page) {
+      const seg = g.segments.find(s => Math.abs(s.x - pend.x) < 3 && Math.abs(s.baseline - pend.baseline) < 3);
+      if (seg) {
+        pendingItemRef.current = null;
+        setSelectedId(seg.id);
+        setEditRequestId(seg.id);
+      }
     }
   }, []);
 
@@ -519,8 +550,7 @@ export function EditorPage() {
 
   const toolActive = (p: Placing): boolean =>
     !!placing && !!p && placing.kind === p.kind &&
-    (p.kind !== 'field' || (placing.kind === 'field' && placing.type === p.type)) &&
-    (p.kind !== 'text' || (placing.kind === 'text' && placing.bullet === p.bullet));
+    (p.kind !== 'field' || (placing.kind === 'field' && placing.type === p.type));
 
   return (
     <div className="flex h-full flex-col bg-neutral-50 text-neutral-800">
@@ -613,6 +643,8 @@ export function EditorPage() {
                 phantomSegments={phantomSegments}
                 onDragging={onDragging}
                 lift={lift} draggingId={draggingId}
+                areaWidths={areaWidths} onAreaWidth={onAreaWidth}
+                editRequestId={editRequestId} onEditRequestHandled={() => setEditRequestId(null)}
               />
             </div>
           ) : (

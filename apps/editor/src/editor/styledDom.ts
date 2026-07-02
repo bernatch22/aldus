@@ -122,12 +122,12 @@ function measureFontFor(seg: SegmentNode, sr: { bold: boolean; italic: boolean }
   return `${st}${wt}${(base.fontSize * sizeRatio).toFixed(2)}px ${fam}`;
 }
 
-export function runStyle(r: TextRunNode, scale: number, letterSpacing = 0): string {
+export function runStyle(r: TextRunNode, scale: number, letterSpacing = 0, ratio = 1): string {
   const weight = !r.font.embedded && r.font.bold ? 'font-weight:bold;' : '';
   const style = !r.font.embedded && r.font.italic ? 'font-style:italic;' : '';
   const tracking = letterSpacing !== 0 ? `letter-spacing:${letterSpacing.toFixed(3)}px;` : '';
   const color = r.color ? `color:${r.color};` : '';
-  return `font-family:${family(r)};font-size:${(r.fontSize * scale).toFixed(2)}px;${color}${weight}${style}${tracking}`;
+  return `font-family:${family(r)};font-size:${(r.fontSize * ratio * scale).toFixed(2)}px;${color}${weight}${style}${tracking}`;
 }
 
 /** Runs estilados → el DOM canónico del box editable (un span por tramo, con
@@ -138,15 +138,10 @@ export function runsToHtml(seg: SegmentNode, runs: StyledRun[], sizeRatio: numbe
   ).join('') || '<br>';
 }
 
-/** HTML inicial del box. Sin edición: un span por run con su fuente real, su
- *  fit y su estilo en data-b/data-i. Con edición: un span por TRAMO estilado. */
-export function seedHtml(seg: SegmentNode, edit: SegmentEdit | null, scale: number): string {
-  if (edit) {
-    const ratio = (edit.fontSize ?? seg.fontSize) / seg.fontSize;
-    const dom = dominantRun(seg);
-    const source: StyledRun[] = edit.runs ?? [{ text: edit.text, bold: dom.font.bold, italic: dom.font.italic, dx: 0 }];
-    return runsToHtml(seg, source, ratio, scale);
-  }
+/** Layout ORIGINAL del segmento: un span por run con su fuente real, su fit de
+ *  letter-spacing y el gap EXACTO del PDF entre runs (como margin-left). `ratio`
+ *  escala todo proporcionalmente (resize del segmento). */
+function originalLayoutHtml(seg: SegmentNode, scale: number, ratio: number): string {
   const runs = seg.runs;
   // El espacio de un word-gap va al FINAL del run ANTERIOR — la MISMA regla que
   // originalStyledRuns (core). Si difieren, el roundtrip sembrar→serializar no
@@ -166,11 +161,38 @@ export function seedHtml(seg: SegmentNode, edit: SegmentEdit | null, scale: numb
     if (i > 0) {
       const prev = runs[i - 1];
       const gap = r.x - (prev.x + prev.width);
-      if (classifyGap(gap, prev, r) === 'none' && gap > 0.5) margin = `margin-left:${(gap * scale).toFixed(2)}px;`;
+      // Un word-gap se rinde como espacio (ya sumado arriba) PERO su ancho real
+      // rara vez coincide con el espacio de la fuente: el margen compensa la
+      // diferencia para que cada run quede en su x exacto — "el mismo gap".
+      const cls = classifyGap(gap, prev, r);
+      if (cls === 'none' && gap > 0.5) {
+        margin = `margin-left:${(gap * ratio * scale).toFixed(2)}px;`;
+      } else if (cls !== 'none') {
+        const spaceW = measureWidth(' ', `${(prev.fontSize * ratio * scale).toFixed(2)}px ${family(prev)}`);
+        const delta = gap * ratio * scale - spaceW;
+        if (Math.abs(delta) > 0.5) margin = `margin-left:${delta.toFixed(2)}px;`;
+      }
     }
-    html += `<span data-b="${r.font.bold ? 1 : 0}" data-i="${r.font.italic ? 1 : 0}"${r.color ? ` data-c="${r.color}"` : ''} style="${margin}${runStyle(r, scale, fitLetterSpacing(r, r.text, scale))}">${esc(texts[i])}</span>`;
+    html += `<span data-b="${r.font.bold ? 1 : 0}" data-i="${r.font.italic ? 1 : 0}"${r.color ? ` data-c="${r.color}"` : ''} style="${margin}${runStyle(r, scale, fitLetterSpacing(r, r.text, scale) * ratio, ratio)}">${esc(texts[i])}</span>`;
   }
   return html || '<br>';
+}
+
+/** HTML inicial del box. Move/resize puro (texto y estilos intactos): el MISMO
+ *  layout del original (runs + gaps exactos), escalado — mover no debe cambiar
+ *  ningún gap. Edición de texto/estilos: un span por TRAMO estilado (el texto
+ *  fluye). Sin edición: layout original. */
+export function seedHtml(seg: SegmentNode, edit: SegmentEdit | null, scale: number): string {
+  if (edit) {
+    const ratio = (edit.fontSize ?? seg.fontSize) / seg.fontSize;
+    const pureMove = edit.text === seg.text && !edit.runs && edit.font === undefined
+      && edit.color === undefined && edit.charSpacing === undefined && edit.hScale === undefined;
+    if (pureMove) return originalLayoutHtml(seg, scale, ratio);
+    const dom = dominantRun(seg);
+    const source: StyledRun[] = edit.runs ?? [{ text: edit.text, bold: dom.font.bold, italic: dom.font.italic, dx: 0 }];
+    return runsToHtml(seg, source, ratio, scale);
+  }
+  return originalLayoutHtml(seg, scale, 1);
 }
 
 /** DOM editado → runs estilados. data-b/data-i de los spans sembrados manda;

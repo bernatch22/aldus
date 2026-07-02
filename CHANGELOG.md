@@ -4,6 +4,17 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### fix(editor): mover un texto ya no cambia sus GAPS — el move puro usa el layout original exacto
+`seedHtml` con edición colapsaba TODO el texto a un solo span (estilo dominante, texto
+fluido): los gaps entre runs quedaban como espacios naturales de la fuente, no los del
+PDF — al mover un segmento con blanks ("____ ____") el gap visible cambiaba. Ahora:
+- **Move/resize puro** (texto y estilos intactos) renderiza con `originalLayoutHtml`:
+  un span por run, letter-spacing fit y el gap EXACTO del PDF entre runs, escalado por
+  el ratio del resize. Mover no altera ni un gap.
+- Los word-gaps además COMPENSAN la diferencia entre el ancho real del gap y el espacio
+  de la fuente (margin-left delta) — cada run cae en su x exacto también al editar.
+- Solo una edición real de texto/estilos pasa al modo "texto fluido" (span por tramo).
+
 ### fix(editor): color muestreado — runs que tocan campos NO se muestrean; grises jamás son "color"
 Confirmado con logs en vivo (`color=#dcdcdc`, fuentes `VIVO=true STABLE=true`): el color
 "buggeado" del texto bajo los inputs era el BORDE antialiaseado del campo derramándose

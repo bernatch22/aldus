@@ -4,6 +4,19 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### refactor(editor): TextEditLayer — EL editor de texto como singleton imperativo (patrón pdf.js edit-box-manager)
+Tras tres parches al churn (preview congelado, html congelado, freeze de lifts) el editor
+inline seguía muriendo (edit-open ×3, blur "nadie": REMOUNTS del SegmentBox que ninguna
+instrumentación terminaba de atribuir). Rediseño estructural, como lo hacen pdf.js
+(edit box manager de FreeText) y Excalidraw (textarea singleton): UN solo contentEditable
+montado UNA vez en la raíz del overlay, abierto/cerrado IMPERATIVAMENTE (`open(session)`
+posiciona, siembra innerHTML, foca; listeners nativos atados una sola vez; commit por
+serialize en blur/Enter/Escape). Vive fuera del subtree reactivo: ningún grafo nuevo,
+preview o re-render puede desmontarlo, resembrarlo ni robarle el foco — la clase entera
+de bugs muere por construcción. `SegmentBox` ya no tiene editable propio (solo lo
+solicita); sesión con callbacks que leen por refs (`editsRef`). El gap de ítem pelado,
+Cmd+B/I, SELECTION_STYLE_EVENT, beforeinput y el toggle de lista en vivo siguen igual.
+
 ### fix(editor): toggle de lista EN VIVO con el editor abierto — muta el DOM como B/I/color
 Los traces finales mostraron que el flujo de fondo YA funcionaba (commits "•  asd" y
 "•  sdad" correctos, gap sembrado, Enter fluido) — lo roto era lo VISIBLE: con el editor

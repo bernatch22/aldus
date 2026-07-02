@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { getDocument, type PDFDocumentProxy } from 'pdfjs-dist';
 import { effectiveGeometry, mergeSegmentEdit, type ImageEdit, type PageGraph, type SegmentEdit } from '@aldus/core';
@@ -44,14 +44,39 @@ export function EditorPage() {
     });
   }, []);
 
+  // Las ediciones de IMAGEN se aplican AL INSTANTE (bake inmediato + recarga):
+  // son operaciones atómicas y seguras, y el preview intermedio (imagen
+  // duplicada original+fantasma) confundía. El map solo retiene la edición
+  // mientras el bake está en vuelo, para el feedback visual.
+  const imgBusy = useRef(false);
   const onImageEdit = useCallback((edit: ImageEdit | { imageId: string; revert: true }) => {
-    setImageEdits(prev => {
-      const next = new Map(prev);
-      if ('revert' in edit) next.delete(edit.imageId);
-      else next.set(edit.imageId, edit);
-      return next;
-    });
-  }, []);
+    if ('revert' in edit) {
+      setImageEdits(prev => {
+        const next = new Map(prev);
+        next.delete(edit.imageId);
+        return next;
+      });
+      return;
+    }
+    if (imgBusy.current) return;
+    imgBusy.current = true;
+    setImageEdits(prev => new Map(prev).set(edit.imageId, edit));
+    setError('');
+    api.bake(id, [], [edit])
+      .then(r => {
+        setDocVersion(v => v + 1);
+        setNotice(r.warnings.length ? `Imagen: ${r.warnings.join(' · ')}` : 'Imagen aplicada ✓');
+      })
+      .catch(e => setError(e instanceof Error ? e.message : 'No se pudo aplicar la imagen'))
+      .finally(() => {
+        imgBusy.current = false;
+        setImageEdits(prev => {
+          const next = new Map(prev);
+          next.delete(edit.imageId);
+          return next;
+        });
+      });
+  }, [id]);
 
   // Teclado: con un segmento seleccionado las flechas hacen NUDGE (Shift = 5pt);
   // sin selección, ←/→ y PageUp/PageDown navegan páginas. Nunca mientras se tipea.
@@ -105,9 +130,8 @@ export function EditorPage() {
     setError('');
     setNotice('');
     try {
-      const r = await api.bake(id, [...edits.values()], [...imageEdits.values()]);
+      const r = await api.bake(id, [...edits.values()], []);
       setEdits(new Map());
-      setImageEdits(new Map());
       setSelectedId(null);
       setDocVersion(v => v + 1);
       setNotice(r.warnings.length ? `Aplicado con avisos: ${r.warnings.join(' · ')}` : `Aplicado ✓ (${r.applied.length})`);
@@ -116,10 +140,10 @@ export function EditorPage() {
     } finally {
       setBaking(false);
     }
-  }, [id, edits, imageEdits]);
+  }, [id, edits]);
 
   const numPages = pdf?.numPages ?? 0;
-  const totalEdits = edits.size + imageEdits.size;
+  const totalEdits = edits.size;
   const pageEdits = useMemo(
     () => new Map([...edits].filter(([, e]) => e.page === pageNum)),
     [edits, pageNum],

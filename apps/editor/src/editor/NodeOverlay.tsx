@@ -145,10 +145,10 @@ function ImageBox({ img, pageHeight, scale, selected, edit, snapshot, onSelect, 
       <div
         className={`img-removed${selected ? ' selected' : ''}`}
         style={{ left: orig.left, top: orig.top, width: orig.width, height: orig.height }}
-        title="Imagen eliminada — Aplicar al PDF para confirmar"
+        title="Eliminando imagen…"
         onClick={e => { e.stopPropagation(); onSelect(); }}
       >
-        <span className="ghost-label">se elimina al Aplicar</span>
+        <span className="ghost-label">eliminando…</span>
       </div>
     );
   }
@@ -205,7 +205,7 @@ function ImageBox({ img, pageHeight, scale, selected, edit, snapshot, onSelect, 
           });
         }}
       >
-        {ghost && <span className="ghost-label">preview — Aplicar al PDF</span>}
+        {ghost && <span className="ghost-label">aplicando…</span>}
         {selected && (
           <div
             className="seg-grip"

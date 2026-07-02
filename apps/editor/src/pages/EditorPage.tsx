@@ -69,10 +69,16 @@ export function EditorPage() {
   const [imageEdits, setImageEdits] = useState<Map<string, ImageEdit>>(new Map());
   const [widgetEdits, setWidgetEdits] = useState<Map<string, WidgetEdit>>(new Map());
   const [pendingHighlights, setPendingHighlights] = useState<PendingHighlight[]>([]);
-  // Segmentos EN ARRASTRE: el preview los extirpa apenas arranca el gesto, así
-  // el original desaparece del canvas mientras el texto viaja — sin duplicado
-  // ni velo al soltar (el drop solo consolida en `edits` lo ya extirpado).
-  const [extirpating, setExtirpating] = useState<Set<string>>(new Set());
+  // LIFT (patrón del annotation editor de pdf.js: el canvas NO se toca durante
+  // el gesto). Al SELECCIONAR un texto se prepara en background la página SIN
+  // ese segmento; al arrancar el drag, PdfCanvas la blitea (un drawImage,
+  // instantáneo) y durante el arrastre no corre ningún pipeline — solo el
+  // transform CSS del box.
+  const [lift, setLift] = useState<{ segId: string; doc: PDFDocumentProxy } | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  // Drop consumado: el lift queda vivo (el canvas ya muestra sus píxeles)
+  // hasta que el preview re-horneado aterrice — recién ahí se descarta.
+  const dropPendingRef = useRef(false);
   const [baseBytes, setBaseBytes] = useState<Uint8Array | null>(null);
   const [baking, setBaking] = useState(false);
   const [notice, setNotice] = useState('');
@@ -247,34 +253,37 @@ export function EditorPage() {
     [],
   );
 
-  // ── PREVIEW HORNEADO LOCALMENTE: las ediciones pendientes de imágenes,
-  //    campos y highlights se aplican EN EL BROWSER (el mismo bake de core)
-  //    sobre una copia, y se renderiza ESO. WYSIWYG real, sin máscaras ni
-  //    duplicados, y el server no se toca hasta Aplicar. El texto sigue como
-  //    overlay editable aparte. ──
+  // Hornear los BYTES del preview: base + ediciones pendientes (texto editado
+  // EXTIRPADO — el overlay lo dibuja como fantasma) + imágenes + campos +
+  // highlights. `extraRemoval` extirpa además un segmento SIN edición (el
+  // lift del que está por arrastrarse).
+  const bakePending = useCallback(async (extraRemoval?: SegmentNode): Promise<Uint8Array> => {
+    if (!baseBytes) throw new Error('documento no cargado');
+    const { bakeSegmentEdits, addHighlight } = await import('@aldus/core/bake');
+    const textRemovals: SegmentEdit[] = [...edits.values()].map(e => ({
+      segmentId: e.segmentId, page: e.page, text: e.original.text, remove: true, original: e.original,
+    }));
+    if (extraRemoval && !edits.has(extraRemoval.id)) {
+      textRemovals.push({ segmentId: extraRemoval.id, page: extraRemoval.page, text: extraRemoval.text, remove: true, original: segmentOriginal(extraRemoval) });
+    }
+    const r = await bakeSegmentEdits(baseBytes.slice(), textRemovals, [...imageEdits.values()], [...widgetEdits.values()]);
+    let bytes = r.pdf;
+    for (const h of resolveHighlights()) ({ pdf: bytes } = await addHighlight(bytes, h));
+    return bytes;
+    // resolveHighlights es estable (lee refs) — NUNCA va en deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseBytes, edits, imageEdits, widgetEdits]);
+
+  // ── PREVIEW HORNEADO LOCALMENTE: las ediciones pendientes se aplican EN EL
+  //    BROWSER (el mismo bake de core) sobre una copia, y se renderiza ESO.
+  //    WYSIWYG real, sin máscaras ni duplicados; el server no se toca hasta
+  //    Aplicar. El texto sigue como overlay editable aparte. ──
   useEffect(() => {
     if (!baseBytes) return;
     let cancelled = false;
     (async () => {
-      let bytes: Uint8Array = baseBytes;
-      if (edits.size || extirpating.size || imageEdits.size || widgetEdits.size || pendingHighlights.length) {
-        const { bakeSegmentEdits, addHighlight } = await import('@aldus/core/bake');
-        // Los segmentos editados se EXTIRPAN del preview (sus ops desaparecen
-        // — sin máscaras ni velos en la posición original); el overlay dibuja
-        // el estado nuevo como fantasma transparente desde el cache. Los que
-        // están EN ARRASTRE se extirpan igual (aunque aún no tengan edit).
-        const textRemovals: SegmentEdit[] = [...edits.values()].map(e => ({
-          segmentId: e.segmentId, page: e.page, text: e.original.text, remove: true, original: e.original,
-        }));
-        for (const sid of extirpating) {
-          if (edits.has(sid)) continue;
-          const s = segCache.current.get(sid);
-          if (s) textRemovals.push({ segmentId: s.id, page: s.page, text: s.text, remove: true, original: segmentOriginal(s) });
-        }
-        const r = await bakeSegmentEdits(baseBytes.slice(), textRemovals, [...imageEdits.values()], [...widgetEdits.values()]);
-        bytes = r.pdf;
-        for (const h of resolveHighlights()) ({ pdf: bytes } = await addHighlight(bytes, h));
-      }
+      const pending = edits.size || imageEdits.size || widgetEdits.size || pendingHighlights.length;
+      const bytes = pending ? await bakePending() : baseBytes;
       if (cancelled) return;
       // pdf.js TRANSFIERE el buffer al worker → siempre una copia.
       const task = getDocument({ data: bytes.slice() });
@@ -283,31 +292,63 @@ export function EditorPage() {
       setPdf(prev => { void prev?.destroy(); return doc; });
     })().catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'No se pudo generar el preview'); });
     return () => { cancelled = true; };
-    // resolveHighlights es estable (lee refs) — NUNCA va en deps.
+  }, [baseBytes, bakePending, edits, imageEdits, widgetEdits, pendingHighlights]);
+
+  // ── PREPARAR EL LIFT al seleccionar un texto (todavía presente en el canvas):
+  //    hornear la página sin él AHORA, en el tiempo muerto entre el click y el
+  //    posible arrastre. Si el drag arranca, el blit es instantáneo. ──
+  useEffect(() => {
+    const sid = selectedId;
+    const seg = sid && !edits.has(sid) ? graphRef.current?.segments.find(s => s.id === sid) : null;
+    if (!seg || !baseBytes) {
+      // Nada que preparar. Ojo: tras un drop consumado el lift NO se descarta
+      // acá (el canvas muestra sus píxeles) — lo descarta handleGraph cuando
+      // el preview re-horneado aterriza.
+      if (!dropPendingRef.current) setLift(prev => { void prev?.doc.destroy(); return null; });
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const bytes = await bakePending(seg);
+      if (cancelled) return;
+      const doc = await getDocument({ data: bytes.slice() }).promise;
+      if (cancelled) { void doc.destroy(); return; }
+      setLift(prev => { void prev?.doc.destroy(); return { segId: seg.id, doc }; });
+    })().catch(() => { /* sin lift: el drag cae al camino lento (blit al aterrizar) */ });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseBytes, edits, extirpating, imageEdits, widgetEdits, pendingHighlights]);
+  }, [selectedId, baseBytes, bakePending, edits, pendingHighlights]);
 
   // Cache del NODO original de cada segmento editado: el preview extirpa sus
   // ops (desaparece del grafo extraído), así que el overlay lo dibuja como
   // "fantasma" desde acá (con la edición aplicada, transparente).
   const segCache = useRef(new Map<string, SegmentNode>());
 
-  // Arranque/fin de un ARRASTRE de texto: cachear el nodo y extirparlo del
-  // preview YA (no al soltar) — el original se esfuma mientras el texto viaja.
-  const onDragging = useCallback((segId: string, active: boolean) => {
+  // Arranque/fin del ARRASTRE. Al arrancar, PdfCanvas blitea el lift (si está
+  // listo). Al soltar: si el drop COMMITEÓ una edición, el lift queda en
+  // pantalla hasta que el preview re-horneado (píxeles idénticos) aterrice;
+  // si fue un no-op (soltó donde estaba), se cancela y el canvas se restaura.
+  const onDragging = useCallback((segId: string, active: boolean, committed = false) => {
     if (active) {
       if (!segCache.current.has(segId)) {
         const s = graphRef.current?.segments.find(x => x.id === segId);
         if (s) segCache.current.set(segId, s);
       }
-      setExtirpating(prev => (prev.has(segId) ? prev : new Set(prev).add(segId)));
-    } else {
-      setExtirpating(prev => {
-        if (!prev.has(segId)) return prev;
-        const next = new Set(prev);
-        next.delete(segId);
-        return next;
-      });
+      setDraggingId(segId);
+      return;
+    }
+    setDraggingId(null);
+    if (committed) dropPendingRef.current = true;
+    else setLift(prev => (prev?.segId === segId ? (void prev.doc.destroy(), null) : prev));
+  }, []);
+
+  // El grafo nuevo llega = el preview aterrizó: si había un drop en vuelo,
+  // el documento visible ya es el re-horneado — descartar el lift.
+  const handleGraph = useCallback((g: PageGraph) => {
+    setGraph(g);
+    if (dropPendingRef.current) {
+      dropPendingRef.current = false;
+      setLift(prev => { void prev?.doc.destroy(); return null; });
     }
   }, []);
 
@@ -439,13 +480,13 @@ export function EditorPage() {
   // FANTASMAS (nodo original cacheado + edición aplicada, transparente).
   const phantomSegments = useMemo(() => {
     const out: SegmentNode[] = [];
-    const ids = new Set([...edits.keys(), ...extirpating]);
-    for (const sid of ids) {
-      const s = segCache.current.get(sid);
-      if (s && s.page === pageNum) out.push(s);
+    for (const e of edits.values()) {
+      if (e.page !== pageNum) continue;
+      const s = segCache.current.get(e.segmentId);
+      if (s) out.push(s);
     }
     return out;
-  }, [edits, extirpating, pageNum]);
+  }, [edits, pageNum]);
 
   const toolActive = (p: Placing): boolean =>
     !!placing && !!p && placing.kind === p.kind &&
@@ -532,7 +573,7 @@ export function EditorPage() {
             <div className="h-max">
               <PdfCanvas
                 pdf={pdf} pageNum={pageNum} scale={scale}
-                onGraph={setGraph} graph={graph?.page === pageNum ? graph : null}
+                onGraph={handleGraph} graph={graph?.page === pageNum ? graph : null}
                 selectedId={selectedId} onSelect={setSelectedId}
                 edits={pageEdits} onEdit={onEdit}
                 imageEdits={pageImageEdits} onImageEdit={onImageEdit}
@@ -542,6 +583,7 @@ export function EditorPage() {
                 highlightColor={highlightColor} onHighlightColor={setHl}
                 phantomSegments={phantomSegments}
                 onDragging={onDragging}
+                lift={lift} draggingId={draggingId}
               />
             </div>
           ) : (

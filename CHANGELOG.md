@@ -4,6 +4,25 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### feat(editor): drag natural — LIFT pre-horneado en la selección, cero pipeline durante el gesto
+Rediseño de la interacción de mover texto siguiendo el patrón del annotation editor de
+pdf.js (el canvas NO se toca durante un gesto; el elemento viaja como DOM y el render
+pesado ocurre fuera del gesto). Antes el bake+render+extracción corrían EN MEDIO del
+arrastre → jank y "refresh" a mitad de gesto.
+- **Al seleccionar** un texto (aún presente en el canvas) se hornea en background la
+  página SIN ese segmento (`bakePending(extraRemoval)`) y PdfCanvas la renderiza a un
+  buffer offscreen (`liftBack`) — todo en el tiempo muerto entre click y drag.
+- **Al arrancar el drag** (umbral 3px): un único `drawImage` blitea el lift — el
+  original se esfuma al "levantarlo". Durante el arrastre no corre NADA (ni bake, ni
+  render, ni extracción de grafo): solo el transform CSS del box.
+- **Drop con cambio**: commit del edit; el preview re-horneado produce píxeles idénticos
+  al lift visible (blit invisible); la extracción del grafo ocurre POST-gesto y el
+  fantasma releva al box sin salto. El lift se descarta recién cuando el grafo nuevo
+  aterriza (`handleGraph` + `dropPendingRef`).
+- **Drop no-op** (soltó donde estaba): sin commit, se restaura el buffer principal.
+- `PdfCanvas`: `renderToBackBuffer()` compartido para preview y lift; el canvas visible
+  solo recibe blits atómicos. `NodeOverlay.onDragging(segId, active, committed)`.
+
 ### fix(editor): double-buffering del canvas — los updates del preview ya no se ven como un "refresh"
 `PdfCanvas` renderizaba directo sobre el canvas visible: `canvas.width = …` lo LIMPIA,
 así que cada update del preview (extirpación al arrancar un drag, drop, nudge, highlight)

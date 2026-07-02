@@ -35,68 +35,90 @@ interface Props {
   highlightColor: string;
   onHighlightColor: (c: string) => void;
   phantomSegments: SegmentNode[];
-  onDragging: (segId: string, active: boolean) => void;
+  onDragging: (segId: string, active: boolean, committed?: boolean) => void;
+  /** Página pre-horneada SIN el segmento seleccionado (lista para blitear). */
+  lift: { segId: string; doc: PDFDocumentProxy } | null;
+  /** Segmento en arrastre (si coincide con el lift, se blitea su buffer). */
+  draggingId: string | null;
 }
 
-export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging }: Props) {
+/** Renderiza una página de pdf.js en un canvas offscreen (HiDPI). */
+async function renderToBackBuffer(doc: PDFDocumentProxy, pageNum: number, scale: number, taskRef: { current: RenderTask | null }): Promise<HTMLCanvasElement | null> {
+  const page = await doc.getPage(pageNum);
+  const viewport = page.getViewport({ scale });
+  const dpr = window.devicePixelRatio || 1;
+  const back = document.createElement('canvas');
+  back.width = Math.floor(viewport.width * dpr);
+  back.height = Math.floor(viewport.height * dpr);
+  const ctx = back.getContext('2d');
+  if (!ctx) return null;
+  taskRef.current?.cancel();
+  const task = page.render({
+    canvasContext: ctx,
+    viewport,
+    transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
+  });
+  taskRef.current = task;
+  try {
+    await task.promise;
+  } catch {
+    return null; // cancelado por un render más nuevo
+  }
+  return back;
+}
+
+export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, lift, draggingId }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
+  const liftTaskRef = useRef<RenderTask | null>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   // Snapshot de la página renderizada: los previews de imágenes movidas lo usan
   // como fuente de píxeles (crop por background-position).
   const [snapshot, setSnapshot] = useState<{ url: string; width: number; height: number } | null>(null);
 
+  // DOUBLE BUFFER + LIFT (así lo hace el annotation editor de pdf.js: el canvas
+  // no se toca durante un gesto). `mainBack` = último render del preview;
+  // `liftBack` = la página sin el segmento seleccionado, pre-renderizada. El
+  // visible SOLO recibe drawImage atómicos — nunca se limpia ni renderiza
+  // en vivo, así ningún update se ve como un "refresh".
+  const mainBackRef = useRef<HTMLCanvasElement | null>(null);
+  const liftBackRef = useRef<{ segId: string; canvas: HTMLCanvasElement } | null>(null);
+  const liftShownRef = useRef(false);
+  const draggingRef = useRef<string | null>(null);
+  draggingRef.current = draggingId;
+
+  const blit = (src: HTMLCanvasElement) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    if (canvas.width !== src.width || canvas.height !== src.height) {
+      canvas.width = src.width;
+      canvas.height = src.height;
+    }
+    const dpr = window.devicePixelRatio || 1;
+    canvas.style.width = `${Math.floor(src.width / dpr)}px`;
+    canvas.style.height = `${Math.floor(src.height / dpr)}px`;
+    canvas.getContext('2d')?.drawImage(src, 0, 0);
+  };
+
+  // Render principal: preview → back buffer → blit → snapshot + grafo.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const page = await pdf.getPage(pageNum);
-      if (cancelled) return;
-      const viewport = page.getViewport({ scale });
+      const back = await renderToBackBuffer(pdf, pageNum, scale, renderTaskRef);
+      if (cancelled || !back) return;
       const dpr = window.devicePixelRatio || 1;
-      const w = Math.floor(viewport.width);
-      const h = Math.floor(viewport.height);
-
-      // DOUBLE BUFFER: pdf.js renderiza en un canvas FUERA de pantalla y el
-      // visible se actualiza con UN drawImage al final. Renderizar directo
-      // limpiaba el canvas (canvas.width = …) y la página quedaba en blanco
-      // hasta terminar — cada update del preview se veía como un "refresh".
-      const back = document.createElement('canvas');
-      back.width = Math.floor(viewport.width * dpr);
-      back.height = Math.floor(viewport.height * dpr);
-      const backCtx = back.getContext('2d');
-      if (!backCtx) return;
-
-      renderTaskRef.current?.cancel();
-      const task = page.render({
-        canvasContext: backCtx,
-        viewport,
-        transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
-      });
-      renderTaskRef.current = task;
-      try {
-        await task.promise;
-      } catch {
-        return; // render cancelado por un cambio de página/zoom — el nuevo ya corre
-      }
-      if (cancelled) return;
-
-      // Blit atómico: la página vieja queda visible hasta este frame.
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      if (canvas.width !== back.width || canvas.height !== back.height) {
-        canvas.width = back.width;
-        canvas.height = back.height;
-      }
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${h}px`;
-      canvas.getContext('2d')?.drawImage(back, 0, 0);
+      const w = Math.floor(back.width / dpr);
+      const h = Math.floor(back.height / dpr);
+      mainBackRef.current = back;
+      blit(back);
+      liftShownRef.current = false; // el preview manda: el lift quedó atrás
       setSize({ w, h });
-
       try {
         setSnapshot({ url: back.toDataURL('image/jpeg', 0.7), width: w, height: h });
       } catch {
         setSnapshot(null);
       }
+      const page = await pdf.getPage(pageNum);
       const g = await extractPageGraph(page as unknown as PdfJsPage);
       if (cancelled) return;
       // Muestrear el color de cada run del canvas ya pintado (para el display).
@@ -108,6 +130,45 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
       renderTaskRef.current?.cancel();
     };
   }, [pdf, pageNum, scale, onGraph]);
+
+  // Render del LIFT (en background, mientras el usuario todavía no arrastra).
+  // Nada de snapshot/grafo acá: es solo un buffer listo para blitear.
+  useEffect(() => {
+    if (!lift) {
+      // Lift cancelado (drop no-op): si estaba en pantalla, restaurar el preview.
+      if (liftShownRef.current && mainBackRef.current) {
+        blit(mainBackRef.current);
+        liftShownRef.current = false;
+      }
+      liftBackRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const back = await renderToBackBuffer(lift.doc, pageNum, scale, liftTaskRef);
+      if (cancelled || !back) return;
+      liftBackRef.current = { segId: lift.segId, canvas: back };
+      // ¿El drag ya arrancó mientras renderizábamos? Blitear ya mismo.
+      if (draggingRef.current === lift.segId) {
+        blit(back);
+        liftShownRef.current = true;
+      }
+    })().catch(() => { /* doc del lift destruido a mitad de render — irrelevante */ });
+    return () => {
+      cancelled = true;
+      liftTaskRef.current?.cancel();
+    };
+  }, [lift, pageNum, scale]);
+
+  // Arrancó el arrastre → blit instantáneo del lift (si ya está listo).
+  useEffect(() => {
+    if (!draggingId) return;
+    const lb = liftBackRef.current;
+    if (lb && lb.segId === draggingId && !liftShownRef.current) {
+      blit(lb.canvas);
+      liftShownRef.current = true;
+    }
+  }, [draggingId]);
 
   return (
     <div className="pdf-stage" style={size ? { width: size.w, height: size.h } : undefined}>

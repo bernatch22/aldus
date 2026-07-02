@@ -98,8 +98,9 @@ interface Props {
   onHighlightColor: (c: string) => void;
   /** Segmentos editados (extirpados del preview): se dibujan desde el cache. */
   phantomSegments: SegmentNode[];
-  /** Arranque/fin del arrastre de un segmento (extirpación temprana). */
-  onDragging: (segId: string, active: boolean) => void;
+  /** Arranque/fin del arrastre de un segmento. En el fin, `committed` dice si
+      el drop produjo una edición (false = no-op → restaurar el canvas). */
+  onDragging: (segId: string, active: boolean, committed?: boolean) => void;
 }
 
 /** Botón chico de una toolbar flotante. */
@@ -325,7 +326,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           editing={editingId === seg.id}
           edit={edits.get(seg.id) ?? null}
           isLocked={locked.has(seg.id)}
-          onDragging={active => onDragging(seg.id, active)}
+          onDragging={(active, committed) => onDragging(seg.id, active, committed)}
           onSelect={() => selectNode(seg.id)}
           onStartEdit={() => { selectNode(seg.id); setEditingId(seg.id); }}
           onStopEdit={() => setEditingId(null)}
@@ -650,7 +651,7 @@ interface SegmentBoxProps {
   editing: boolean;
   edit: SegmentEdit | null;
   isLocked: boolean;
-  onDragging: (active: boolean) => void;
+  onDragging: (active: boolean, committed?: boolean) => void;
   onSelect: () => void;
   onStartEdit: () => void;
   onStopEdit: () => void;
@@ -780,8 +781,8 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
           const dy = e.clientY - start.py;
           if (!start.moved && Math.abs(dx) + Math.abs(dy) > 3) {
             start.moved = true;
-            // Extirpación TEMPRANA: el preview borra el original apenas
-            // arranca el gesto — el texto viaja sin quedar duplicado atrás.
+            // El gesto arrancó: PdfCanvas blitea el lift pre-horneado (la
+            // página sin este texto) — el original se esfuma al "levantarlo".
             onDragging(true);
           }
           if (start.moved) setDrag({ dx, dy });
@@ -793,19 +794,25 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
           if (!start?.moved) return;
           const nx = round1(clampX(eff.x + (e.clientX - start.px) / scale, eff.width, pageWidth));
           const nb = round1(Math.min(Math.max(eff.baseline - (e.clientY - start.py) / scale, 8), pageHeight - 4));
-          // El commit y el fin del arrastre van en el MISMO lote de estado:
-          // la extirpación en vuelo la releva el edit sin re-bake visible.
+          const noop = edit == null && nx === round1(seg.x) && nb === round1(seg.baseline);
+          if (noop) {
+            // Soltó donde estaba: nada que commitear — cancelar el lift.
+            onDragging(false, false);
+            return;
+          }
+          // El commit y el fin del arrastre van en el MISMO lote de estado: el
+          // preview re-horneado tendrá píxeles idénticos al lift ya visible.
           onPatch({
             x: nx === round1(seg.x) ? null : nx,
             baseline: nb === round1(seg.baseline) ? null : nb,
           });
-          onDragging(false);
+          onDragging(false, true);
         }}
         onPointerCancel={() => {
           const start = dragStart.current;
           dragStart.current = null;
           setDrag(null);
-          if (start?.moved) onDragging(false);
+          if (start?.moved) onDragging(false, false);
         }}
         title={editing ? undefined : (edit?.text ?? seg.text)}
       >

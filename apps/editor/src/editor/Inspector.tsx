@@ -18,6 +18,7 @@ import {
   type StyledRun,
 } from '@aldus/core';
 import type { EditAction } from './NodeOverlay';
+import { activeEditingBox, SELECTION_STYLE_EVENT } from './styledDom';
 
 interface Props {
   graph: PageGraph | null;
@@ -111,6 +112,15 @@ function ObjectProperties({ seg, edit, onClose, onEdit }: PropsPanelProps) {
   const allBold = styled.length > 0 && styled.every(r => r.bold);
   const allItalic = styled.length > 0 && styled.every(r => r.italic);
   const setRuns = (runs: StyledRun[]) => commit({ runs });
+  /** Con un box EN EDICIÓN, el toggle va a la SELECCIÓN (el mousedown del botón
+   *  hace preventDefault, así el editable no pierde foco ni selección). */
+  const toggleStyle = (key: 'bold' | 'italic', fallback: () => void) => {
+    if (activeEditingBox()) {
+      window.dispatchEvent(new CustomEvent(SELECTION_STYLE_EVENT, { detail: { key } }));
+      return;
+    }
+    fallback();
+  };
   const curSize = edit?.fontSize ?? seg.fontSize;
   const curFont: FontBucket | 'original' = edit?.font ?? 'original';
   const curX = edit?.x ?? seg.x;
@@ -142,13 +152,15 @@ function ObjectProperties({ seg, edit, onClose, onEdit }: PropsPanelProps) {
       <div className="prop-row">
         <button
           className={`toggle${allBold ? ' active' : ''}`}
-          title="Bold (todo el segmento)"
-          onClick={() => setRuns(styled.map(r => ({ ...r, bold: !allBold })))}
+          title="Bold (a la selección si estás editando; si no, todo el segmento)"
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => toggleStyle('bold', () => setRuns(styled.map(r => ({ ...r, bold: !allBold }))))}
         ><strong>B</strong></button>
         <button
           className={`toggle${allItalic ? ' active' : ''}`}
-          title="Italic (todo el segmento)"
-          onClick={() => setRuns(styled.map(r => ({ ...r, italic: !allItalic })))}
+          title="Italic (a la selección si estás editando; si no, todo el segmento)"
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => toggleStyle('italic', () => setRuns(styled.map(r => ({ ...r, italic: !allItalic }))))}
         ><em>I</em></button>
         <input
           className="prop-input num"
@@ -186,11 +198,13 @@ function ObjectProperties({ seg, edit, onClose, onEdit }: PropsPanelProps) {
                 <button
                   className={`toggle mini${r.bold ? ' active' : ''}`}
                   title="Bold de este tramo"
+                  onMouseDown={e => e.preventDefault()}
                   onClick={() => setRuns(styled.map((s, j) => (j === i ? { ...s, bold: !s.bold } : s)))}
                 ><strong>B</strong></button>
                 <button
                   className={`toggle mini${r.italic ? ' active' : ''}`}
                   title="Italic de este tramo"
+                  onMouseDown={e => e.preventDefault()}
                   onClick={() => setRuns(styled.map((s, j) => (j === i ? { ...s, italic: !s.italic } : s)))}
                 ><em>I</em></button>
               </li>

@@ -1,0 +1,117 @@
+:root {
+  --accent: #4f46e5;
+  --ink: #1c1c28;
+  --muted: #71717a;
+  --line: #e4e4e7;
+  --bg: #fafafa;
+  --edited: #b45309;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; height: 100%; }
+body {
+  font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+button {
+  font: inherit;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.45; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.muted { color: var(--muted); }
+.error { color: #b91c1c; }
+.mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+
+/* ── Home ── */
+.home { max-width: 640px; margin: 0 auto; padding: 48px 24px; }
+.home-head h1 { margin: 0; font-size: 32px; letter-spacing: -0.5px; }
+.home-head p { color: var(--muted); margin-top: 4px; }
+.dropzone {
+  margin-top: 24px;
+  border: 2px dashed var(--line);
+  border-radius: 12px;
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--muted);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.dropzone:hover, .dropzone.dragging { border-color: var(--accent); background: #f5f4ff; }
+.doc-list { list-style: none; margin: 24px 0 0; padding: 0; }
+.doc-list li a {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px;
+  margin-bottom: 8px; text-decoration: none; color: inherit; background: #fff;
+}
+.doc-list li a:hover { border-color: var(--accent); }
+.doc-name { font-weight: 500; }
+.doc-meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+/* ── Editor shell ── */
+.editor-shell { display: flex; flex-direction: column; height: 100%; }
+.toolbar {
+  display: flex; align-items: center; gap: 16px;
+  padding: 8px 14px; background: #fff; border-bottom: 1px solid var(--line);
+}
+.brand { font-weight: 700; color: var(--accent); text-decoration: none; }
+.toolbar-group { display: flex; align-items: center; gap: 8px; }
+.toolbar-group.grow { flex: 1; }
+.editor-body { display: flex; flex: 1; min-height: 0; }
+.page-area { flex: 1; overflow: auto; padding: 24px; display: flex; justify-content: center; align-items: flex-start; }
+.center { margin: auto; }
+
+/* ── La página + overlay ── */
+.pdf-stage { position: relative; box-shadow: 0 1px 8px rgba(0, 0, 0, 0.18); background: #fff; }
+.pdf-stage canvas { display: block; }
+.node-overlay { position: absolute; inset: 0; }
+
+.seg-box {
+  position: absolute;
+  cursor: pointer;
+  border-radius: 2px;
+  outline: 1px solid transparent;
+  outline-offset: 1px;
+}
+.seg-box:hover { outline-color: rgba(79, 70, 229, 0.55); background: rgba(79, 70, 229, 0.06); }
+.seg-box.selected { outline-color: var(--accent); background: rgba(79, 70, 229, 0.08); }
+.seg-box.masked { background: #fff; cursor: text; }
+.seg-box.masked:hover { background: #fff; }
+.seg-box.edited { outline-color: var(--edited); }
+
+.seg-text {
+  white-space: pre;
+  outline: none;
+  min-height: 100%;
+  width: max-content;
+  color: #000;
+}
+
+/* ── Inspector ── */
+.inspector {
+  width: 320px; flex-shrink: 0; overflow-y: auto;
+  background: #fff; border-left: 1px solid var(--line);
+  padding: 14px; font-size: 13px;
+}
+.insp-head { display: flex; justify-content: space-between; align-items: center; }
+.insp-head h3 { margin: 0; font-size: 14px; }
+.insp-props { display: grid; grid-template-columns: 72px 1fr; gap: 4px 8px; margin: 12px 0; }
+.insp-props dt { color: var(--muted); }
+.insp-props dd { margin: 0; overflow-wrap: anywhere; }
+.inspector h4 { margin: 16px 0 6px; font-size: 13px; }
+.run-list, .line-list { list-style: none; margin: 0; padding: 0; }
+.run-list li { padding: 6px 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
+.run-list .muted, .line-list .muted { font-size: 11px; }
+.line-list li.line-group { border-top: 1px solid var(--line); padding: 2px 0; }
+.seg-item {
+  padding: 4px 6px; border-radius: 6px; cursor: pointer;
+  display: flex; flex-direction: column; gap: 1px;
+}
+.seg-item:hover { background: #f4f4f5; }
+.seg-item.edited .mono { color: var(--edited); }
+.line-list .mono { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

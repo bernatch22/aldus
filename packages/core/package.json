@@ -1,0 +1,20 @@
+{
+  "name": "@aldus/core",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "El motor de Aldus: modelo tipado del grafo de contenido de un PDF, extracción con geometría real y helpers de coordenadas.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "peerDependencies": {
+    "pdfjs-dist": ">=4"
+  },
+  "peerDependenciesMeta": {
+    "pdfjs-dist": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

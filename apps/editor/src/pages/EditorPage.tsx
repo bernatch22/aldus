@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { getDocument, type PDFDocumentProxy } from 'pdfjs-dist';
 import {
-  effectiveGeometry, FIELD_DEFAULT_SIZE, mergeSegmentEdit,
+  effectiveGeometry, FIELD_DEFAULT_SIZE, mergeSegmentEdit, segmentOriginal,
   type ImageEdit, type PageGraph, type SegmentEdit, type SegmentNode, type WidgetEdit, type WidgetKind,
 } from '@aldus/core';
 import {
@@ -69,6 +69,10 @@ export function EditorPage() {
   const [imageEdits, setImageEdits] = useState<Map<string, ImageEdit>>(new Map());
   const [widgetEdits, setWidgetEdits] = useState<Map<string, WidgetEdit>>(new Map());
   const [pendingHighlights, setPendingHighlights] = useState<PendingHighlight[]>([]);
+  // Segmentos EN ARRASTRE: el preview los extirpa apenas arranca el gesto, así
+  // el original desaparece del canvas mientras el texto viaja — sin duplicado
+  // ni velo al soltar (el drop solo consolida en `edits` lo ya extirpado).
+  const [extirpating, setExtirpating] = useState<Set<string>>(new Set());
   const [baseBytes, setBaseBytes] = useState<Uint8Array | null>(null);
   const [baking, setBaking] = useState(false);
   const [notice, setNotice] = useState('');
@@ -253,14 +257,20 @@ export function EditorPage() {
     let cancelled = false;
     (async () => {
       let bytes: Uint8Array = baseBytes;
-      if (edits.size || imageEdits.size || widgetEdits.size || pendingHighlights.length) {
+      if (edits.size || extirpating.size || imageEdits.size || widgetEdits.size || pendingHighlights.length) {
         const { bakeSegmentEdits, addHighlight } = await import('@aldus/core/bake');
         // Los segmentos editados se EXTIRPAN del preview (sus ops desaparecen
         // — sin máscaras ni velos en la posición original); el overlay dibuja
-        // el estado nuevo como fantasma transparente desde el cache.
+        // el estado nuevo como fantasma transparente desde el cache. Los que
+        // están EN ARRASTRE se extirpan igual (aunque aún no tengan edit).
         const textRemovals: SegmentEdit[] = [...edits.values()].map(e => ({
           segmentId: e.segmentId, page: e.page, text: e.original.text, remove: true, original: e.original,
         }));
+        for (const sid of extirpating) {
+          if (edits.has(sid)) continue;
+          const s = segCache.current.get(sid);
+          if (s) textRemovals.push({ segmentId: s.id, page: s.page, text: s.text, remove: true, original: segmentOriginal(s) });
+        }
         const r = await bakeSegmentEdits(baseBytes.slice(), textRemovals, [...imageEdits.values()], [...widgetEdits.values()]);
         bytes = r.pdf;
         for (const h of resolveHighlights()) ({ pdf: bytes } = await addHighlight(bytes, h));
@@ -275,12 +285,32 @@ export function EditorPage() {
     return () => { cancelled = true; };
     // resolveHighlights es estable (lee refs) — NUNCA va en deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseBytes, edits, imageEdits, widgetEdits, pendingHighlights]);
+  }, [baseBytes, edits, extirpating, imageEdits, widgetEdits, pendingHighlights]);
 
   // Cache del NODO original de cada segmento editado: el preview extirpa sus
   // ops (desaparece del grafo extraído), así que el overlay lo dibuja como
   // "fantasma" desde acá (con la edición aplicada, transparente).
   const segCache = useRef(new Map<string, SegmentNode>());
+
+  // Arranque/fin de un ARRASTRE de texto: cachear el nodo y extirparlo del
+  // preview YA (no al soltar) — el original se esfuma mientras el texto viaja.
+  const onDragging = useCallback((segId: string, active: boolean) => {
+    if (active) {
+      if (!segCache.current.has(segId)) {
+        const s = graphRef.current?.segments.find(x => x.id === segId);
+        if (s) segCache.current.set(segId, s);
+      }
+      setExtirpating(prev => (prev.has(segId) ? prev : new Set(prev).add(segId)));
+    } else {
+      setExtirpating(prev => {
+        if (!prev.has(segId)) return prev;
+        const next = new Set(prev);
+        next.delete(segId);
+        return next;
+      });
+    }
+  }, []);
+
   const onEdit = useCallback((edit: SegmentEdit | { segmentId: string; revert: true }) => {
     pushHistory();
     if (!('revert' in edit) && !segCache.current.has(edit.segmentId)) {
@@ -409,13 +439,13 @@ export function EditorPage() {
   // FANTASMAS (nodo original cacheado + edición aplicada, transparente).
   const phantomSegments = useMemo(() => {
     const out: SegmentNode[] = [];
-    for (const e of edits.values()) {
-      if (e.page !== pageNum) continue;
-      const s = segCache.current.get(e.segmentId);
-      if (s) out.push(s);
+    const ids = new Set([...edits.keys(), ...extirpating]);
+    for (const sid of ids) {
+      const s = segCache.current.get(sid);
+      if (s && s.page === pageNum) out.push(s);
     }
     return out;
-  }, [edits, pageNum]);
+  }, [edits, extirpating, pageNum]);
 
   const toolActive = (p: Placing): boolean =>
     !!placing && !!p && placing.kind === p.kind &&
@@ -511,6 +541,7 @@ export function EditorPage() {
                 onDocOp={docOp} onRequestLink={requestLink} onAddText={onAddText}
                 highlightColor={highlightColor} onHighlightColor={setHl}
                 phantomSegments={phantomSegments}
+                onDragging={onDragging}
               />
             </div>
           ) : (

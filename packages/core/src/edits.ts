@@ -156,23 +156,29 @@ export function setStyleRange(
   return mergeAdjacent(pieces.map(p => (inRange(p) ? apply(p.run) : p.run)), runs[0]?.dx ?? 0);
 }
 
+/** Snapshot inmutable del estado ORIGINAL de un segmento (lo que el bake usa
+ *  para localizar sus ops por geometría). */
+export function segmentOriginal(seg: SegmentNode): SegmentEdit['original'] {
+  const dom = seg.runs.reduce((a, b) => (b.width > a.width ? b : a));
+  return {
+    text: seg.text, x: seg.x, baseline: seg.baseline, width: seg.width, fontSize: seg.fontSize,
+    bucket: dom.font.bucket, bold: dom.font.bold, italic: dom.font.italic,
+    runs: [...seg.runs].sort((a, b) => a.x - b.x).map(r => ({ x: r.x, bold: r.font.bold, italic: r.font.italic })),
+  };
+}
+
 export function mergeSegmentEdit(
   seg: SegmentNode,
   prev: SegmentEdit | null,
   patch: SegmentPatch,
 ): SegmentEdit | null {
-  const dom = seg.runs.reduce((a, b) => (b.width > a.width ? b : a));
   const next: SegmentEdit = prev
     ? { ...prev }
     : {
         segmentId: seg.id,
         page: seg.page,
         text: seg.text,
-        original: {
-          text: seg.text, x: seg.x, baseline: seg.baseline, width: seg.width, fontSize: seg.fontSize,
-          bucket: dom.font.bucket, bold: dom.font.bold, italic: dom.font.italic,
-          runs: [...seg.runs].sort((a, b) => a.x - b.x).map(r => ({ x: r.x, bold: r.font.bold, italic: r.font.italic })),
-        },
+        original: segmentOriginal(seg),
       };
 
   if (patch.runs !== undefined) {

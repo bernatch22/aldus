@@ -98,6 +98,8 @@ interface Props {
   onHighlightColor: (c: string) => void;
   /** Segmentos editados (extirpados del preview): se dibujan desde el cache. */
   phantomSegments: SegmentNode[];
+  /** Arranque/fin del arrastre de un segmento (extirpación temprana). */
+  onDragging: (segId: string, active: boolean) => void;
 }
 
 /** Botón chico de una toolbar flotante. */
@@ -264,7 +266,7 @@ function ObjectBar({ rect, pageWidth, width, onAlign, onZ, onDelete }: {
   );
 }
 
-export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments }: Props) {
+export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => setEditingId(null), [graph.page]);
 
@@ -322,8 +324,8 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           selected={selectedId === seg.id}
           editing={editingId === seg.id}
           edit={edits.get(seg.id) ?? null}
-          inPreview={inGraph.has(seg.id)}
           isLocked={locked.has(seg.id)}
+          onDragging={active => onDragging(seg.id, active)}
           onSelect={() => selectNode(seg.id)}
           onStartEdit={() => { selectNode(seg.id); setEditingId(seg.id); }}
           onStopEdit={() => setEditingId(null)}
@@ -647,10 +649,8 @@ interface SegmentBoxProps {
   selected: boolean;
   editing: boolean;
   edit: SegmentEdit | null;
-  /** true = el segmento sigue en el grafo del preview (sus glifos originales
-      aún se ven en el canvas — el bake extirpador no llegó todavía). */
-  inPreview: boolean;
   isLocked: boolean;
+  onDragging: (active: boolean) => void;
   onSelect: () => void;
   onStartEdit: () => void;
   onStopEdit: () => void;
@@ -662,10 +662,9 @@ interface SegmentBoxProps {
   onHighlightColor: (c: string) => void;
 }
 
-function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, inPreview, isLocked, onSelect, onStartEdit, onStopEdit, onPatch, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: SegmentBoxProps) {
+function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, isLocked, onDragging, onSelect, onStartEdit, onStopEdit, onPatch, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: SegmentBoxProps) {
   const eff = effectiveGeometry(seg, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
-  const originalRect = pdfRectToCss({ x: seg.x, y: seg.y, width: seg.width, height: seg.height }, pageHeight, scale);
   const editRef = useRef<HTMLDivElement>(null);
   const dragStart = useRef<{ px: number; py: number; moved: boolean } | null>(null);
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
@@ -719,22 +718,14 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
     };
   }, [editing, selected, seg, edit, scale]);
 
-  // VELO TRANSITORIO: mientras el segmento EDITADO siga en el grafo del preview
-  // (el bake extirpador es asíncrono — aún no llegó), sus glifos originales
-  // siguen pintados en el canvas → un velo esmerilado los tapa para que no se
-  // vea "duplicado". Cuando el preview nuevo aterriza, el segmento sale del
-  // grafo (pasa a fantasma) y el velo cae solo. DURANTE el arrastre no hay velo:
-  // el original queda visible mientras el texto viaja (como Acrobat), sin
-  // rectángulo blanco en la posición vieja.
-  const veil = inPreview && edit != null;
+  // Sin velos ni masks: la extirpación del original arranca CON el gesto
+  // (onDragging) — para cuando el usuario suelta, el canvas ya no tiene los
+  // glifos viejos. El único transitorio es el original desvaneciéndose una
+  // fracción de segundo al arrancar el drag (el bake local aterrizando).
 
   // Segmento eliminado: el preview local lo extirpa — nada que dibujar
-  // (Ctrl+Z lo restaura); el velo tapa los glifos hasta que el bake llegue.
-  if (edit?.remove) {
-    return veil
-      ? <div className="seg-mask" style={{ left: originalRect.left, top: originalRect.top, width: originalRect.width, height: originalRect.height }} />
-      : null;
-  }
+  // (Ctrl+Z lo restaura).
+  if (edit?.remove) return null;
 
   // Un segmento con edición pendiente fue EXTIRPADO del preview: este box
   // fantasma dibuja el estado nuevo (transparente — flota sobre lo que haya).
@@ -752,9 +743,6 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
 
   return (
     <>
-      {veil && (
-        <div className="seg-mask" style={{ left: originalRect.left, top: originalRect.top, width: originalRect.width, height: originalRect.height }} />
-      )}
       {selected && !isLocked && (
         <FloatingBar seg={seg} edit={edit} rect={rect} pageWidth={pageWidth} onPatch={onPatch} onDocOp={onDocOp} onRequestLink={onRequestLink} highlightColor={highlightColor} onHighlightColor={onHighlightColor} />
       )}
@@ -790,7 +778,12 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
           if (!start) return;
           const dx = e.clientX - start.px;
           const dy = e.clientY - start.py;
-          if (Math.abs(dx) + Math.abs(dy) > 3) start.moved = true;
+          if (!start.moved && Math.abs(dx) + Math.abs(dy) > 3) {
+            start.moved = true;
+            // Extirpación TEMPRANA: el preview borra el original apenas
+            // arranca el gesto — el texto viaja sin quedar duplicado atrás.
+            onDragging(true);
+          }
           if (start.moved) setDrag({ dx, dy });
         }}
         onPointerUp={e => {
@@ -800,10 +793,19 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
           if (!start?.moved) return;
           const nx = round1(clampX(eff.x + (e.clientX - start.px) / scale, eff.width, pageWidth));
           const nb = round1(Math.min(Math.max(eff.baseline - (e.clientY - start.py) / scale, 8), pageHeight - 4));
+          // El commit y el fin del arrastre van en el MISMO lote de estado:
+          // la extirpación en vuelo la releva el edit sin re-bake visible.
           onPatch({
             x: nx === round1(seg.x) ? null : nx,
             baseline: nb === round1(seg.baseline) ? null : nb,
           });
+          onDragging(false);
+        }}
+        onPointerCancel={() => {
+          const start = dragStart.current;
+          dragStart.current = null;
+          setDrag(null);
+          if (start?.moved) onDragging(false);
         }}
         title={editing ? undefined : (edit?.text ?? seg.text)}
       >

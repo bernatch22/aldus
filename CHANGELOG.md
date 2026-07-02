@@ -4,6 +4,21 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### fix(editor): extirpación TEMPRANA al arrancar el drag — sin duplicado y sin rectángulo blanco, nunca
+El velo post-drop seguía siendo un rectángulo blanco visible (nodo quieto durante el
+arrastre → velo al soltar → recién ahí se iba). Enfoque definitivo: el preview extirpa
+el segmento APENAS ARRANCA el gesto, no al soltar:
+- `EditorPage`: estado `extirpating` (ids en arrastre) + callback `onDragging(segId,
+  active)` — cachea el nodo en `segCache` y lo suma a los `textRemovals` del bake local
+  (aunque todavía no exista edición). Al soltar, el commit del edit y el fin del arrastre
+  van en el mismo lote de estado: el re-bake produce bytes idénticos → cero salto visual.
+- `SegmentBox`: dispara `onDragging(true)` al superar el umbral de movimiento,
+  `onDragging(false)` en drop/cancel. El velo (`seg-mask` de texto) se ELIMINÓ del todo:
+  el único transitorio es el original desvaneciéndose una fracción de segundo al arrancar
+  el drag, mientras el bake local aterriza.
+- `@aldus/core`: `segmentOriginal(seg)` extraído de `mergeSegmentEdit` y exportado (el
+  editor lo usa para armar el removal de un segmento aún sin edición — sin duplicar lógica).
+
 ### fix(editor): duplicado transitorio al primer mover — velo hasta que el preview extirpe + warm-up del bake
 El bake extirpador del preview es ASÍNCRONO: al soltar el drag, el overlay ya dibuja el
 texto en la posición nueva pero el canvas viejo sigue mostrando los glifos originales

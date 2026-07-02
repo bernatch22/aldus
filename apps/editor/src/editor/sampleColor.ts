@@ -41,8 +41,10 @@ export function sampleRunColors(graph: PageGraph, canvas: HTMLCanvasElement, sca
       return; // canvas tainted → abortar (todos quedan sin color = negro)
     }
 
-    // Solo los widgets que tocan ESTE bbox obligan al chequeo por píxel.
-    const near = widgetRects.filter(wr => wr.l < left + w && wr.r > left && wr.t < top + h && wr.b > top);
+    // Un run que TOCA un campo no se muestrea: los widgets pintan bordes/fondos
+    // (y su antialiasing se derrama fuera del rect) que siempre le ganan al
+    // trazo del texto — el texto "bajo los inputs" salía #dcdcdc. Negro default.
+    if (widgetRects.some(wr => wr.l < left + w && wr.r > left && wr.t < top + h && wr.b > top)) continue;
 
     // El píxel con mayor "distancia al blanco" ponderada por opacidad = la tinta.
     let bestScore = -1;
@@ -50,12 +52,6 @@ export function sampleRunColors(graph: PageGraph, canvas: HTMLCanvasElement, sca
     for (let i = 0; i < data.length; i += 4) {
       const a = data[i + 3];
       if (a < 40) continue;
-      if (near.length) {
-        const p = i / 4;
-        const px = left + (p % w);
-        const py = top + Math.floor(p / w);
-        if (near.some(wr => px >= wr.l && px < wr.r && py >= wr.t && py < wr.b)) continue;
-      }
       const r = data[i], g = data[i + 1], b = data[i + 2];
       const inkiness = (255 - r) + (255 - g) + (255 - b); // qué tan oscuro/saturado
       const score = inkiness * (a / 255);
@@ -63,11 +59,11 @@ export function sampleRunColors(graph: PageGraph, canvas: HTMLCanvasElement, sca
     }
     // Sin tinta suficiente (run vacío / muy claro) → dejar negro por defecto.
     if (bestScore < 90) continue;
-    // Trazos FINOS (guiones bajos, hairlines) salen 100% antialiaseados: el
-    // píxel más oscuro es un GRIS, no el negro real — y el texto movido
-    // "cambiaba de color". Un gris oscuro sin croma se asume negro.
+    // GRISES = artefactos de antialiasing, no color del texto: un trazo fino
+    // (guiones bajos, hairlines) nunca alcanza el negro real, y un gris claro
+    // es chrome/borde. Sin croma → se asume negro (display-only).
     const chroma = Math.max(br, bg, bb) - Math.min(br, bg, bb);
-    if (chroma < 28 && Math.max(br, bg, bb) < 130) continue;
+    if (chroma < 30) continue;
     const hex = `#${toHex(br)}${toHex(bg)}${toHex(bb)}`;
     if (hex !== '#000000') run.color = hex;
   }

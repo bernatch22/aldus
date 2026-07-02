@@ -4,6 +4,18 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### fix(editor): color muestreado — runs que tocan campos NO se muestrean; grises jamás son "color"
+Confirmado con logs en vivo (`color=#dcdcdc`, fuentes `VIVO=true STABLE=true`): el color
+"buggeado" del texto bajo los inputs era el BORDE antialiaseado del campo derramándose
+justo fuera del rect excluido y ganándole al trazo del texto en el muestreo. Ahora:
+- Un run cuyo bbox intersecta un widget directamente NO se muestrea (negro default) —
+  el chrome del campo siempre contamina.
+- Ningún gris (croma < 30) se acepta como color de texto: trazos finos (guiones bajos)
+  salen 100% antialiaseados y nunca alcanzan el negro real; un gris claro es chrome.
+  Display-only: el bake sigue tomando el color exacto del content stream.
+- `fitLetterSpacing` no ajusta tracking si ninguna fuente real está viva, y el overlay
+  se re-renderiza cuando una FontFace termina de cargar (re-mide con la fuente real).
+
 ### fix(editor): texto arrastrado sobre CAMPOS — color/contenido "buggeado" (tinte del widget-box + sampling contaminado)
 Con text fields presentes (insurance agreement), el texto movido se veía de otro color
 y con el contenido ensuciado. Dos causas, ninguna en el bake (test de regresión

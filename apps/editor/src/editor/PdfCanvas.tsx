@@ -8,8 +8,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
-import { extractPageGraph, type LineEdit, type PageGraph, type PdfJsPage } from '@aldus/core';
-import { NodeOverlay } from './NodeOverlay';
+import { extractPageGraph, type ImageEdit, type PageGraph, type PdfJsPage, type SegmentEdit } from '@aldus/core';
+import { NodeOverlay, type EditAction, type ImageEditAction } from './NodeOverlay';
 
 interface Props {
   pdf: PDFDocumentProxy;
@@ -19,11 +19,13 @@ interface Props {
   onGraph: (g: PageGraph) => void;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
-  edits: Map<string, LineEdit>;
-  onEdit: (edit: LineEdit) => void;
+  edits: Map<string, SegmentEdit>;
+  onEdit: (action: EditAction) => void;
+  imageEdits: Map<string, ImageEdit>;
+  onImageEdit: (action: ImageEditAction) => void;
 }
 
-export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit }: Props) {
+export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
@@ -78,6 +80,8 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
           onSelect={onSelect}
           edits={edits}
           onEdit={onEdit}
+          imageEdits={imageEdits}
+          onImageEdit={onImageEdit}
         />
       )}
     </div>

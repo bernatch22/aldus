@@ -31,8 +31,8 @@ import {
   decodePDFRawStream,
   rgb,
 } from 'pdf-lib';
-import type { FontBucket, SegmentEdit, StyledRun } from '../model.js';
-import { walkTextOps, type ShowOp } from './textWalk.js';
+import type { FontBucket, ImageEdit, SegmentEdit, StyledRun } from '../model.js';
+import { walkContent, type ShowOp, type XObjectOp } from './textWalk.js';
 import { parseToUnicode, type ReverseEncoder } from './toUnicode.js';
 
 export interface BakeResult {
@@ -141,6 +141,25 @@ function stdFontFor(bucket: FontBucket, bold: boolean, italic: boolean): Standar
 const Y_TOL = 1.8;
 const X_TOL = 1.8;
 
+/** Bounding box del unit square transformado por la CTM de un Do. */
+function xobjectRect(m: [number, number, number, number, number, number]) {
+  const [a, b, c, d, e, f] = m;
+  const xs = [e, a + e, c + e, a + c + e];
+  const ys = [f, b + f, d + f, b + d + f];
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y, rotated: Math.abs(b) > 0.01 || Math.abs(c) > 0.01 };
+}
+
+function matchImage(xobjects: XObjectOp[], orig: ImageEdit['original']): XObjectOp | null {
+  const tol = Math.max(2, orig.width * 0.02, orig.height * 0.02);
+  return xobjects.find(o => {
+    const r = xobjectRect(o.matrix);
+    return Math.abs(r.x - orig.x) <= tol && Math.abs(r.y - orig.y) <= tol &&
+      Math.abs(r.width - orig.width) <= tol && Math.abs(r.height - orig.height) <= tol;
+  }) ?? null;
+}
+
 function matchOps(
   shows: ShowOp[],
   orig: SegmentEdit['original'],
@@ -213,7 +232,11 @@ interface FallbackDraw {
   italic: boolean;
 }
 
-export async function bakeSegmentEdits(pdfBytes: Uint8Array, edits: SegmentEdit[]): Promise<BakeResult> {
+export async function bakeSegmentEdits(
+  pdfBytes: Uint8Array,
+  edits: SegmentEdit[],
+  imageEdits: ImageEdit[] = [],
+): Promise<BakeResult> {
   const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
   const pages = doc.getPages();
   const applied: string[] = [];
@@ -222,8 +245,13 @@ export async function bakeSegmentEdits(pdfBytes: Uint8Array, edits: SegmentEdit[
 
   const byPage = new Map<number, SegmentEdit[]>();
   for (const e of edits) byPage.set(e.page, [...(byPage.get(e.page) ?? []), e]);
+  const imgByPage = new Map<number, ImageEdit[]>();
+  for (const e of imageEdits) imgByPage.set(e.page, [...(imgByPage.get(e.page) ?? []), e]);
 
-  for (const [pageNum, pageEdits] of byPage) {
+  const allPages = new Set([...byPage.keys(), ...imgByPage.keys()]);
+  for (const pageNum of allPages) {
+    const pageEdits = byPage.get(pageNum) ?? [];
+    const pageImgEdits = imgByPage.get(pageNum) ?? [];
     const page = pages[pageNum - 1];
     if (!page) {
       warnings.push(`página ${pageNum} fuera de rango — ediciones saltadas`);
@@ -236,10 +264,44 @@ export async function bakeSegmentEdits(pdfBytes: Uint8Array, edits: SegmentEdit[
       warnings.push(`página ${pageNum}: ${err instanceof Error ? err.message : 'stream ilegible'}`);
       continue;
     }
-    const shows = walkTextOps(src);
+    const { shows, xobjects } = walkContent(src);
     const encCache = new Map<string, ReverseEncoder | null>();
     const removals: Array<[number, number]> = [];
     const blocks: string[] = [];
+
+    // ── imágenes: mover/escalar re-emite `q cm /Nombre Do Q`; eliminar solo
+    //    extirpa el Do (los cm huérfanos no dibujan nada) ──
+    for (const edit of pageImgEdits) {
+      const op = matchImage(xobjects, edit.original);
+      if (!op) {
+        warnings.push(`${edit.imageId}: no se encontró el XObject en la posición original — sin cambios`);
+        continue;
+      }
+      removals.push([op.record.start, op.record.end]);
+      if (edit.remove) {
+        applied.push(`${edit.imageId}: eliminada`);
+        continue;
+      }
+      const r = xobjectRect(op.matrix);
+      if (r.rotated) {
+        warnings.push(`${edit.imageId}: la imagen tiene rotación — mover/escalar no soportado aún, queda intacta`);
+        removals.pop();
+        continue;
+      }
+      const [a, , , d] = op.matrix;
+      const newW = edit.width ?? r.width;
+      const newH = edit.height ?? r.height;
+      const newX = edit.x ?? r.x;
+      const newY = edit.y ?? r.y;
+      // Preservar flips: el signo de a/d se mantiene; el ancla del bbox se
+      // corrige si la escala es negativa.
+      const na = a * (newW / r.width);
+      const nd = d * (newH / r.height);
+      const ne = newX - Math.min(0, na);
+      const nf = newY - Math.min(0, nd);
+      blocks.push(`q ${fmt(na)} 0 0 ${fmt(nd)} ${fmt(ne)} ${fmt(nf)} cm /${op.name} Do Q`);
+      applied.push(`${edit.imageId}: reubicada/escalada`);
+    }
 
     for (const edit of pageEdits) {
       const { ops, conflict } = matchOps(shows, edit.original);

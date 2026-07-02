@@ -49,9 +49,28 @@ export interface ShowOp {
   stale: boolean;
 }
 
+/** Un `Do` de XObject (imagen/form) con la CTM vigente y su rango de bytes. */
+export interface XObjectOp {
+  record: OpRecord;
+  /** Nombre del recurso (/Im1). */
+  name: string;
+  /** CTM al momento del Do. */
+  matrix: Matrix;
+}
+
+export interface ContentWalk {
+  shows: ShowOp[];
+  xobjects: XObjectOp[];
+}
+
 export function walkTextOps(src: Uint8Array): ShowOp[] {
+  return walkContent(src).shows;
+}
+
+export function walkContent(src: Uint8Array): ContentWalk {
   const ops = tokenizeContentStream(src);
   const shows: ShowOp[] = [];
+  const xobjects: XObjectOp[] = [];
 
   let ctm: Matrix = IDENTITY;
   const stack: Matrix[] = [];
@@ -128,8 +147,13 @@ export function walkTextOps(src: Uint8Array): ShowOp[] {
       case 'g': case 'rg': case 'k': fillColorRaw = raw(rec); break;
       case 'cs': csRaw = raw(rec); break;
       case 'sc': case 'scn': fillColorRaw = csRaw ? `${csRaw} ${raw(rec)}` : raw(rec); break;
+      case 'Do': {
+        const t = rec.operands[0];
+        if (t && t.kind === 'name') xobjects.push({ record: rec, name: t.value as string, matrix: ctm });
+        break;
+      }
       default: break;
     }
   }
-  return shows;
+  return { shows, xobjects };
 }

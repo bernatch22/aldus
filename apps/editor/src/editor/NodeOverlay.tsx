@@ -15,11 +15,16 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
   effectiveGeometry,
+  effectiveImageRect,
+  mergeImageEdit,
   mergeSegmentEdit,
   originalStyledRuns,
   pdfRectToCss,
   styledRunsEqual,
   styledText,
+  type ImageEdit,
+  type ImageNode,
+  type ImagePatch,
   type PageGraph,
   type SegmentEdit,
   type SegmentNode,
@@ -37,6 +42,7 @@ import {
 } from './styledDom';
 
 export type EditAction = SegmentEdit | { segmentId: string; revert: true };
+export type ImageEditAction = ImageEdit | { imageId: string; revert: true };
 
 interface Props {
   graph: PageGraph;
@@ -45,6 +51,8 @@ interface Props {
   onSelect: (id: string | null) => void;
   edits: Map<string, SegmentEdit>;
   onEdit: (action: EditAction) => void;
+  imageEdits: Map<string, ImageEdit>;
+  onImageEdit: (action: ImageEditAction) => void;
 }
 
 /** Tipografía del CONTENEDOR editable: la dominante del segmento (con tamaño/
@@ -61,12 +69,27 @@ function containerStyle(seg: SegmentNode, edit: SegmentEdit | null, scale: numbe
   };
 }
 
-export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit }: Props) {
+export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => setEditingId(null), [graph.page]);
 
   return (
     <div className="node-overlay" onClick={() => onSelect(null)}>
+      {graph.images.map(img => (
+        <ImageBox
+          key={img.id}
+          img={img}
+          pageHeight={graph.height}
+          scale={scale}
+          selected={selectedId === img.id}
+          edit={imageEdits.get(img.id) ?? null}
+          onSelect={() => onSelect(img.id)}
+          onPatch={patch => {
+            const merged = mergeImageEdit(img, imageEdits.get(img.id) ?? null, patch);
+            onImageEdit(merged ?? { imageId: img.id, revert: true });
+          }}
+        />
+      ))}
       {graph.segments.map(seg => (
         <SegmentBox
           key={seg.id}
@@ -86,6 +109,124 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit 
         />
       ))}
     </div>
+  );
+}
+
+interface ImageBoxProps {
+  img: ImageNode;
+  pageHeight: number;
+  scale: number;
+  selected: boolean;
+  edit: ImageEdit | null;
+  onSelect: () => void;
+  onPatch: (patch: ImagePatch) => void;
+}
+
+/** Una imagen del grafo: seleccionar, arrastrar (mover), grip (escalar),
+ *  eliminar (desde el panel). Preview: la imagen ORIGINAL queda visible en su
+ *  lugar (el canvas la tiene pintada); si se movió/escaló se muestra además un
+ *  frame fantasma en el destino — el resultado real aparece al Aplicar. Una
+ *  imagen eliminada se tapa con máscara blanca (preview de la eliminación). */
+function ImageBox({ img, pageHeight, scale, selected, edit, onSelect, onPatch }: ImageBoxProps) {
+  const eff = effectiveImageRect(img, edit);
+  const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
+  const orig = pdfRectToCss({ x: img.x, y: img.y, width: img.width, height: img.height }, pageHeight, scale);
+  const dragStart = useRef<{ px: number; py: number; moved: boolean } | null>(null);
+  const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
+  const gripStart = useRef<{ px: number; py: number } | null>(null);
+  const [gripDelta, setGripDelta] = useState<{ dx: number; dy: number } | null>(null);
+
+  if (eff.removed) {
+    return (
+      <div
+        className={`seg-mask img-removed${selected ? ' selected' : ''}`}
+        style={{ left: orig.left, top: orig.top, width: orig.width, height: orig.height }}
+        title="Imagen eliminada (Aplicar al PDF para confirmar)"
+        onClick={e => { e.stopPropagation(); onSelect(); }}
+      />
+    );
+  }
+
+  const ghost = eff.moved;
+  return (
+    <>
+      <div
+        className={`img-box${selected ? ' selected' : ''}${edit ? ' edited' : ''}${ghost ? ' ghost' : ''}`}
+        style={{
+          left: rect.left,
+          top: rect.top,
+          width: gripDelta ? rect.width + gripDelta.dx : rect.width,
+          height: gripDelta ? rect.height + gripDelta.dy : rect.height,
+          transform: drag ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
+        }}
+        title={`Imagen · ${Math.round(eff.width)}×${Math.round(eff.height)} pt`}
+        onClick={e => { e.stopPropagation(); onSelect(); }}
+        onPointerDown={e => {
+          if (!selected || e.button !== 0) return;
+          e.preventDefault();
+          e.stopPropagation();
+          e.currentTarget.setPointerCapture(e.pointerId);
+          dragStart.current = { px: e.clientX, py: e.clientY, moved: false };
+        }}
+        onPointerMove={e => {
+          const start = dragStart.current;
+          if (!start) return;
+          const dx = e.clientX - start.px;
+          const dy = e.clientY - start.py;
+          if (Math.abs(dx) + Math.abs(dy) > 3) start.moved = true;
+          if (start.moved) setDrag({ dx, dy });
+        }}
+        onPointerUp={e => {
+          const start = dragStart.current;
+          dragStart.current = null;
+          setDrag(null);
+          if (!start?.moved) return;
+          const nx = round1(eff.x + (e.clientX - start.px) / scale);
+          const ny = round1(eff.y - (e.clientY - start.py) / scale);
+          onPatch({
+            x: nx === round1(img.x) ? null : nx,
+            y: ny === round1(img.y) ? null : ny,
+          });
+        }}
+      >
+        {ghost && <span className="ghost-label">preview — Aplicar al PDF</span>}
+        {selected && (
+          <div
+            className="seg-grip"
+            title="Arrastrar para escalar la imagen"
+            onPointerDown={e => {
+              e.preventDefault();
+              e.stopPropagation();
+              e.currentTarget.setPointerCapture(e.pointerId);
+              gripStart.current = { px: e.clientX, py: e.clientY };
+            }}
+            onPointerMove={e => {
+              if (!gripStart.current) return;
+              e.stopPropagation();
+              setGripDelta({ dx: e.clientX - gripStart.current.px, dy: e.clientY - gripStart.current.py });
+            }}
+            onPointerUp={e => {
+              e.stopPropagation();
+              const start = gripStart.current;
+              gripStart.current = null;
+              setGripDelta(null);
+              if (!start) return;
+              const newW = Math.max(4, round1(eff.width + (e.clientX - start.px) / scale));
+              const newH = Math.max(4, round1(eff.height + (e.clientY - start.py) / scale));
+              // El grip SE agranda hacia abajo: el TOP queda fijo (y' = top − h').
+              const top = eff.y + eff.height;
+              const newY = round1(top - newH);
+              onPatch({
+                width: newW === round1(img.width) ? null : newW,
+                height: newH === round1(img.height) ? null : newH,
+                y: newY === round1(img.y) ? null : newY,
+              });
+            }}
+            onClick={e => e.stopPropagation()}
+          />
+        )}
+      </div>
+    </>
   );
 }
 

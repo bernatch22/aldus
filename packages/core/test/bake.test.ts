@@ -68,6 +68,61 @@ describe('extracción', () => {
   });
 });
 
+describe('imágenes', () => {
+  const PNG_1PX = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+  async function makePdfWithImage(): Promise<Uint8Array> {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    const helv = await doc.embedFont(StandardFonts.Helvetica);
+    const png = await doc.embedPng(Buffer.from(PNG_1PX, 'base64'));
+    page.drawText('Con imagen', { x: 72, y: 720, size: 12, font: helv });
+    page.drawImage(png, { x: 100, y: 500, width: 120, height: 80 });
+    return doc.save();
+  }
+
+  it('extrae la imagen con su rect', async () => {
+    const g = await graphOf(await makePdfWithImage());
+    expect(g.images).toHaveLength(1);
+    expect(g.images[0].x).toBeCloseTo(100, 0);
+    expect(g.images[0].y).toBeCloseTo(500, 0);
+    expect(g.images[0].width).toBeCloseTo(120, 0);
+    expect(g.images[0].height).toBeCloseTo(80, 0);
+  });
+
+  it('mueve y escala la imagen en el content stream', async () => {
+    const pdf = await makePdfWithImage();
+    const g = await graphOf(pdf);
+    const img = g.images[0];
+    const { pdf: baked, warnings } = await bakeSegmentEdits(pdf, [], [{
+      imageId: img.id, page: img.page, x: 300, y: 400, width: 60, height: 40,
+      original: { x: img.x, y: img.y, width: img.width, height: img.height },
+    }]);
+    expect(warnings).toEqual([]);
+    const g2 = await graphOf(baked);
+    expect(g2.images).toHaveLength(1);
+    expect(g2.images[0].x).toBeCloseTo(300, 0);
+    expect(g2.images[0].y).toBeCloseTo(400, 0);
+    expect(g2.images[0].width).toBeCloseTo(60, 0);
+    expect(g2.images[0].height).toBeCloseTo(40, 0);
+    // El texto de la página no se tocó.
+    expect(segByText(g2, 'Con imagen').x).toBeCloseTo(72, 0);
+  });
+
+  it('elimina la imagen', async () => {
+    const pdf = await makePdfWithImage();
+    const g = await graphOf(pdf);
+    const img = g.images[0];
+    const { pdf: baked } = await bakeSegmentEdits(pdf, [], [{
+      imageId: img.id, page: img.page, remove: true,
+      original: { x: img.x, y: img.y, width: img.width, height: img.height },
+    }]);
+    const g2 = await graphOf(baked);
+    expect(g2.images).toHaveLength(0);
+    expect(segByText(g2, 'Con imagen').x).toBeCloseTo(72, 0);
+  });
+});
+
 describe('bake', () => {
   it('mueve un segmento sin tocar el resto (caso A: verbatim reubicado)', async () => {
     const pdf = await makePdf();

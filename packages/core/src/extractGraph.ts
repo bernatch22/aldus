@@ -12,7 +12,7 @@
  *    getOperatorList() se ejecuta antes para que los fonts estén resueltos.
  */
 
-import type { FontBucket, FontInfo, LineNode, PageGraph, SegmentNode, TextRunNode } from './model.js';
+import type { FontBucket, FontInfo, ImageNode, LineNode, PageGraph, SegmentNode, TextRunNode } from './model.js';
 import { segmentText, splitSegments } from './tokens.js';
 
 export interface PdfJsTextItem {
@@ -29,8 +29,63 @@ export interface PdfJsPage {
   /** [x0, y0, x1, y1] en puntos PDF. */
   view: number[];
   getTextContent(opts?: { disableNormalization?: boolean }): Promise<{ items: unknown[] }>;
-  getOperatorList(): Promise<unknown>;
+  getOperatorList(): Promise<{ fnArray: number[]; argsArray: unknown[][] }>;
   commonObjs: { get(name: string): unknown };
+}
+
+// Valores estables de pdfjs OPS (src/shared/util.js) — el único acople a
+// pdf.js que core necesita para leer el operator list sin importarlo.
+const OP_SAVE = 10;
+const OP_RESTORE = 11;
+const OP_TRANSFORM = 12;
+const OP_PAINT_IMAGE = 85;
+const OP_PAINT_INLINE_IMAGE = 86;
+const OP_PAINT_IMAGE_MASK = 83;
+const OP_PAINT_IMAGE_REPEAT = 88;
+const PAINT_OPS = new Set([OP_PAINT_IMAGE, OP_PAINT_INLINE_IMAGE, OP_PAINT_IMAGE_MASK, OP_PAINT_IMAGE_REPEAT]);
+
+type Mat = [number, number, number, number, number, number];
+const mulMat = (m: Mat, n: Mat): Mat => [
+  m[0] * n[0] + m[1] * n[2],
+  m[0] * n[1] + m[1] * n[3],
+  m[2] * n[0] + m[3] * n[2],
+  m[2] * n[1] + m[3] * n[3],
+  m[4] * n[0] + m[5] * n[2] + n[4],
+  m[4] * n[1] + m[5] * n[3] + n[5],
+];
+
+/** Imágenes de la página: cada paint de XObject con su CTM → bounding box del
+ *  unit square transformado. */
+function extractImages(fnArray: number[], argsArray: unknown[][], page: number, x0: number, y0: number): ImageNode[] {
+  const images: ImageNode[] = [];
+  let ctm: Mat = [1, 0, 0, 1, 0, 0];
+  const stack: Mat[] = [];
+  for (let i = 0; i < fnArray.length; i++) {
+    const fn = fnArray[i];
+    if (fn === OP_SAVE) stack.push(ctm);
+    else if (fn === OP_RESTORE) ctm = stack.pop() ?? [1, 0, 0, 1, 0, 0];
+    else if (fn === OP_TRANSFORM) {
+      const a = argsArray[i] as number[];
+      ctm = mulMat([a[0], a[1], a[2], a[3], a[4], a[5]], ctm);
+    } else if (PAINT_OPS.has(fn)) {
+      const [a, b, c, d, e, f] = ctm;
+      const xs = [e, a + e, c + e, a + c + e];
+      const ys = [f, b + f, d + f, b + d + f];
+      const minX = Math.min(...xs);
+      const minY = Math.min(...ys);
+      images.push({
+        id: `p${page}-img${images.length}`,
+        kind: 'image',
+        page,
+        x: minX - x0,
+        y: minY - y0,
+        width: Math.max(...xs) - minX,
+        height: Math.max(...ys) - minY,
+        rotated: Math.abs(b) > 0.01 || Math.abs(c) > 0.01,
+      });
+    }
+  }
+  return images;
 }
 
 interface RawFont {
@@ -84,8 +139,9 @@ function fontInfoFor(page: PdfJsPage, loadedName: string, cache: Map<string, Fon
 
 export async function extractPageGraph(page: PdfJsPage): Promise<PageGraph> {
   // Resuelve los fonts embebidos en commonObjs (y, en el browser, los registra
-  // como FontFace si la página ya se renderizó a canvas).
-  await page.getOperatorList();
+  // como FontFace si la página ya se renderizó a canvas) — y da el operator
+  // list del que salen las imágenes.
+  const opList = await page.getOperatorList();
   const tc = await page.getTextContent({ disableNormalization: true });
   const [x0, y0, x1, y1] = page.view;
   const fontCache = new Map<string, FontInfo>();
@@ -115,6 +171,7 @@ export async function extractPageGraph(page: PdfJsPage): Promise<PageGraph> {
     runs,
     lines,
     segments: lines.flatMap(l => l.segments),
+    images: extractImages(opList.fnArray, opList.argsArray, page.pageNumber, x0, y0),
   };
 }
 

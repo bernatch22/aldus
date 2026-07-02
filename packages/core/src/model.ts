@@ -87,9 +87,37 @@ export interface LineNode {
   fontSize: number;
 }
 
+/** Una imagen de la página (XObject dibujado por un `Do`): su rect es el
+ *  bounding box de la matriz con la que se pintó (unit square × CTM). */
+export interface ImageNode {
+  id: string;
+  kind: 'image';
+  page: number;
+  /** Rect en puntos PDF, origen abajo-izquierda. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** La matriz tiene rotación/skew — el bake v1 la deja intacta (warning). */
+  rotated: boolean;
+}
+
+/** Una edición pendiente sobre una imagen: mover/escalar/eliminar. */
+export interface ImageEdit {
+  imageId: string;
+  page: number;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  remove?: boolean;
+  /** Snapshot para que el bake localice el Do sin ambigüedad. */
+  original: { x: number; y: number; width: number; height: number };
+}
+
 // Próximas fases del roadmap — mismos principios, nuevos kinds:
-//   ImageNode (XObjects) → FormWidgetNode (AcroForm) → SignatureNode.
-export type PdfNode = TextRunNode | SegmentNode | LineNode;
+//   FormWidgetNode (AcroForm) → SignatureNode.
+export type PdfNode = TextRunNode | SegmentNode | LineNode | ImageNode;
 
 /** El grafo completo de una página. */
 export interface PageGraph {
@@ -101,6 +129,7 @@ export interface PageGraph {
   lines: LineNode[];
   /** Todos los segmentos de la página (las unidades de edición), aplanados. */
   segments: SegmentNode[];
+  images: ImageNode[];
 }
 
 /** Un tramo de texto con su estilo, DENTRO de una edición. El estilo vive a

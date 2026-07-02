@@ -4,6 +4,20 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### feat: IMÁGENES — extracción, edición y bake (Tier 1)
+El grafo ahora incluye `ImageNode` (extraído del operator list de pdf.js: cada paint de
+XObject con su CTM → bounding box; detecta rotación). Overlay: box por imagen con
+seleccionar/arrastrar (mover)/grip (escalar con top fijo)/eliminar; una imagen movida
+muestra frame fantasma en el destino (el pixel real aparece al Aplicar); eliminada = máscara
+blanca. Inspector: panel de geometría numérica + eliminar/restaurar/revertir, y sección
+"Imágenes" en la lista del grafo. Bake: el walker registra los `Do` de XObjects con su CTM;
+mover/escalar extirpa el Do y re-emite `q cm /Nombre Do Q` con la matriz nueva (preserva
+flips; el ancla corrige escalas negativas); eliminar solo extirpa el Do. Imagen rotada =
+warning honesto (v1 no la toca). Localización por geometría (no por nombre de recurso), con
+tolerancia relativa. 3 tests nuevos del ciclo crear→extraer→bake→re-extraer (14/14 en core).
+Verificado contra el Insurance Agreement real (9 páginas, imagen de fondo full-page + texto
+con negritas).
+
 ### fix(core+editor): el estilo es POR TRAMO — quitar bold a una parte no pisa el resto
 Bug de diseño: bold/italic eran overrides de TODO el segmento, así que en un nodo mixto
 ("**Total:** 125.00") togglear B aplicaba/quitaba la negrita al segmento entero. Ahora el

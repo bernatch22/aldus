@@ -8,9 +8,14 @@
  */
 
 import {
+  effectiveImageRect,
+  mergeImageEdit,
   mergeSegmentEdit,
   originalStyledRuns,
   type FontBucket,
+  type ImageEdit,
+  type ImageNode,
+  type ImagePatch,
   type PageGraph,
   type SegmentEdit,
   type SegmentNode,
@@ -18,7 +23,7 @@ import {
   type StyledRun,
 } from '@aldus/core';
 import { useEffect, useState } from 'react';
-import type { EditAction } from './NodeOverlay';
+import type { EditAction, ImageEditAction } from './NodeOverlay';
 import { activeEditingBox, selectionStyle, SELECTION_STYLE_EVENT } from './styledDom';
 
 interface Props {
@@ -27,6 +32,8 @@ interface Props {
   onSelect: (id: string | null) => void;
   edits: Map<string, SegmentEdit>;
   onEdit: (action: EditAction) => void;
+  imageEdits: Map<string, ImageEdit>;
+  onImageEdit: (action: ImageEditAction) => void;
 }
 
 const n1 = (v: number) => (Math.round(v * 10) / 10).toString();
@@ -46,13 +53,22 @@ function StyledPreview({ seg, edit }: { seg: SegmentNode; edit: SegmentEdit | nu
   );
 }
 
-export function Inspector({ graph, selectedId, onSelect, edits, onEdit }: Props) {
+export function Inspector({ graph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit }: Props) {
   if (!graph) return <aside className="inspector" />;
   const selected = graph.segments.find(s => s.id === selectedId) ?? null;
+  const selectedImage = graph.images.find(i => i.id === selectedId) ?? null;
 
   return (
     <aside className="inspector">
-      {selected ? (
+      {selectedImage ? (
+        <ImageProperties
+          key={selectedImage.id}
+          img={selectedImage}
+          edit={imageEdits.get(selectedImage.id) ?? null}
+          onClose={() => onSelect(null)}
+          onImageEdit={onImageEdit}
+        />
+      ) : selected ? (
         <ObjectProperties
           key={selected.id}
           seg={selected}
@@ -68,8 +84,27 @@ export function Inspector({ graph, selectedId, onSelect, edits, onEdit }: Props)
           <p className="muted">
             {graph.width.toFixed(0)}×{graph.height.toFixed(0)} pt · {graph.lines.length} líneas
             · {graph.segments.length} segmentos · {graph.runs.length} runs
-            {edits.size > 0 && <> · {edits.size} edición{edits.size > 1 ? 'es' : ''} pendiente{edits.size > 1 ? 's' : ''}</>}
+            {graph.images.length > 0 && <> · {graph.images.length} imagen{graph.images.length > 1 ? 'es' : ''}</>}
+            {(edits.size + imageEdits.size) > 0 && <> · {edits.size + imageEdits.size} edición{edits.size + imageEdits.size > 1 ? 'es' : ''} pendiente{edits.size + imageEdits.size > 1 ? 's' : ''}</>}
           </p>
+          {graph.images.length > 0 && (
+            <>
+              <h4>Imágenes</h4>
+              <ul className="line-list">
+                {graph.images.map(img => (
+                  <li key={img.id} className="line-group">
+                    <div
+                      className={`seg-item${imageEdits.has(img.id) ? ' edited' : ''}`}
+                      onClick={() => onSelect(img.id)}
+                    >
+                      <span className="mono">🖼 {Math.round(img.width)}×{Math.round(img.height)} pt{imageEdits.get(img.id)?.remove ? ' · eliminada' : ''}</span>
+                      <span className="muted">x={n1(img.x)} · y={n1(img.y)}{img.rotated ? ' · rotada' : ''}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
           <ul className="line-list">
             {graph.lines.map(l => (
               <li key={l.id} className="line-group">
@@ -89,6 +124,73 @@ export function Inspector({ graph, selectedId, onSelect, edits, onEdit }: Props)
         </>
       )}
     </aside>
+  );
+}
+
+interface ImagePropsPanelProps {
+  img: ImageNode;
+  edit: ImageEdit | null;
+  onClose: () => void;
+  onImageEdit: (action: ImageEditAction) => void;
+}
+
+function ImageProperties({ img, edit, onClose, onImageEdit }: ImagePropsPanelProps) {
+  const commit = (patch: ImagePatch) => {
+    const merged = mergeImageEdit(img, edit, patch);
+    onImageEdit(merged ?? { imageId: img.id, revert: true });
+  };
+  const eff = effectiveImageRect(img, edit);
+
+  const numPatch = (key: 'x' | 'y' | 'width' | 'height', originalValue: number) => (raw: string) => {
+    const v = parseFloat(raw);
+    if (!Number.isFinite(v)) return;
+    const rounded = Math.round(v * 10) / 10;
+    commit({ [key]: rounded === Math.round(originalValue * 10) / 10 ? null : rounded });
+  };
+
+  const fields: Array<['x' | 'y' | 'width' | 'height', string, number, number]> = [
+    ['x', 'x', eff.x, img.x],
+    ['y', 'y', eff.y, img.y],
+    ['width', 'ancho', eff.width, img.width],
+    ['height', 'alto', eff.height, img.height],
+  ];
+
+  return (
+    <>
+      <div className="insp-head">
+        <h3>Imagen — {img.id}</h3>
+        <button onClick={onClose}>×</button>
+      </div>
+      {img.rotated && <p className="muted">Imagen con rotación: mover/escalar aún no soportado en el bake.</p>}
+      <label className="prop-label">Geometría (pt)</label>
+      <div className="prop-grid2">
+        {fields.map(([key, label, value, original]) => (
+          <label key={key} className="prop-cell">
+            <span className="muted">{label}</span>
+            <input
+              className="prop-input num"
+              type="number"
+              step="0.5"
+              defaultValue={n1(value)}
+              disabled={eff.removed}
+              onBlur={e => numPatch(key, original)(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+            />
+          </label>
+        ))}
+      </div>
+      <button
+        className="danger"
+        onClick={() => commit({ remove: eff.removed ? null : true })}
+      >
+        {eff.removed ? 'Restaurar imagen' : 'Eliminar imagen'}
+      </button>
+      {edit && (
+        <button className="danger" onClick={() => onImageEdit({ imageId: img.id, revert: true })}>
+          Revertir cambios
+        </button>
+      )}
+    </>
   );
 }
 

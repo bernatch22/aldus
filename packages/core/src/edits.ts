@@ -11,7 +11,7 @@
  * segmento: quitar la negrita a una parte no toca el resto.
  */
 
-import type { FontBucket, SegmentEdit, SegmentNode, StyledRun } from './model.js';
+import type { FontBucket, ImageEdit, ImageNode, SegmentEdit, SegmentNode, StyledRun } from './model.js';
 import { classifyGap } from './tokens.js';
 
 /** Un parche parcial: `undefined` = no tocar; `null` = LIMPIAR el override
@@ -144,6 +144,46 @@ export function mergeSegmentEdit(
     next.runs === undefined &&
     OVERRIDE_KEYS.every(k => next[k] === undefined);
   return noop ? null : next;
+}
+
+/** Parche parcial de una imagen: `undefined` = no tocar; `null` = limpiar. */
+export interface ImagePatch {
+  x?: number | null;
+  y?: number | null;
+  width?: number | null;
+  height?: number | null;
+  remove?: boolean | null;
+}
+
+const IMAGE_KEYS = ['x', 'y', 'width', 'height', 'remove'] as const;
+
+export function mergeImageEdit(img: ImageNode, prev: ImageEdit | null, patch: ImagePatch): ImageEdit | null {
+  const next: ImageEdit = prev
+    ? { ...prev }
+    : {
+        imageId: img.id,
+        page: img.page,
+        original: { x: img.x, y: img.y, width: img.width, height: img.height },
+      };
+  for (const key of IMAGE_KEYS) {
+    const value = patch[key];
+    if (value === undefined) continue;
+    if (value === null) delete next[key];
+    else (next as Record<string, unknown>)[key] = value;
+  }
+  return IMAGE_KEYS.every(k => next[k] === undefined) ? null : next;
+}
+
+/** Rect EFECTIVO de una imagen con su edición aplicada. */
+export function effectiveImageRect(img: ImageNode, edit: ImageEdit | null) {
+  return {
+    x: edit?.x ?? img.x,
+    y: edit?.y ?? img.y,
+    width: edit?.width ?? img.width,
+    height: edit?.height ?? img.height,
+    removed: edit?.remove === true,
+    moved: edit?.x !== undefined || edit?.y !== undefined || edit?.width !== undefined || edit?.height !== undefined,
+  };
 }
 
 /** Geometría/tamaño EFECTIVOS de un segmento con su edición aplicada.

@@ -88,13 +88,14 @@ app.put('/api/documents/:id/edits', (req, res) => {
 app.post('/api/documents/:id/bake', async (req, res) => {
   const { id } = req.params;
   if (!ID_RE.test(id) || !existsSync(pdfPath(id))) return res.status(404).json({ error: 'No existe.' });
-  const edits = req.body?.edits;
-  if (!Array.isArray(edits) || edits.length === 0) {
-    return res.status(400).json({ error: 'Body esperado: { edits: [...] } no vacío.' });
+  const edits = Array.isArray(req.body?.edits) ? req.body.edits : [];
+  const imageEdits = Array.isArray(req.body?.imageEdits) ? req.body.imageEdits : [];
+  if (edits.length === 0 && imageEdits.length === 0) {
+    return res.status(400).json({ error: 'Body esperado: { edits: [...], imageEdits: [...] } con al menos una edición.' });
   }
   try {
     const original = readFileSync(pdfPath(id));
-    const { pdf, applied, warnings } = await bakeSegmentEdits(new Uint8Array(original), edits);
+    const { pdf, applied, warnings } = await bakeSegmentEdits(new Uint8Array(original), edits, imageEdits);
     copyFileSync(pdfPath(id), `${pdfPath(id)}.bak`);
     writeFileSync(pdfPath(id), Buffer.from(pdf));
     res.json({ ok: true, applied, warnings });

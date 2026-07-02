@@ -86,6 +86,32 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .seg-box.selected:not(.editing) { cursor: move; }
 .seg-box.editing { cursor: text; }
 .seg-mask { position: absolute; background: #fff; }
+/* ── Imágenes ── */
+.img-box {
+  position: absolute;
+  cursor: pointer;
+  outline: 1px solid transparent;
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+.img-box:hover { outline-color: rgba(79, 70, 229, 0.55); background: rgba(79, 70, 229, 0.05); }
+.img-box.selected { outline-color: var(--accent); cursor: move; }
+.img-box.edited { outline-color: var(--edited); }
+.img-box.ghost { outline: 2px dashed var(--edited); background: rgba(180, 83, 9, 0.06); }
+.ghost-label {
+  position: absolute;
+  top: -18px;
+  left: 0;
+  font-size: 10px;
+  color: var(--edited);
+  white-space: nowrap;
+}
+.img-removed { outline: 2px dashed #b91c1c; cursor: pointer; }
+.img-removed.selected { outline-color: var(--accent); }
+.prop-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.prop-cell { display: flex; align-items: center; gap: 6px; }
+.prop-cell .prop-input.num { flex: 1; width: auto; }
+
 .seg-grip {
   position: absolute;
   right: -6px;

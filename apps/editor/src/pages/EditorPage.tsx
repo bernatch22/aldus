@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { getDocument, type PDFDocumentProxy } from 'pdfjs-dist';
-import { effectiveGeometry, mergeSegmentEdit, type PageGraph, type SegmentEdit } from '@aldus/core';
+import { effectiveGeometry, mergeSegmentEdit, type ImageEdit, type PageGraph, type SegmentEdit } from '@aldus/core';
 import { api } from '../lib/api';
 import { PdfCanvas } from '../editor/PdfCanvas';
 import { Inspector } from '../editor/Inspector';
@@ -20,6 +20,7 @@ export function EditorPage() {
   const [graph, setGraph] = useState<PageGraph | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [edits, setEdits] = useState<Map<string, SegmentEdit>>(new Map());
+  const [imageEdits, setImageEdits] = useState<Map<string, ImageEdit>>(new Map());
   const [baking, setBaking] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -39,6 +40,15 @@ export function EditorPage() {
       const next = new Map(prev);
       if ('revert' in edit) next.delete(edit.segmentId);
       else next.set(edit.segmentId, edit);
+      return next;
+    });
+  }, []);
+
+  const onImageEdit = useCallback((edit: ImageEdit | { imageId: string; revert: true }) => {
+    setImageEdits(prev => {
+      const next = new Map(prev);
+      if ('revert' in edit) next.delete(edit.imageId);
+      else next.set(edit.imageId, edit);
       return next;
     });
   }, []);
@@ -95,8 +105,9 @@ export function EditorPage() {
     setError('');
     setNotice('');
     try {
-      const r = await api.bake(id, [...edits.values()]);
+      const r = await api.bake(id, [...edits.values()], [...imageEdits.values()]);
       setEdits(new Map());
+      setImageEdits(new Map());
       setSelectedId(null);
       setDocVersion(v => v + 1);
       setNotice(r.warnings.length ? `Aplicado con avisos: ${r.warnings.join(' · ')}` : `Aplicado ✓ (${r.applied.length})`);
@@ -105,12 +116,17 @@ export function EditorPage() {
     } finally {
       setBaking(false);
     }
-  }, [id, edits]);
+  }, [id, edits, imageEdits]);
 
   const numPages = pdf?.numPages ?? 0;
+  const totalEdits = edits.size + imageEdits.size;
   const pageEdits = useMemo(
     () => new Map([...edits].filter(([, e]) => e.page === pageNum)),
     [edits, pageNum],
+  );
+  const pageImageEdits = useMemo(
+    () => new Map([...imageEdits].filter(([, e]) => e.page === pageNum)),
+    [imageEdits, pageNum],
   );
 
   return (
@@ -146,8 +162,8 @@ export function EditorPage() {
         <div className="toolbar-group">
           {error && <span className="error">{error}</span>}
           {!error && notice && <span className="muted">{notice}</span>}
-          <button className="primary" disabled={baking || edits.size === 0} onClick={() => void bake()}>
-            {baking ? 'Aplicando…' : `Aplicar al PDF${edits.size ? ` (${edits.size})` : ''}`}
+          <button className="primary" disabled={baking || totalEdits === 0} onClick={() => void bake()}>
+            {baking ? 'Aplicando…' : `Aplicar al PDF${totalEdits ? ` (${totalEdits})` : ''}`}
           </button>
         </div>
       </header>
@@ -165,6 +181,8 @@ export function EditorPage() {
               onSelect={setSelectedId}
               edits={pageEdits}
               onEdit={onEdit}
+              imageEdits={pageImageEdits}
+              onImageEdit={onImageEdit}
             />
           ) : (
             <p className="muted center">{error || 'Abriendo el PDF…'}</p>
@@ -176,6 +194,8 @@ export function EditorPage() {
           onSelect={setSelectedId}
           edits={edits}
           onEdit={onEdit}
+          imageEdits={imageEdits}
+          onImageEdit={onImageEdit}
         />
       </div>
     </div>

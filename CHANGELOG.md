@@ -2,6 +2,17 @@
 
 El más reciente arriba; fecha `YYYY-MM-DD`.
 
+## 2026-07-03
+
+### fix(editor): el PREVIEW se CONGELA mientras hay un editor de texto abierto (fin del editor que se cierra solo)
+Los traces mostraron `[aldus:edit-open]` ×3 para el mismo segmento y grafos de documentos
+distintos (g_d4↔g_d7↔g_d4) aterrizando EN PLENA edición: el pipeline de preview seguía
+vivo debajo del editor abierto — re-bakes → nuevos pdf → nuevos grafos → el SegmentBox se
+remontaba (blur "nadie" con stack vacío = unmount), el foco moría y el tipeo se perdía.
+Mismo principio que el drag (el canvas no cambia durante un gesto): con `editingActive`
+(NodeOverlay → EditorPage), los efectos de preview y de lift NO corren mientras un editor
+está abierto; al cerrarlo, corren una vez y hornean todo lo acumulado.
+
 ## 2026-07-02
 
 ### fix(editor): ítem de lista nuevo — gap sembrado al editar + color fantasma #000000 erradicado

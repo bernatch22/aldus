@@ -130,6 +130,8 @@ interface Props {
   /** Abrir este segmento en edición apenas exista en el grafo. */
   editRequestId: string | null;
   onEditRequestHandled: () => void;
+  /** Hay un editor de texto abierto (el preview se congela mientras tanto). */
+  onEditingChange: (active: boolean) => void;
 }
 
 /** Botón chico de una toolbar flotante. */
@@ -305,9 +307,10 @@ function ObjectBar({ rect, pageWidth, width, onAlign, onZ, onDelete }: {
   );
 }
 
-export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, areaWidths, onAreaWidth, editRequestId, onEditRequestHandled }: Props) {
+export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, areaWidths, onAreaWidth, editRequestId, onEditRequestHandled, onEditingChange }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => setEditingId(null), [graph.page]);
+  useEffect(() => { onEditingChange(editingId != null); }, [editingId, onEditingChange]);
 
   // Ítem de lista recién creado (Enter): abrirlo en edición apenas el grafo
   // lo traiga — el flujo de tipeo sigue sin "doble click" en el medio.

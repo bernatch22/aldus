@@ -77,6 +77,11 @@ export function EditorPage() {
   // transform CSS del box.
   const [lift, setLift] = useState<{ segId: string; doc: PDFDocumentProxy } | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  // Editor de texto ABIERTO: el pipeline de preview se CONGELA (ni setPdf, ni
+  // grafos nuevos, ni lifts). Sin esto, cada re-bake aterrizaba un grafo en
+  // plena edición: remontaba el box, mataba el foco y pisaba el tipeo. Al
+  // cerrar el editor, el efecto corre y hornea todo lo pendiente de una.
+  const [editingActive, setEditingActive] = useState(false);
   // Drop consumado: el lift queda vivo (el canvas ya muestra sus píxeles)
   // hasta que el preview re-horneado aterrice — recién ahí se descarta.
   const dropPendingRef = useRef(false);
@@ -329,6 +334,7 @@ export function EditorPage() {
   //    Aplicar. El texto sigue como overlay editable aparte. ──
   useEffect(() => {
     if (!baseBytes) return;
+    if (editingActive) return; // editor abierto: el canvas NO cambia debajo
     let cancelled = false;
     (async () => {
       const pending = edits.size || imageEdits.size || widgetEdits.size || pendingHighlights.length;
@@ -343,12 +349,13 @@ export function EditorPage() {
       setPdf(prev => { void prev?.destroy(); return doc; });
     })().catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'No se pudo generar el preview'); });
     return () => { cancelled = true; };
-  }, [baseBytes, bakePending, edits, imageEdits, widgetEdits, pendingHighlights]);
+  }, [baseBytes, bakePending, edits, imageEdits, widgetEdits, pendingHighlights, editingActive]);
 
   // ── PREPARAR EL LIFT al seleccionar un texto (todavía presente en el canvas):
   //    hornear la página sin él AHORA, en el tiempo muerto entre el click y el
   //    posible arrastre. Si el drag arranca, el blit es instantáneo. ──
   useEffect(() => {
+    if (editingActive) return; // editor abierto: nada de lifts (churn de fuentes/render)
     const sid = selectedId;
     const seg = sid && !edits.has(sid) ? graphRef.current?.segments.find(s => s.id === sid) : null;
     if (!seg || !baseBytes) {
@@ -368,7 +375,7 @@ export function EditorPage() {
     })().catch(() => { /* sin lift: el drag cae al camino lento (blit al aterrizar) */ });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, baseBytes, bakePending, edits, pendingHighlights]);
+  }, [selectedId, baseBytes, bakePending, edits, pendingHighlights, editingActive]);
 
   // Cache del NODO original de cada segmento editado: el preview extirpa sus
   // ops (desaparece del grafo extraído), así que el overlay lo dibuja como
@@ -646,6 +653,7 @@ export function EditorPage() {
                 lift={lift} draggingId={draggingId}
                 areaWidths={areaWidths} onAreaWidth={onAreaWidth}
                 editRequestId={editRequestId} onEditRequestHandled={onEditRequestHandled}
+                onEditingChange={setEditingActive}
               />
             </div>
           ) : (

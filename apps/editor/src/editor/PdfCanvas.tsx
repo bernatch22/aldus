@@ -47,6 +47,7 @@ interface Props {
   /** Segmento a abrir en edición apenas exista (ítem de lista recién creado). */
   editRequestId: string | null;
   onEditRequestHandled: () => void;
+  onEditingChange: (active: boolean) => void;
 }
 
 /** Renderiza una página de pdf.js en un canvas offscreen (HiDPI). */
@@ -74,7 +75,7 @@ async function renderToBackBuffer(doc: PDFDocumentProxy, pageNum: number, scale:
   return back;
 }
 
-export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, lift, draggingId, areaWidths, onAreaWidth, editRequestId, onEditRequestHandled }: Props) {
+export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, lift, draggingId, areaWidths, onAreaWidth, editRequestId, onEditRequestHandled, onEditingChange }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
   const liftTaskRef = useRef<RenderTask | null>(null);
@@ -210,6 +211,7 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
           onAreaWidth={onAreaWidth}
           editRequestId={editRequestId}
           onEditRequestHandled={onEditRequestHandled}
+          onEditingChange={onEditingChange}
         />
       )}
     </div>

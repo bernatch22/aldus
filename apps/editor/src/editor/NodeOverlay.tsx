@@ -719,12 +719,14 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
     };
   }, [editing, selected, seg, edit, scale]);
 
-  // VELO TRANSITORIO: mientras el segmento editado/arrastrado siga en el grafo
-  // del preview (el bake extirpador es asíncrono — aún no llegó), sus glifos
-  // originales siguen pintados en el canvas → un velo esmerilado los tapa para
-  // que no se vea "duplicado". Cuando el preview nuevo aterriza, el segmento
-  // sale del grafo (pasa a fantasma) y el velo cae solo.
-  const veil = inPreview && (edit != null || drag != null);
+  // VELO TRANSITORIO: mientras el segmento EDITADO siga en el grafo del preview
+  // (el bake extirpador es asíncrono — aún no llegó), sus glifos originales
+  // siguen pintados en el canvas → un velo esmerilado los tapa para que no se
+  // vea "duplicado". Cuando el preview nuevo aterriza, el segmento sale del
+  // grafo (pasa a fantasma) y el velo cae solo. DURANTE el arrastre no hay velo:
+  // el original queda visible mientras el texto viaja (como Acrobat), sin
+  // rectángulo blanco en la posición vieja.
+  const veil = inPreview && edit != null;
 
   // Segmento eliminado: el preview local lo extirpa — nada que dibujar
   // (Ctrl+Z lo restaura); el velo tapa los glifos hasta que el bake llegue.

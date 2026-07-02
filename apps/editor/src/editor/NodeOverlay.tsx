@@ -79,6 +79,12 @@ function containerStyle(seg: SegmentNode, edit: SegmentEdit | null, scale: numbe
   };
 }
 
+// Ningún drag puede dejar un nodo perdido fuera de la página: al soltar,
+// siempre quedan al menos 24pt visibles.
+const MIN_VISIBLE = 24;
+const clampX = (x: number, w: number, pageW: number) => Math.min(Math.max(x, MIN_VISIBLE - w), pageW - MIN_VISIBLE);
+const clampY = (y: number, h: number, pageH: number) => Math.min(Math.max(y, MIN_VISIBLE - h), pageH - MIN_VISIBLE);
+
 export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, snapshot }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => setEditingId(null), [graph.page]);
@@ -89,6 +95,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
         <WidgetBox
           key={w.id}
           widget={w}
+          pageWidth={graph.width}
           pageHeight={graph.height}
           scale={scale}
           selected={selectedId === w.id}
@@ -104,6 +111,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
         <ImageBox
           key={img.id}
           img={img}
+          pageWidth={graph.width}
           pageHeight={graph.height}
           scale={scale}
           selected={selectedId === img.id}
@@ -120,6 +128,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
         <SegmentBox
           key={seg.id}
           seg={seg}
+          pageWidth={graph.width}
           pageHeight={graph.height}
           scale={scale}
           selected={selectedId === seg.id}
@@ -140,6 +149,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
 
 interface WidgetBoxProps {
   widget: WidgetNode;
+  pageWidth: number;
   pageHeight: number;
   scale: number;
   selected: boolean;
@@ -155,7 +165,7 @@ const WIDGET_LABEL: Record<WidgetNode['widgetType'], string> = {
 
 /** Un campo de formulario: seleccionar, arrastrar (mover), grip (escalar).
  *  La edición se aplica al instante (reescritura del /Rect de la anotación). */
-function WidgetBox({ widget, pageHeight, scale, selected, edit, onSelect, onPatch }: WidgetBoxProps) {
+function WidgetBox({ widget, pageWidth, pageHeight, scale, selected, edit, onSelect, onPatch }: WidgetBoxProps) {
   const eff = effectiveWidgetRect(widget, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
   const dragStart = useRef<{ px: number; py: number; moved: boolean } | null>(null);
@@ -206,8 +216,8 @@ function WidgetBox({ widget, pageHeight, scale, selected, edit, onSelect, onPatc
         dragStart.current = null;
         setDrag(null);
         if (!start?.moved) return;
-        const nx = round1(eff.x + (e.clientX - start.px) / scale);
-        const ny = round1(eff.y - (e.clientY - start.py) / scale);
+        const nx = round1(clampX(eff.x + (e.clientX - start.px) / scale, eff.width, pageWidth));
+        const ny = round1(clampY(eff.y - (e.clientY - start.py) / scale, eff.height, pageHeight));
         onPatch({
           x: nx === round1(widget.x) ? null : nx,
           y: ny === round1(widget.y) ? null : ny,
@@ -255,6 +265,7 @@ function WidgetBox({ widget, pageHeight, scale, selected, edit, onSelect, onPatc
 
 interface ImageBoxProps {
   img: ImageNode;
+  pageWidth: number;
   pageHeight: number;
   scale: number;
   selected: boolean;
@@ -269,7 +280,7 @@ interface ImageBoxProps {
  *  muestra los PÍXELES reales (crop del snapshot de la página); el original
  *  queda visible hasta Aplicar (ahí se muda de verdad). Eliminada: velo rojo
  *  translúcido — nunca una máscara opaca que taparía el texto de arriba. */
-function ImageBox({ img, pageHeight, scale, selected, edit, snapshot, onSelect, onPatch }: ImageBoxProps) {
+function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, snapshot, onSelect, onPatch }: ImageBoxProps) {
   const eff = effectiveImageRect(img, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
   const orig = pdfRectToCss({ x: img.x, y: img.y, width: img.width, height: img.height }, pageHeight, scale);
@@ -335,8 +346,8 @@ function ImageBox({ img, pageHeight, scale, selected, edit, snapshot, onSelect, 
           dragStart.current = null;
           setDrag(null);
           if (!start?.moved) return;
-          const nx = round1(eff.x + (e.clientX - start.px) / scale);
-          const ny = round1(eff.y - (e.clientY - start.py) / scale);
+          const nx = round1(clampX(eff.x + (e.clientX - start.px) / scale, eff.width, pageWidth));
+          const ny = round1(clampY(eff.y - (e.clientY - start.py) / scale, eff.height, pageHeight));
           onPatch({
             x: nx === round1(img.x) ? null : nx,
             y: ny === round1(img.y) ? null : ny,
@@ -386,6 +397,7 @@ function ImageBox({ img, pageHeight, scale, selected, edit, snapshot, onSelect, 
 
 interface SegmentBoxProps {
   seg: SegmentNode;
+  pageWidth: number;
   pageHeight: number;
   scale: number;
   selected: boolean;
@@ -397,7 +409,7 @@ interface SegmentBoxProps {
   onPatch: (patch: SegmentPatch) => void;
 }
 
-function SegmentBox({ seg, pageHeight, scale, selected, editing, edit, onSelect, onStartEdit, onStopEdit, onPatch }: SegmentBoxProps) {
+function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, onSelect, onStartEdit, onStopEdit, onPatch }: SegmentBoxProps) {
   const eff = effectiveGeometry(seg, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
   const originalRect = pdfRectToCss({ x: seg.x, y: seg.y, width: seg.width, height: seg.height }, pageHeight, scale);
@@ -505,8 +517,8 @@ function SegmentBox({ seg, pageHeight, scale, selected, editing, edit, onSelect,
           dragStart.current = null;
           setDrag(null);
           if (!start?.moved) return;
-          const nx = round1(eff.x + (e.clientX - start.px) / scale);
-          const nb = round1(eff.baseline - (e.clientY - start.py) / scale);
+          const nx = round1(clampX(eff.x + (e.clientX - start.px) / scale, eff.width, pageWidth));
+          const nb = round1(Math.min(Math.max(eff.baseline - (e.clientY - start.py) / scale, 8), pageHeight - 4));
           onPatch({
             x: nx === round1(seg.x) ? null : nx,
             baseline: nb === round1(seg.baseline) ? null : nb,

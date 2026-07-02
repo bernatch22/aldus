@@ -4,6 +4,20 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### fix(color): editar un nodo ya NO pierde el color (ni el bake ni el display)
+Editar el contenido de un texto cuya fuente embebida no cubre los caracteres nuevos (o no
+tiene /ToUnicode) cae al fallback de fuente estándar — que **pintaba todo en negro**,
+perdiendo el color original. Ahora:
+- **Bake (autoritativo)**: el fallback preserva el color del content stream original
+  (`rawFillToRgb` parsea rg/g/k/sc del op) salvo override explícito. Test: título rojo →
+  editar texto → el bloque horneado emite el rojo, no `0 0 0 rg`.
+- **Display**: `sampleColor.ts` muestrea el color de cada run del canvas ya renderizado
+  (pdf.js no expone color por run) — el más "tinta" del bbox. Se usa en el overlay (el
+  texto editado se ve con su color real), el contenedor editable y el default del color
+  picker del panel. Best-effort, solo para preview; el bake toma el color exacto.
+La fuente: para glifos fuera del subset la sustitución estándar (Helvetica≈Arial, bucket +
+bold/italic) es inherente al formato — Acrobat hace lo mismo; el color ahora sí se conserva.
+
 ### fix(editor): unlock accesible, drag de widgets con píxeles, y NADA se guarda solo
 - **Unlock**: candadito clickeable en cada fila del esquema (Campos/Imágenes/Texto) — se
   bloquea/desbloquea con un click, sin necesidad de seleccionar el nodo (que estando

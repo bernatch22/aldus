@@ -49,6 +49,10 @@ export interface TextRunNode {
   /** Rotación en radianes; 0 = horizontal. */
   angle: number;
   font: FontInfo;
+  /** Color del texto en hex (#rrggbb). Muestreado del canvas renderizado
+   *  (browser); ausente = negro. Solo para DISPLAY — el bake toma el color
+   *  exacto del content stream. */
+  color?: string;
 }
 
 /** Runs contiguos de una línea: LA UNIDAD DE EDICIÓN. Su `x` es un ANCLA

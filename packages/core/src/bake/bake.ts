@@ -228,6 +228,29 @@ export function hexToRg(hex: string): string | undefined {
   return `${c((v >> 16) & 0xff)} ${c((v >> 8) & 0xff)} ${c(v & 0xff)} rg`;
 }
 
+/** Parsea el operador de color de relleno original ("R G B rg", "G g",
+ *  "C M Y K k", o sc/scn con 1/3 números) a rgb 0..1. null si no se entiende. */
+function rawFillToRgb(raw: string | undefined): { r: number; g: number; b: number } | null {
+  if (!raw) return null;
+  const nums = (raw.match(/-?\d*\.?\d+/g) ?? []).map(Number);
+  if (/\brg\b/.test(raw) && nums.length >= 3) return { r: nums[0], g: nums[1], b: nums[2] };
+  if (/\bg\b/.test(raw) && !/\brg\b/.test(raw) && nums.length >= 1) return { r: nums[0], g: nums[0], b: nums[0] };
+  if (/\bk\b/.test(raw) && nums.length >= 4) {
+    const [c, m, y, kk] = nums;
+    return { r: (1 - c) * (1 - kk), g: (1 - m) * (1 - kk), b: (1 - y) * (1 - kk) };
+  }
+  // sc/scn sin operador de color reconocido: 3 números = rgb, 1 = gris.
+  if (nums.length >= 3) return { r: nums[nums.length - 3], g: nums[nums.length - 2], b: nums[nums.length - 1] };
+  if (nums.length === 1) return { r: nums[0], g: nums[0], b: nums[0] };
+  return null;
+}
+
+const hexToRgbObj = (hex: string): { r: number; g: number; b: number } => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  const v = m ? parseInt(m[1], 16) : 0;
+  return { r: ((v >> 16) & 0xff) / 255, g: ((v >> 8) & 0xff) / 255, b: (v & 0xff) / 255 };
+};
+
 /** Bloque que re-emite UN show-op verbatim, reubicado/escalado/re-estilado. */
 function reemitBlock(o: ShowOp, src: Uint8Array, ratio: number, x: number, y: number, ov: TextStyleOverrides = {}): string | null {
   const show =
@@ -301,6 +324,8 @@ interface FallbackDraw {
   bucket: FontBucket;
   bold: boolean;
   italic: boolean;
+  /** Color del texto (0..1). Ausente = negro. */
+  color?: { r: number; g: number; b: number };
 }
 
 /** Widgets AcroForm: viven en /Annots, no en el content stream — mover/escalar
@@ -549,6 +574,10 @@ export async function bakeSegmentEdits(
           inlineBlocks.push(inlineBlock);
         } else {
           if (!/^\s+$/.test(sr.text)) {
+            // Preservar el COLOR original (del op) salvo override explícito —
+            // sin esto la sustitución de fuente pintaba todo en negro.
+            const srcOp = ops.find(o => o.fontName === fontName) ?? firstOp;
+            const color = edit.color ? hexToRgbObj(edit.color) : rawFillToRgb(srcOp?.fillColorRaw) ?? undefined;
             fallbackDraws.push({
               page: pageNum,
               text: sr.text,
@@ -558,6 +587,7 @@ export async function bakeSegmentEdits(
               bucket: edit.font ?? edit.original.bucket ?? 'sans',
               bold: sr.bold,
               italic: sr.italic,
+              color: color ?? undefined,
             });
           }
           substituted++;
@@ -587,13 +617,14 @@ export async function bakeSegmentEdits(
         fontCache.set(key, font);
       }
       const page = pages[d.page - 1];
+      const color = d.color ? rgb(d.color.r, d.color.g, d.color.b) : rgb(0, 0, 0);
       try {
-        page.drawText(d.text, { x: d.x, y: d.y, size: d.size, font, color: rgb(0, 0, 0) });
+        page.drawText(d.text, { x: d.x, y: d.y, size: d.size, font, color });
       } catch {
         // Caracteres fuera de WinAnsi: filtrarlos e informar (nunca romper el PDF).
         const clean = [...d.text].filter(c => c.charCodeAt(0) <= 0xff).join('');
         try {
-          page.drawText(clean, { x: d.x, y: d.y, size: d.size, font, color: rgb(0, 0, 0) });
+          page.drawText(clean, { x: d.x, y: d.y, size: d.size, font, color });
           warnings.push(`p${d.page}: caracteres no representables descartados en "${d.text.slice(0, 24)}…"`);
         } catch {
           warnings.push(`p${d.page}: no se pudo dibujar el reemplazo "${d.text.slice(0, 24)}…"`);

@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { PDFDocument, PDFName, PDFRawStream, PDFRef, StandardFonts, decodePDFRawStream } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFArray, PDFRawStream, PDFRef, StandardFonts, decodePDFRawStream, rgb } from 'pdf-lib';
 import { walkContent } from '../src/bake/index.js';
 import {
   extractPageGraph,
@@ -339,6 +339,62 @@ describe('documento: texto nuevo, watermark, links', () => {
     const { pdf: without, removed } = await removeLink(withLink, { page: 1, x: g.links[0].x, y: g.links[0].y, width: g.links[0].width, height: g.links[0].height });
     expect(removed).toBe(true);
     expect((await graphOf(without)).links).toHaveLength(0);
+  });
+});
+
+describe('color al editar', () => {
+  function streamText(doc: PDFDocument, obj: unknown): string {
+    const s = obj instanceof PDFRef ? doc.context.lookup(obj) : obj;
+    const bytes = decodePDFRawStream(s as PDFRawStream).decode();
+    let out = ''; for (let i = 0; i < bytes.length; i++) out += String.fromCharCode(bytes[i]);
+    return out;
+  }
+  function pageStreams(pdf: Uint8Array): Promise<string> {
+    return PDFDocument.load(pdf).then(doc => {
+      const raw = doc.getPages()[0].node.get(PDFName.of('Contents'));
+      if (raw instanceof PDFArray) {
+        let s = ''; for (let i = 0; i < raw.size(); i++) s += streamText(doc, raw.get(i));
+        return s;
+      }
+      return streamText(doc, raw);
+    });
+  }
+
+  it('editar el TEXTO conserva el color original (fallback ya no pinta negro)', async () => {
+    // Texto ROJO con fuente estándar → editar el contenido cae al fallback.
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([300, 100]);
+    const font = await doc.embedFont(StandardFonts.HelveticaBold);
+    page.drawText('Titulo', { x: 20, y: 60, size: 16, font, color: rgb(0.85, 0.1, 0.1) });
+    const pdf = await doc.save();
+
+    const g = await graphOf(pdf);
+    const seg = g.segments.find(s => s.text.includes('Titulo'));
+    if (!seg) throw new Error('segmento no encontrado');
+    const edit = mergeSegmentEdit(seg, null, { text: 'Titulo Nuevo' });
+    if (!edit) throw new Error('edición vacía');
+    const { pdf: baked } = await bakeSegmentEdits(pdf, [edit]);
+
+    const s = await pageStreams(baked);
+    // El bloque del fallback debe emitir el rojo original (no "0 0 0 rg").
+    expect(/0\.8[0-9]* 0\.[01][0-9]* 0\.[01][0-9]* rg/.test(s)).toBe(true);
+    // El nuevo texto está.
+    const g2 = await graphOf(baked);
+    expect(g2.segments.some(x => x.text.includes('Titulo Nuevo'))).toBe(true);
+  });
+
+  it('solo mover NO cambia el color (path verbatim conserva todo)', async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([300, 100]);
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    page.drawText('Azul', { x: 20, y: 60, size: 14, font, color: rgb(0, 0, 0.9) });
+    const pdf = await doc.save();
+    const g = await graphOf(pdf);
+    const seg = g.segments.find(s => s.text.includes('Azul'))!;
+    const edit = mergeSegmentEdit(seg, null, { x: 100 })!;
+    const { pdf: baked } = await bakeSegmentEdits(pdf, [edit]);
+    const s = await pageStreams(baked);
+    expect(/0 0 0\.9[0-9]* rg/.test(s)).toBe(true);
   });
 });
 

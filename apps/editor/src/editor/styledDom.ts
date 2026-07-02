@@ -86,7 +86,8 @@ export function styledSpanStyle(seg: SegmentNode, sr: { bold: boolean; italic: b
   const { base, exact } = styleBase(seg, sr.bold, sr.italic);
   const synthBold = sr.bold && (!exact || !base.font.embedded);
   const synthItalic = sr.italic && (!exact || !base.font.embedded);
-  return `font-family:${family(base)};font-size:${(base.fontSize * sizeRatio * scale).toFixed(2)}px;` +
+  const color = base.color ? `color:${base.color};` : '';
+  return `font-family:${family(base)};font-size:${(base.fontSize * sizeRatio * scale).toFixed(2)}px;${color}` +
     (synthBold ? 'font-weight:700;' : '') + (synthItalic ? 'font-style:italic;' : '');
 }
 
@@ -102,7 +103,8 @@ export function runStyle(r: TextRunNode, scale: number, letterSpacing = 0): stri
   const weight = !r.font.embedded && r.font.bold ? 'font-weight:bold;' : '';
   const style = !r.font.embedded && r.font.italic ? 'font-style:italic;' : '';
   const tracking = letterSpacing !== 0 ? `letter-spacing:${letterSpacing.toFixed(3)}px;` : '';
-  return `font-family:${family(r)};font-size:${(r.fontSize * scale).toFixed(2)}px;${weight}${style}${tracking}`;
+  const color = r.color ? `color:${r.color};` : '';
+  return `font-family:${family(r)};font-size:${(r.fontSize * scale).toFixed(2)}px;${color}${weight}${style}${tracking}`;
 }
 
 /** Runs estilados → el DOM canónico del box editable (un span por tramo, con

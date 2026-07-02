@@ -204,6 +204,7 @@ function TextProps({ seg, edit, onEdit, onDocOp, onRequestLink }:
   { seg: SegmentNode; edit: SegmentEdit | null; onEdit: (a: EditAction) => void; onDocOp: (a: string, p: Record<string, unknown>) => void; onRequestLink: (t: { page: number; x: number; y: number; width: number; height: number }) => void }) {
   const commit = (patch: SegmentPatch) => { const m = mergeSegmentEdit(seg, edit, patch); onEdit(m ?? { segmentId: seg.id, revert: true }); };
   const dom = seg.runs.reduce((a, b) => (b.width > a.width ? b : a));
+  const origColor = dom.color ?? '#000000';
   const styled: StyledRun[] = edit?.runs ?? originalStyledRuns(seg);
   const setRuns = (runs: StyledRun[]) => commit({ runs });
 
@@ -248,7 +249,7 @@ function TextProps({ seg, edit, onEdit, onDocOp, onRequestLink }:
           <NumberInput label="pt" defaultValue={curSize} min={4} onCommit={numOv('fontSize', seg.fontSize)} />
           <Toggle active={allBold} onToggle={() => toggleStyle('bold', () => setRuns(styled.map(r => ({ ...r, bold: !allBold }))))} label="Negrita"><Bold size={15} /></Toggle>
           <Toggle active={allItalic} onToggle={() => toggleStyle('italic', () => setRuns(styled.map(r => ({ ...r, italic: !allItalic }))))} label="Itálica"><Italic size={15} /></Toggle>
-          <ColorSwatch title="Color del texto" value={edit?.color ?? '#000000'} onChange={v => commit({ color: v === '#000000' ? null : v })} />
+          <ColorSwatch title="Color del texto" value={edit?.color ?? origColor} onChange={v => commit({ color: v.toLowerCase() === origColor.toLowerCase() ? null : v })} />
         </Row>
         <Row>
           <NumberInput label="AV" step={0.1} defaultValue={edit?.charSpacing ?? 0} onCommit={v => commit({ charSpacing: v === 0 ? null : v })} />

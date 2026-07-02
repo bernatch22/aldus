@@ -129,6 +129,7 @@ function containerStyle(seg: SegmentNode, edit: SegmentEdit | null, scale: numbe
     fontSize: `${(dom.fontSize * ratio * scale).toFixed(2)}px`,
     fontWeight: !dom.font.embedded && dom.font.bold ? 700 : 400,
     fontStyle: !dom.font.embedded && dom.font.italic ? 'italic' : 'normal',
+    color: edit?.color ?? dom.color ?? '#000',
   };
 }
 

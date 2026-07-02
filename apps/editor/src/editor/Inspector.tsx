@@ -13,7 +13,7 @@ import {
   type PageGraph, type SegmentEdit, type SegmentNode, type SegmentPatch,
   type WidgetEdit, type WidgetNode, type WidgetPatch,
 } from '@aldus/core';
-import type { ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import {
   X, Trash2, RotateCcw, Lock, Unlock,
   SendToBack, BringToFront, Type, Image as ImageIcon, TextCursorInput, Link as LinkIcon,
@@ -154,46 +154,72 @@ export function Inspector(props: Props) {
   );
 
   // ── esquema de la página (sin selección) ──
-  return (
-    <Panel>
-      <Header title={`Página ${graph.page}`} subtitle={`${graph.width.toFixed(0)}×${graph.height.toFixed(0)} pt`} />
-      {graph.widgets.length > 0 && (
-        <Section title={`Campos (${graph.widgets.length})`}>
-          {graph.widgets.map(w => (
-            <OutlineItem key={w.id} icon={<TextCursorInput size={14} />} onClick={() => onSelect(w.id)}
-              edited={widgetEdits.has(w.id)}
-              lockable={{ locked: locked.has(w.id), onToggle: () => onToggleLock(w.id) }}
-              label={w.fieldName || '(sin nombre)'} meta={`${WIDGET_TYPE_LABEL[w.widgetType]} · x ${n1(w.x)} · y ${n1(w.y)}`} />
-          ))}
-        </Section>
-      )}
-      {graph.links.length > 0 && (
-        <Section title={`Links (${graph.links.length})`}>
-          {graph.links.map(l => (
-            <OutlineItem key={l.id} icon={<LinkIcon size={14} />} label={l.url} meta={`x ${n1(l.x)} · y ${n1(l.y)}`}
-              right={<button title="Borrar link" onClick={e => { e.stopPropagation(); props.onDocOp('removeLink', { page: l.page, x: l.x, y: l.y, width: l.width, height: l.height }); }}
-                className="grid h-6 w-6 shrink-0 place-items-center rounded text-neutral-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={13} /></button>} />
-          ))}
-        </Section>
-      )}
-      {graph.images.length > 0 && (
-        <Section title={`Imágenes (${graph.images.length})`}>
-          {graph.images.map(im => (
-            <OutlineItem key={im.id} icon={<ImageIcon size={14} />} onClick={() => onSelect(im.id)}
-              edited={imageEdits.has(im.id)}
-              lockable={{ locked: locked.has(im.id), onToggle: () => onToggleLock(im.id) }}
-              label={`${Math.round(im.width)}×${Math.round(im.height)} pt${imageEdits.get(im.id)?.remove ? ' · eliminada' : ''}`}
-              meta={`x ${n1(im.x)} · y ${n1(im.y)}${im.rotated ? ' · rotada' : ''}`} />
-          ))}
-        </Section>
-      )}
+  // Los nodos BLOQUEADOS van primero dentro de cada sección (para verlos de
+  // una); el sort es estable → el resto conserva su orden natural.
+  const lockFirst = <T,>(items: T[], idOf: (t: T) => string): T[] =>
+    [...items].sort((a, b) => (locked.has(idOf(a)) ? 0 : 1) - (locked.has(idOf(b)) ? 0 : 1));
+  const segsInOrder = graph.lines.flatMap(l => l.segments);
+
+  // Secciones ordenadas por CANTIDAD ascendente: las de pocos componentes
+  // (imágenes, links) arriba; texto/campos (que se hacen "infinitos") al final.
+  const sections: Array<{ key: string; count: number; node: ReactNode }> = [];
+  if (graph.links.length > 0) sections.push({
+    key: 'links', count: graph.links.length,
+    node: (
+      <Section title={`Links (${graph.links.length})`}>
+        {graph.links.map(l => (
+          <OutlineItem key={l.id} icon={<LinkIcon size={14} />} label={l.url} meta={`x ${n1(l.x)} · y ${n1(l.y)}`}
+            right={<button title="Borrar link" onClick={e => { e.stopPropagation(); props.onDocOp('removeLink', { page: l.page, x: l.x, y: l.y, width: l.width, height: l.height }); }}
+              className="grid h-6 w-6 shrink-0 place-items-center rounded text-neutral-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={13} /></button>} />
+        ))}
+      </Section>
+    ),
+  });
+  if (graph.images.length > 0) sections.push({
+    key: 'images', count: graph.images.length,
+    node: (
+      <Section title={`Imágenes (${graph.images.length})`}>
+        {lockFirst(graph.images, im => im.id).map(im => (
+          <OutlineItem key={im.id} icon={<ImageIcon size={14} />} onClick={() => onSelect(im.id)}
+            edited={imageEdits.has(im.id)}
+            lockable={{ locked: locked.has(im.id), onToggle: () => onToggleLock(im.id) }}
+            label={`${Math.round(im.width)}×${Math.round(im.height)} pt${imageEdits.get(im.id)?.remove ? ' · eliminada' : ''}`}
+            meta={`x ${n1(im.x)} · y ${n1(im.y)}${im.rotated ? ' · rotada' : ''}`} />
+        ))}
+      </Section>
+    ),
+  });
+  if (graph.widgets.length > 0) sections.push({
+    key: 'widgets', count: graph.widgets.length,
+    node: (
+      <Section title={`Campos (${graph.widgets.length})`}>
+        {lockFirst(graph.widgets, w => w.id).map(w => (
+          <OutlineItem key={w.id} icon={<TextCursorInput size={14} />} onClick={() => onSelect(w.id)}
+            edited={widgetEdits.has(w.id)}
+            lockable={{ locked: locked.has(w.id), onToggle: () => onToggleLock(w.id) }}
+            label={w.fieldName || '(sin nombre)'} meta={`${WIDGET_TYPE_LABEL[w.widgetType]} · x ${n1(w.x)} · y ${n1(w.y)}`} />
+        ))}
+      </Section>
+    ),
+  });
+  if (graph.segments.length > 0) sections.push({
+    key: 'text', count: graph.segments.length,
+    node: (
       <Section title={`Texto (${graph.segments.length})`}>
-        {graph.lines.map(l => l.segments.map(s => (
+        {lockFirst(segsInOrder, s => s.id).map(s => (
           <OutlineItem key={s.id} icon={<Type size={14} />} onClick={() => onSelect(s.id)} edited={edits.has(s.id)}
             lockable={{ locked: locked.has(s.id), onToggle: () => onToggleLock(s.id) }}
             label={<StyledPreview seg={s} edit={edits.get(s.id) ?? null} />} meta={`x ${n1(s.x)} · y ${n1(s.baseline)} · ${n1(s.fontSize)} pt`} />
-        )))}
+        ))}
       </Section>
+    ),
+  });
+  sections.sort((a, b) => a.count - b.count);
+
+  return (
+    <Panel>
+      <Header title={`Página ${graph.page}`} subtitle={`${graph.width.toFixed(0)}×${graph.height.toFixed(0)} pt`} />
+      {sections.map(s => <Fragment key={s.key}>{s.node}</Fragment>)}
     </Panel>
   );
 }

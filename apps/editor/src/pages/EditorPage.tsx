@@ -108,6 +108,33 @@ export function EditorPage() {
     });
   }, [id]);
 
+  // Auto-lock de imágenes FULL-PAGE (fondos que cubren casi toda la hoja, como
+  // el del insurance agreement): estorban al editar, así que nacen bloqueadas.
+  // Se siembra UNA vez por imagen y por documento (marcador aparte, persistido):
+  // si el usuario la desbloquea, no se vuelve a bloquear al recargar.
+  useEffect(() => {
+    if (!graph?.images.length) return;
+    let seeded: Set<string>;
+    try { seeded = new Set(JSON.parse(localStorage.getItem(`aldus-autolock-${id}`) || '[]') as string[]); }
+    catch { seeded = new Set(); }
+    const toLock: string[] = [];
+    let seededChanged = false;
+    for (const im of graph.images) {
+      if (seeded.has(im.id)) continue;
+      seeded.add(im.id); seededChanged = true;
+      const coverage = (im.width * im.height) / (graph.width * graph.height);
+      if (coverage >= 0.8) toLock.push(im.id);
+    }
+    if (seededChanged) localStorage.setItem(`aldus-autolock-${id}`, JSON.stringify([...seeded]));
+    if (!toLock.length) return;
+    setLocked(prev => {
+      const next = new Set(prev);
+      for (const nid of toLock) next.add(nid);
+      localStorage.setItem(`aldus-locks-${id}`, JSON.stringify([...next]));
+      return next;
+    });
+  }, [graph, id]);
+
   // El estilo DOMINANTE de la página (mediana de tamaño + bucket más común):
   // el texto nuevo nace pareciéndose a los grafos existentes, no a Helvetica 11.
   const pageTextStyle = useMemo(() => {

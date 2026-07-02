@@ -4,6 +4,15 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### feat(editor): imágenes full-page bloqueadas por defecto + esquema (layers) ordenado por cantidad, locked primero
+- **Auto-lock de fondos full-page**: una imagen que cubre ≥80% de la hoja (el fondo del
+  insurance agreement) nace bloqueada — estorbaba al editar. Se siembra UNA vez por
+  imagen/documento (marcador `aldus-autolock-<id>` persistido): si el usuario la
+  desbloquea, no se re-bloquea al recargar.
+- **Esquema del Inspector reordenado**: las secciones van por CANTIDAD ascendente
+  (imágenes/links arriba, campos/texto — que se hacen "infinitos" — al final), y dentro
+  de cada sección los nodos BLOQUEADOS van primero (sort estable) para verlos de una.
+
 ### fix(editor): mover un texto ya no cambia sus GAPS — el move puro usa el layout original exacto
 `seedHtml` con edición colapsaba TODO el texto a un solo span (estilo dominante, texto
 fluido): los gaps entre runs quedaban como espacios naturales de la fuente, no los del

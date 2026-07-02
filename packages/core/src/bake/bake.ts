@@ -151,6 +151,28 @@ function xobjectRect(m: [number, number, number, number, number, number]) {
   return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y, rotated: Math.abs(b) > 0.01 || Math.abs(c) > 0.01 };
 }
 
+/** Nombres de recursos XObject de la página que son IMÁGENES (Subtype /Image).
+ *  Un `Do` puede invocar también un Form XObject (que envuelve CONTENIDO —
+ *  extirparlo por error borraría todo lo que contiene): jamás se matchea. */
+function imageResourceNames(doc: PDFDocument, page: ReturnType<PDFDocument['getPages']>[number]): Set<string> {
+  const out = new Set<string>();
+  try {
+    const res = page.node.Resources();
+    const xo = res?.lookup(PDFName.of('XObject'));
+    if (!(xo instanceof PDFDict)) return out;
+    for (const [key, val] of xo.entries()) {
+      const obj = val instanceof PDFRef ? doc.context.lookup(val) : val;
+      const dict = obj instanceof PDFRawStream ? obj.dict : obj instanceof PDFDict ? obj : null;
+      if (dict?.get(PDFName.of('Subtype')) === PDFName.of('Image')) {
+        out.add(key.toString().replace(/^\//, ''));
+      }
+    }
+  } catch {
+    /* sin recursos → sin imágenes */
+  }
+  return out;
+}
+
 function matchImage(xobjects: XObjectOp[], orig: ImageEdit['original']): XObjectOp | null {
   const tol = Math.max(2, orig.width * 0.02, orig.height * 0.02);
   return xobjects.find(o => {
@@ -271,8 +293,10 @@ export async function bakeSegmentEdits(
 
     // ── imágenes: mover/escalar re-emite `q cm /Nombre Do Q`; eliminar solo
     //    extirpa el Do (los cm huérfanos no dibujan nada) ──
+    const imgNames = pageImgEdits.length ? imageResourceNames(doc, page) : new Set<string>();
+    const imageOps = xobjects.filter(o => imgNames.has(o.name));
     for (const edit of pageImgEdits) {
-      const op = matchImage(xobjects, edit.original);
+      const op = matchImage(imageOps, edit.original);
       if (!op) {
         warnings.push(`${edit.imageId}: no se encontró el XObject en la posición original — sin cambios`);
         continue;

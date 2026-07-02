@@ -29,6 +29,9 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  // Snapshot de la página renderizada: los previews de imágenes movidas lo usan
+  // como fuente de píxeles (crop por background-position).
+  const [snapshot, setSnapshot] = useState<{ url: string; width: number; height: number } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,6 +63,11 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
         return; // render cancelado por un cambio de página/zoom — el nuevo ya corre
       }
       if (cancelled) return;
+      try {
+        setSnapshot({ url: canvas.toDataURL('image/jpeg', 0.7), width: Math.floor(viewport.width), height: Math.floor(viewport.height) });
+      } catch {
+        setSnapshot(null);
+      }
       const g = await extractPageGraph(page as unknown as PdfJsPage);
       if (!cancelled) onGraph(g);
     })();
@@ -82,6 +90,7 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
           onEdit={onEdit}
           imageEdits={imageEdits}
           onImageEdit={onImageEdit}
+          snapshot={snapshot}
         />
       )}
     </div>

@@ -53,6 +53,8 @@ interface Props {
   onEdit: (action: EditAction) => void;
   imageEdits: Map<string, ImageEdit>;
   onImageEdit: (action: ImageEditAction) => void;
+  /** Snapshot de la página renderizada (para previews de imágenes movidas). */
+  snapshot: { url: string; width: number; height: number } | null;
 }
 
 /** Tipografía del CONTENEDOR editable: la dominante del segmento (con tamaño/
@@ -69,7 +71,7 @@ function containerStyle(seg: SegmentNode, edit: SegmentEdit | null, scale: numbe
   };
 }
 
-export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit }: Props) {
+export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, snapshot }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => setEditingId(null), [graph.page]);
 
@@ -83,6 +85,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           scale={scale}
           selected={selectedId === img.id}
           edit={imageEdits.get(img.id) ?? null}
+          snapshot={snapshot}
           onSelect={() => onSelect(img.id)}
           onPatch={patch => {
             const merged = mergeImageEdit(img, imageEdits.get(img.id) ?? null, patch);
@@ -118,16 +121,17 @@ interface ImageBoxProps {
   scale: number;
   selected: boolean;
   edit: ImageEdit | null;
+  snapshot: { url: string; width: number; height: number } | null;
   onSelect: () => void;
   onPatch: (patch: ImagePatch) => void;
 }
 
 /** Una imagen del grafo: seleccionar, arrastrar (mover), grip (escalar),
- *  eliminar (desde el panel). Preview: la imagen ORIGINAL queda visible en su
- *  lugar (el canvas la tiene pintada); si se movió/escaló se muestra además un
- *  frame fantasma en el destino — el resultado real aparece al Aplicar. Una
- *  imagen eliminada se tapa con máscara blanca (preview de la eliminación). */
-function ImageBox({ img, pageHeight, scale, selected, edit, onSelect, onPatch }: ImageBoxProps) {
+ *  eliminar (desde el panel). Preview de mover/escalar: el box del destino
+ *  muestra los PÍXELES reales (crop del snapshot de la página); el original
+ *  queda visible hasta Aplicar (ahí se muda de verdad). Eliminada: velo rojo
+ *  translúcido — nunca una máscara opaca que taparía el texto de arriba. */
+function ImageBox({ img, pageHeight, scale, selected, edit, snapshot, onSelect, onPatch }: ImageBoxProps) {
   const eff = effectiveImageRect(img, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
   const orig = pdfRectToCss({ x: img.x, y: img.y, width: img.width, height: img.height }, pageHeight, scale);
@@ -139,15 +143,26 @@ function ImageBox({ img, pageHeight, scale, selected, edit, onSelect, onPatch }:
   if (eff.removed) {
     return (
       <div
-        className={`seg-mask img-removed${selected ? ' selected' : ''}`}
+        className={`img-removed${selected ? ' selected' : ''}`}
         style={{ left: orig.left, top: orig.top, width: orig.width, height: orig.height }}
-        title="Imagen eliminada (Aplicar al PDF para confirmar)"
+        title="Imagen eliminada — Aplicar al PDF para confirmar"
         onClick={e => { e.stopPropagation(); onSelect(); }}
-      />
+      >
+        <span className="ghost-label">se elimina al Aplicar</span>
+      </div>
     );
   }
 
   const ghost = eff.moved;
+  // Los píxeles del preview: crop del snapshot de la página, reescalado al
+  // tamaño efectivo del box (background-position/size hacen el crop).
+  const ghostPixels = ghost && snapshot && orig.width > 0 && orig.height > 0
+    ? {
+        backgroundImage: `url(${snapshot.url})`,
+        backgroundSize: `${(snapshot.width * rect.width) / orig.width}px ${(snapshot.height * rect.height) / orig.height}px`,
+        backgroundPosition: `${(-orig.left * rect.width) / orig.width}px ${(-orig.top * rect.height) / orig.height}px`,
+      }
+    : undefined;
   return (
     <>
       <div
@@ -158,6 +173,7 @@ function ImageBox({ img, pageHeight, scale, selected, edit, onSelect, onPatch }:
           width: gripDelta ? rect.width + gripDelta.dx : rect.width,
           height: gripDelta ? rect.height + gripDelta.dy : rect.height,
           transform: drag ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
+          ...ghostPixels,
         }}
         title={`Imagen · ${Math.round(eff.width)}×${Math.round(eff.height)} pt`}
         onClick={e => { e.stopPropagation(); onSelect(); }}

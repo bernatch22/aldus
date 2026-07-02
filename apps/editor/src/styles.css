@@ -106,8 +106,14 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
   color: var(--edited);
   white-space: nowrap;
 }
-.img-removed { outline: 2px dashed #b91c1c; cursor: pointer; }
+.img-removed {
+  position: absolute;
+  outline: 2px dashed #b91c1c;
+  background: rgba(185, 28, 28, 0.07);
+  cursor: pointer;
+}
 .img-removed.selected { outline-color: var(--accent); }
+.img-removed .ghost-label { color: #b91c1c; top: 2px; left: 4px; }
 .prop-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .prop-cell { display: flex; align-items: center; gap: 6px; }
 .prop-cell .prop-input.num { flex: 1; width: auto; }

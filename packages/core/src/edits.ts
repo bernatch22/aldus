@@ -63,6 +63,46 @@ export function styledRunsEqual(a: StyledRun[], b: StyledRun[]): boolean {
 
 export const styledText = (runs: StyledRun[]): string => runs.map(r => r.text).join('');
 
+/** Aplica un toggle de estilo SOLO al rango [start, end) del texto plano de los
+ *  runs (offsets en caracteres): corta los tramos en los límites, decide el
+ *  destino (si TODO el rango ya tiene el estilo → quitarlo; si no → ponerlo),
+ *  lo aplica solo adentro y fusiona adyacentes. Operación pura — el editor la
+ *  usa para Cmd+B/Cmd+I sobre la selección, sin execCommand del browser. */
+export function toggleStyleRange(
+  runs: StyledRun[],
+  start: number,
+  end: number,
+  key: 'bold' | 'italic',
+): StyledRun[] {
+  if (end <= start) return runs;
+  const pieces: Array<{ run: StyledRun; from: number }> = [];
+  let pos = 0;
+  for (const r of runs) {
+    const bounds = new Set([0, r.text.length]);
+    for (const cut of [start - pos, end - pos]) {
+      if (cut > 0 && cut < r.text.length) bounds.add(cut);
+    }
+    const sorted = [...bounds].sort((a, b) => a - b);
+    for (let i = 0; i < sorted.length - 1; i++) {
+      pieces.push({ run: { ...r, text: r.text.slice(sorted[i], sorted[i + 1]) }, from: pos + sorted[i] });
+    }
+    pos += r.text.length;
+  }
+  const inRange = (p: { from: number; run: StyledRun }) => p.from >= start && p.from < end;
+  const selected = pieces.filter(inRange);
+  if (!selected.length) return runs;
+  const target = !selected.every(p => p.run[key]);
+  const out: StyledRun[] = [];
+  for (const p of pieces) {
+    const r = inRange(p) ? { ...p.run, [key]: target } : p.run;
+    const last = out[out.length - 1];
+    if (last && last.bold === r.bold && last.italic === r.italic) last.text += r.text;
+    else out.push({ ...r, dx: 0 });
+  }
+  if (out.length) out[0].dx = runs[0]?.dx ?? 0;
+  return out;
+}
+
 export function mergeSegmentEdit(
   seg: SegmentNode,
   prev: SegmentEdit | null,

@@ -36,6 +36,7 @@ import {
   pdfRectToCss,
   styledRunsEqual,
   styledText,
+  toggleStyleRange,
   type FontBucket,
   type PageGraph,
   type SegmentEdit,
@@ -144,6 +145,14 @@ function containerStyle(seg: SegmentNode, edit: SegmentEdit | null, scale: numbe
   };
 }
 
+/** Runs estilados → el DOM canónico del box editable (un span por tramo, con
+ *  data-b/data-i y la fuente real de ese estilo). */
+function runsToHtml(seg: SegmentNode, runs: StyledRun[], sizeRatio: number, scale: number): string {
+  return runs.map(sr =>
+    `<span data-b="${sr.bold ? 1 : 0}" data-i="${sr.italic ? 1 : 0}" style="${styledSpanStyle(seg, sr, sizeRatio, scale)}">${esc(sr.text)}</span>`,
+  ).join('') || '<br>';
+}
+
 /** HTML inicial del box. Sin edición: un span por run con su fuente real, su
  *  fit y su estilo en data-b/data-i. Con edición: un span por TRAMO estilado. */
 function seedHtml(seg: SegmentNode, edit: SegmentEdit | null, scale: number): string {
@@ -151,9 +160,7 @@ function seedHtml(seg: SegmentNode, edit: SegmentEdit | null, scale: number): st
     const ratio = (edit.fontSize ?? seg.fontSize) / seg.fontSize;
     const dom = dominantRun(seg);
     const source: StyledRun[] = edit.runs ?? [{ text: edit.text, bold: dom.font.bold, italic: dom.font.italic, dx: 0 }];
-    return source.map(sr =>
-      `<span data-b="${sr.bold ? 1 : 0}" data-i="${sr.italic ? 1 : 0}" style="${styledSpanStyle(seg, sr, ratio, scale)}">${esc(sr.text)}</span>`,
-    ).join('') || '<br>';
+    return runsToHtml(seg, source, ratio, scale);
   }
   const runs = seg.runs;
   let html = '';
@@ -212,6 +219,51 @@ function serializeStyled(root: HTMLElement, seg: SegmentNode, sizeRatio: number)
     dx += measureWidth(p.text, measureFontFor(seg, p, sizeRatio));
   }
   return out;
+}
+
+/** Posición de la selección como offsets sobre el TEXTO PLANO del box. */
+function flatOffsets(root: HTMLElement, range: Range): { start: number; end: number } {
+  let start = -1;
+  let end = -1;
+  let pos = 0;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const len = n.textContent?.length ?? 0;
+    if (n === range.startContainer) start = pos + range.startOffset;
+    if (n === range.endContainer) end = pos + range.endOffset;
+    pos += len;
+  }
+  if (start < 0) start = 0; // contenedor de elemento (triple click) → todo
+  if (end < 0) end = pos;
+  return { start: Math.min(start, pos), end: Math.min(end, pos) };
+}
+
+function restoreSelection(root: HTMLElement, start: number, end: number): void {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  let pos = 0;
+  let startSet = false;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const len = n.textContent?.length ?? 0;
+    if (!startSet && start <= pos + len) {
+      range.setStart(n, Math.max(0, start - pos));
+      startSet = true;
+    }
+    if (startSet && end <= pos + len) {
+      range.setEnd(n, Math.max(0, end - pos));
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return;
+    }
+    pos += len;
+  }
+  if (startSet) {
+    range.setEnd(root, root.childNodes.length);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
 }
 
 export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit }: Props) {
@@ -360,6 +412,23 @@ function SegmentBox({ seg, pageHeight, scale, selected, editing, edit, onSelect,
               if (e.key === 'Escape') {
                 e.currentTarget.innerHTML = seedHtml(seg, edit, scale);
                 e.currentTarget.blur();
+              }
+              // Cmd/Ctrl+B / +I: estilo a la SELECCIÓN, vía el modelo — nunca
+              // el execCommand del browser (parte los spans y pierde data-b).
+              if ((e.metaKey || e.ctrlKey) && (e.key === 'b' || e.key === 'i')) {
+                e.preventDefault();
+                const el = e.currentTarget;
+                const sel = window.getSelection();
+                if (!sel || sel.rangeCount === 0) return;
+                const range = sel.getRangeAt(0);
+                if (!el.contains(range.commonAncestorContainer)) return;
+                const { start, end } = flatOffsets(el, range);
+                if (end <= start) return;
+                const sizeRatio = (edit?.fontSize ?? seg.fontSize) / seg.fontSize;
+                const runs = serializeStyled(el, seg, sizeRatio);
+                const next = toggleStyleRange(runs, start, end, e.key === 'b' ? 'bold' : 'italic');
+                el.innerHTML = runsToHtml(seg, next, sizeRatio, scale);
+                restoreSelection(el, start, end);
               }
             }}
           />

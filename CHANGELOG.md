@@ -4,6 +4,15 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### fix(editor): double-buffering del canvas — los updates del preview ya no se ven como un "refresh"
+`PdfCanvas` renderizaba directo sobre el canvas visible: `canvas.width = …` lo LIMPIA,
+así que cada update del preview (extirpación al arrancar un drag, drop, nudge, highlight)
+dejaba la página en blanco hasta que pdf.js terminaba — un flash de refresh completo.
+Ahora pdf.js renderiza en un canvas fuera de pantalla y el visible se actualiza con UN
+`drawImage` atómico al final: la página vieja queda intacta hasta ese frame y lo único
+que cambia en pantalla son los píxeles realmente distintos (p. ej. el texto extirpado
+que se esfuma). El snapshot y el muestreo de colores leen del back buffer.
+
 ### fix(editor): extirpación TEMPRANA al arrancar el drag — sin duplicado y sin rectángulo blanco, nunca
 El velo post-drop seguía siendo un rectángulo blanco visible (nodo quieto durante el
 arrastre → velo al soltar → recién ahí se iba). Enfoque definitivo: el preview extirpa

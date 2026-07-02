@@ -52,20 +52,23 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
       const page = await pdf.getPage(pageNum);
       if (cancelled) return;
       const viewport = page.getViewport({ scale });
-      const canvas = canvasRef.current;
-      if (!canvas) return;
       const dpr = window.devicePixelRatio || 1;
-      canvas.width = Math.floor(viewport.width * dpr);
-      canvas.height = Math.floor(viewport.height * dpr);
-      canvas.style.width = `${Math.floor(viewport.width)}px`;
-      canvas.style.height = `${Math.floor(viewport.height)}px`;
-      setSize({ w: Math.floor(viewport.width), h: Math.floor(viewport.height) });
+      const w = Math.floor(viewport.width);
+      const h = Math.floor(viewport.height);
+
+      // DOUBLE BUFFER: pdf.js renderiza en un canvas FUERA de pantalla y el
+      // visible se actualiza con UN drawImage al final. Renderizar directo
+      // limpiaba el canvas (canvas.width = …) y la página quedaba en blanco
+      // hasta terminar — cada update del preview se veía como un "refresh".
+      const back = document.createElement('canvas');
+      back.width = Math.floor(viewport.width * dpr);
+      back.height = Math.floor(viewport.height * dpr);
+      const backCtx = back.getContext('2d');
+      if (!backCtx) return;
 
       renderTaskRef.current?.cancel();
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
       const task = page.render({
-        canvasContext: ctx,
+        canvasContext: backCtx,
         viewport,
         transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
       });
@@ -76,15 +79,28 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
         return; // render cancelado por un cambio de página/zoom — el nuevo ya corre
       }
       if (cancelled) return;
+
+      // Blit atómico: la página vieja queda visible hasta este frame.
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      if (canvas.width !== back.width || canvas.height !== back.height) {
+        canvas.width = back.width;
+        canvas.height = back.height;
+      }
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
+      canvas.getContext('2d')?.drawImage(back, 0, 0);
+      setSize({ w, h });
+
       try {
-        setSnapshot({ url: canvas.toDataURL('image/jpeg', 0.7), width: Math.floor(viewport.width), height: Math.floor(viewport.height) });
+        setSnapshot({ url: back.toDataURL('image/jpeg', 0.7), width: w, height: h });
       } catch {
         setSnapshot(null);
       }
       const g = await extractPageGraph(page as unknown as PdfJsPage);
       if (cancelled) return;
       // Muestrear el color de cada run del canvas ya pintado (para el display).
-      try { sampleRunColors(g, canvas, scale); } catch { /* best-effort */ }
+      try { sampleRunColors(g, back, scale); } catch { /* best-effort */ }
       onGraph(g);
     })();
     return () => {

@@ -75,6 +75,12 @@ const LIST_MARKER_RE = /^(\s*)(?:[•·▪‣*-]|\d{1,3}[.)]|[a-zA-Z][.)])(\s+)/
 
 export const hasListMarker = (text: string): boolean => LIST_MARKER_RE.test(text);
 
+/** ¿El texto es SOLO un marcador de lista (ítem recién creado, sin contenido)?
+ *  El PDF no persiste espacios finales sin contenido — el gap lo siembra el
+ *  editor al abrirlo en edición. */
+export const isBareListMarker = (text: string): boolean =>
+  /^\s*(?:[•·▪‣*-]|\d{1,3}[.)]|[a-zA-Z][.)])\s*$/.test(text);
+
 /** Toggle de viñeta sobre los tramos (operación pura): sin marcador → prepende
  *  "•  " (con DOS espacios — el gap real de una lista, no la viñeta pegada) al
  *  primer tramo (hereda su estilo); con marcador (cualquiera) → lo quita. */

@@ -239,6 +239,7 @@ export function EditorPage() {
   // ABRIRLO en edición apenas aparezca en el grafo (nada de "doble click").
   const pendingItemRef = useRef<{ page: number; x: number; baseline: number } | null>(null);
   const [editRequestId, setEditRequestId] = useState<string | null>(null);
+  const onEditRequestHandled = useCallback(() => setEditRequestId(null), []);
   const onAddText = useCallback((req: AddTextRequest) => {
     pendingItemRef.current = { page: req.page, x: r1(req.x), baseline: r1(req.baseline) };
     api.docOp(id, 'addText', { page: req.page, x: r1(req.x), y: r1(req.baseline + req.size), text: req.text, size: req.size, bucket: req.bucket })
@@ -644,7 +645,7 @@ export function EditorPage() {
                 onDragging={onDragging}
                 lift={lift} draggingId={draggingId}
                 areaWidths={areaWidths} onAreaWidth={onAreaWidth}
-                editRequestId={editRequestId} onEditRequestHandled={() => setEditRequestId(null)}
+                editRequestId={editRequestId} onEditRequestHandled={onEditRequestHandled}
               />
             </div>
           ) : (

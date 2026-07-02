@@ -4,6 +4,22 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### fix(editor): ítem de lista nuevo — gap sembrado al editar + color fantasma #000000 erradicado
+Diagnóstico por logs en vivo del ítem creado con Enter:
+- **El gap del marcador no puede vivir en el PDF**: la extracción descarta ítems de
+  solo-whitespace (correcto: los gaps nunca son whitespace), así que `"•  "` vuelve
+  como `"•"` pelado y el tipeo quedaba pegado a la viñeta. Ahora, al abrir en edición
+  un segmento que es SOLO un marcador (`isBareListMarker`, core), el editor siembra el
+  gap (2 NBSP) con el caret al final: al tipear, el gap se vuelve interior y se hornea;
+  sin tipeo, el commit lo recorta = noop limpio.
+- **Color fantasma**: `serializeStyled` absorbía el `style.color` inline que Chrome
+  copia a los spans que crea al tipear (negro computado → `c#000000` ≠ `undefined`
+  original) — cada blur paría una edición fantasma. Ahora el color heredado del
+  contenedor (`edit.color ?? color del run dominante ?? #000`) NO cuenta como override;
+  los overrides reales siguen viajando por `data-c`.
+- Log `[aldus:blur]` (temporal) con el `relatedTarget` para cazar robos de foco si el
+  cierre instantáneo reaparece.
+
 ### feat(editor): lista = FORMATO del texto (no un componente) + grip que amplía el ÁREA tipeable (no escala)
 - **Lista como formatter**: fuera el tool "Lista" del palette (creaba un componente
   aparte, sin gap, y Enter paría otro componente suelto — "muy raro"). Ahora es un

@@ -22,6 +22,7 @@ import {
   mergeSegmentEdit,
   mergeWidgetEdit,
   hasListMarker,
+  isBareListMarker,
   nextListMarker,
   originalStyledRuns,
   toggleListMarker,
@@ -739,6 +740,13 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
     const el = editRef.current;
     if (!el) return;
     el.focus();
+    // Ítem de lista recién creado (solo el marcador): sembrar el GAP (2 NBSP)
+    // para que el tipeo arranque separado de la viñeta. El PDF no persiste
+    // espacios finales sin contenido — el gap nace acá y, con texto detrás,
+    // se vuelve interior y se hornea. Sin tipeo, el commit lo recorta = noop.
+    if (isBareListMarker(el.textContent ?? '')) {
+      el.appendChild(document.createTextNode(String.fromCharCode(0xa0, 0xa0)));
+    }
     const range = document.createRange();
     range.selectNodeContents(el);
     range.collapse(false);
@@ -804,7 +812,7 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
 
   const commitFromDom = (el: HTMLElement) => {
     const sizeRatio = (edit?.fontSize ?? seg.fontSize) / seg.fontSize;
-    const runs = serializeStyled(el, seg, sizeRatio);
+    const runs = serializeStyled(el, seg, sizeRatio, edit?.color);
     onPatch({
       text: styledText(runs),
       runs: styledRunsEqual(runs, originalStyledRuns(seg)) ? null : runs,
@@ -896,6 +904,9 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
             dangerouslySetInnerHTML={{ __html: html }}
             onBlur={e => {
               if (!editing) return;
+              // DEBUG temporal: ¿quién roba el foco? (diagnóstico del cierre
+              // instantáneo del ítem de lista recién abierto)
+              console.log('[aldus:blur]', seg.id, '→', (e.relatedTarget as HTMLElement | null)?.className ?? e.relatedTarget?.constructor.name ?? 'nadie (focus perdido)');
               onStopEdit();
               commitFromDom(e.currentTarget);
             }}

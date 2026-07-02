@@ -207,8 +207,13 @@ function cssColorToHex(v: string): string | undefined {
   return `#${h(m[1])}${h(m[2])}${h(m[3])}`;
 }
 
-export function serializeStyled(root: HTMLElement, seg: SegmentNode, sizeRatio: number): StyledRun[] {
+export function serializeStyled(root: HTMLElement, seg: SegmentNode, sizeRatio: number, inheritedColor?: string): StyledRun[] {
   const parts: Array<{ text: string; bold: boolean; italic: boolean; color?: string }> = [];
+  // El color que el texto HEREDA del contenedor: cuando Chrome crea spans
+  // propios al tipear, les copia ese color como style inline — NO es un
+  // override del usuario (los overrides reales viajan por data-c). Sin este
+  // filtro, cada blur paría un run con c#000000 ≠ undefined = edit fantasma.
+  const baseColor = (inheritedColor ?? dominantRun(seg).color ?? '#000000').toLowerCase();
   const push = (t: string, bold: boolean, italic: boolean, color?: string) => {
     if (!t) return;
     const last = parts[parts.length - 1];
@@ -231,7 +236,10 @@ export function serializeStyled(root: HTMLElement, seg: SegmentNode, sizeRatio: 
     if (node.dataset.b !== undefined) b = node.dataset.b === '1';
     if (node.dataset.i !== undefined) i = node.dataset.i === '1';
     if (node.dataset.c !== undefined) c = node.dataset.c || undefined;
-    else if (node.style.color) c = cssColorToHex(node.style.color) ?? c;
+    else if (node.style.color) {
+      const cc = cssColorToHex(node.style.color);
+      if (cc && cc.toLowerCase() !== baseColor) c = cc;
+    }
     node.childNodes.forEach(child => walk(child, b, i, c));
   };
   walk(root, false, false, undefined);

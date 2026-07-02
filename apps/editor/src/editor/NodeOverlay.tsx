@@ -11,26 +11,35 @@
  * Pixel-perfect por construcción:
  *  - Cada box se posiciona desde su geometría PDF exacta (baseline +
  *    ascent/descent del font real) vía pdfRectToCss — una sola cuenta.
- *  - El texto del overlay usa la MISMA fuente embebida que el PDF (el FontFace
- *    que pdf.js registró bajo font.loadedName al renderizar el canvas), con
- *    line-height = alto del box: sin half-leading, la baseline del browser cae
- *    exactamente sobre la baseline del PDF.
+ *  - El texto usa la MISMA fuente embebida que el PDF (el FontFace que pdf.js
+ *    registró bajo font.loadedName al renderizar el canvas), con line-height =
+ *    alto del box: la baseline del browser cae sobre la baseline del PDF.
+ *  - Fit horizontal a lo pdf.js-text-layer: cada run se mide y la diferencia
+ *    contra su ancho PDF real se reparte como letter-spacing.
  *
- * Serialización: innerText del segmento (solo texto plano adentro) — los
- * espacios múltiples se siembran como NBSP y se destejen al confirmar.
+ * Ediciones: SegmentEdit acumula overrides (texto, bold/italic, tamaño,
+ *  familia, x/baseline) vía mergeSegmentEdit (core). Un segmento editado se
+ *  dibuja en su geometría EFECTIVA y una máscara blanca tapa el lugar original.
  *
- * Interacción: click = seleccionar (no mueve NADA), doble click = editar in situ.
+ * Interacción: click = seleccionar · seleccionado + arrastrar = mover ·
+ *  doble click = editar texto in situ.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
   classifyGap,
+  effectiveGeometry,
+  mergeSegmentEdit,
   pdfRectToCss,
+  type FontBucket,
   type PageGraph,
   type SegmentEdit,
   type SegmentNode,
+  type SegmentPatch,
   type TextRunNode,
 } from '@aldus/core';
+
+export type EditAction = SegmentEdit | { segmentId: string; revert: true };
 
 interface Props {
   graph: PageGraph;
@@ -38,7 +47,7 @@ interface Props {
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   edits: Map<string, SegmentEdit>;
-  onEdit: (edit: SegmentEdit | { segmentId: string; revert: true }) => void;
+  onEdit: (action: EditAction) => void;
 }
 
 // Espacios múltiples se siembran como NBSP: un contentEditable colapsa espacios
@@ -51,13 +60,15 @@ const esc = (s: string) =>
 const serialize = (el: HTMLElement): string =>
   el.innerText.replace(/ /g, ' ').replace(/\n+/g, ' ').replace(/\s+$/, '');
 
-function fallbackFamily(r: TextRunNode): string {
-  return r.font.bucket === 'serif' ? "Georgia, 'Times New Roman', serif"
-    : r.font.bucket === 'mono' ? "'Courier New', Courier, monospace"
+const round1 = (v: number) => Math.round(v * 10) / 10;
+
+function bucketFallback(b: FontBucket): string {
+  return b === 'serif' ? "Georgia, 'Times New Roman', serif"
+    : b === 'mono' ? "'Courier New', Courier, monospace"
     : 'Helvetica, Arial, sans-serif';
 }
 
-const family = (r: TextRunNode) => `'${r.font.loadedName}',${fallbackFamily(r)}`;
+const family = (r: TextRunNode) => `'${r.font.loadedName}',${bucketFallback(r.font.bucket)}`;
 
 // ── Fit horizontal (la técnica del text layer de pdf.js) ────────────────────
 // El PDF posiciona con ajustes que el browser no reproduce (Tc/Tw/Tz, TJ de
@@ -99,15 +110,26 @@ function dominantRun(seg: SegmentNode): TextRunNode {
   return seg.runs.reduce((a, b) => (b.width > a.width ? b : a));
 }
 
-/** HTML inicial del box: un span por run con su fuente real + letter-spacing
- *  de fit (ocupa EXACTAMENTE el ancho PDF del run); espacios de palabra como
- *  caracteres, micro-gaps de kerning como margin (solo render). Con edición
- *  previa: el texto guardado con el estilo dominante (sin fit — el ancho
- *  original ya no aplica a un texto nuevo). */
+/** Tipografía del CONTENEDOR editable: la dominante del segmento con los
+ *  overrides de la edición aplicados. Todo texto que el browser inserte fuera
+ *  de los spans sembrados hereda esto — nunca el system font del UI. */
+function containerStyle(seg: SegmentNode, edit: SegmentEdit | null, scale: number): CSSProperties {
+  const dom = dominantRun(seg);
+  const ratio = (edit?.fontSize ?? seg.fontSize) / seg.fontSize;
+  return {
+    fontFamily: edit?.font ? bucketFallback(edit.font) : family(dom),
+    fontSize: `${(dom.fontSize * ratio * scale).toFixed(2)}px`,
+    fontWeight: (edit?.bold ?? (!dom.font.embedded && dom.font.bold)) ? 700 : 400,
+    fontStyle: (edit?.italic ?? (!dom.font.embedded && dom.font.italic)) ? 'italic' : 'normal',
+  };
+}
+
+/** HTML inicial del box. Sin edición: un span por run con su fuente real +
+ *  letter-spacing de fit (ocupa EXACTAMENTE el ancho PDF del run); espacios de
+ *  palabra como caracteres, micro-gaps de kerning como margin (solo render).
+ *  Con edición: solo el texto — la tipografía la da el contenedor. */
 function seedHtml(seg: SegmentNode, edit: SegmentEdit | null, scale: number): string {
-  if (edit) {
-    return `<span style="${runStyle(dominantRun(seg), scale)}">${esc(edit.text)}</span>` || '<br>';
-  }
+  if (edit) return esc(edit.text) || '<br>';
   const runs = seg.runs;
   let html = '';
   for (let i = 0; i < runs.length; i++) {
@@ -143,18 +165,10 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit 
           edit={edits.get(seg.id) ?? null}
           onSelect={() => onSelect(seg.id)}
           onStartEdit={() => { onSelect(seg.id); setEditingId(seg.id); }}
-          onCommit={text => {
-            setEditingId(null);
-            if (text === seg.text) {
-              onEdit({ segmentId: seg.id, revert: true });
-              return;
-            }
-            onEdit({
-              segmentId: seg.id,
-              page: seg.page,
-              text,
-              original: { text: seg.text, x: seg.x, baseline: seg.baseline, width: seg.width, fontSize: seg.fontSize },
-            });
+          onStopEdit={() => setEditingId(null)}
+          onPatch={patch => {
+            const merged = mergeSegmentEdit(seg, edits.get(seg.id) ?? null, patch);
+            onEdit(merged ?? { segmentId: seg.id, revert: true });
           }}
         />
       ))}
@@ -171,12 +185,17 @@ interface SegmentBoxProps {
   edit: SegmentEdit | null;
   onSelect: () => void;
   onStartEdit: () => void;
-  onCommit: (text: string) => void;
+  onStopEdit: () => void;
+  onPatch: (patch: SegmentPatch) => void;
 }
 
-function SegmentBox({ seg, pageHeight, scale, selected, editing, edit, onSelect, onStartEdit, onCommit }: SegmentBoxProps) {
-  const rect = pdfRectToCss({ x: seg.x, y: seg.y, width: seg.width, height: seg.height }, pageHeight, scale);
+function SegmentBox({ seg, pageHeight, scale, selected, editing, edit, onSelect, onStartEdit, onStopEdit, onPatch }: SegmentBoxProps) {
+  const eff = effectiveGeometry(seg, edit);
+  const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
+  const originalRect = pdfRectToCss({ x: seg.x, y: seg.y, width: seg.width, height: seg.height }, pageHeight, scale);
   const editRef = useRef<HTMLDivElement>(null);
+  const dragStart = useRef<{ px: number; py: number; moved: boolean } | null>(null);
+  const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
 
   useEffect(() => {
     if (!editing) return;
@@ -196,45 +215,78 @@ function SegmentBox({ seg, pageHeight, scale, selected, editing, edit, onSelect,
   const masked = editing || edit != null;
   const html = seedHtml(seg, edit, scale);
 
-  // El CONTENEDOR editable hereda la fuente dominante del segmento: cualquier
-  // texto que el browser inserte FUERA de los spans sembrados (tipear al
-  // principio/fin, seleccionar-todo-y-escribir) cae en esta fuente y tamaño —
-  // nunca en el system font del UI (la causa del "salto" de tamaño al editar).
-  const dom = dominantRun(seg);
-  const inheritStyle = {
-    fontFamily: family(dom),
-    fontSize: `${(dom.fontSize * scale).toFixed(2)}px`,
-    fontWeight: !dom.font.embedded && dom.font.bold ? 700 : 400,
-    fontStyle: !dom.font.embedded && dom.font.italic ? 'italic' as const : 'normal' as const,
-  };
-
   return (
-    <div
-      className={`seg-box${selected ? ' selected' : ''}${masked ? ' masked' : ''}${edit ? ' edited' : ''}`}
-      style={{ left: rect.left, top: rect.top, minWidth: rect.width, height: rect.height, lineHeight: `${rect.height}px` }}
-      onClick={e => { e.stopPropagation(); onSelect(); }}
-      onDoubleClick={e => { e.stopPropagation(); onStartEdit(); }}
-      title={editing ? undefined : seg.text}
-    >
-      {masked && (
-        <div
-          ref={editRef}
-          className="seg-text"
-          style={inheritStyle}
-          contentEditable={editing}
-          suppressContentEditableWarning
-          spellCheck={false}
-          dangerouslySetInnerHTML={{ __html: html }}
-          onBlur={e => { if (editing) onCommit(serialize(e.currentTarget)); }}
-          onKeyDown={e => {
-            if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
-            if (e.key === 'Escape') {
-              e.currentTarget.innerHTML = seedHtml(seg, edit, scale);
-              e.currentTarget.blur();
-            }
-          }}
-        />
+    <>
+      {/* El segmento se movió/achicó: tapar los glifos originales del canvas. */}
+      {edit != null && (
+        <div className="seg-mask" style={{ left: originalRect.left, top: originalRect.top, width: originalRect.width, height: originalRect.height }} />
       )}
-    </div>
+      <div
+        className={`seg-box${selected ? ' selected' : ''}${masked ? ' masked' : ''}${edit ? ' edited' : ''}${editing ? ' editing' : ''}`}
+        style={{
+          left: rect.left,
+          top: rect.top,
+          minWidth: rect.width,
+          height: rect.height,
+          lineHeight: `${rect.height}px`,
+          transform: drag ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
+        }}
+        onClick={e => { e.stopPropagation(); onSelect(); }}
+        onDoubleClick={e => { e.stopPropagation(); onStartEdit(); }}
+        onPointerDown={e => {
+          // Mover: requiere estar SELECCIONADO (el primer click solo selecciona).
+          if (editing || !selected || e.button !== 0) return;
+          e.preventDefault();
+          e.stopPropagation();
+          e.currentTarget.setPointerCapture(e.pointerId);
+          dragStart.current = { px: e.clientX, py: e.clientY, moved: false };
+        }}
+        onPointerMove={e => {
+          const start = dragStart.current;
+          if (!start) return;
+          const dx = e.clientX - start.px;
+          const dy = e.clientY - start.py;
+          if (Math.abs(dx) + Math.abs(dy) > 3) start.moved = true;
+          if (start.moved) setDrag({ dx, dy });
+        }}
+        onPointerUp={e => {
+          const start = dragStart.current;
+          dragStart.current = null;
+          setDrag(null);
+          if (!start?.moved) return;
+          const nx = round1(eff.x + (e.clientX - start.px) / scale);
+          const nb = round1(eff.baseline - (e.clientY - start.py) / scale);
+          onPatch({
+            x: nx === round1(seg.x) ? null : nx,
+            baseline: nb === round1(seg.baseline) ? null : nb,
+          });
+        }}
+        title={editing ? undefined : (edit?.text ?? seg.text)}
+      >
+        {masked && (
+          <div
+            ref={editRef}
+            className="seg-text"
+            style={containerStyle(seg, edit, scale)}
+            contentEditable={editing}
+            suppressContentEditableWarning
+            spellCheck={false}
+            dangerouslySetInnerHTML={{ __html: html }}
+            onBlur={e => {
+              if (!editing) return;
+              onStopEdit();
+              onPatch({ text: serialize(e.currentTarget) });
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
+              if (e.key === 'Escape') {
+                e.currentTarget.innerHTML = seedHtml(seg, edit, scale);
+                e.currentTarget.blur();
+              }
+            }}
+          />
+        )}
+      </div>
+    </>
   );
 }

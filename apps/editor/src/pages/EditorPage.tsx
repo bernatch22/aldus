@@ -36,6 +36,26 @@ export function EditorPage() {
     return () => { cancelled = true; void task.destroy(); };
   }, [id]);
 
+  // Navegación por teclado (←/→, PageUp/PageDown) — nunca mientras se tipea.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName))) return;
+      const numPages = pdf?.numPages ?? 0;
+      if ((e.key === 'ArrowRight' || e.key === 'PageDown') && pageNum < numPages) {
+        e.preventDefault();
+        setPageNum(p => p + 1);
+        setSelectedId(null);
+      } else if ((e.key === 'ArrowLeft' || e.key === 'PageUp') && pageNum > 1) {
+        e.preventDefault();
+        setPageNum(p => p - 1);
+        setSelectedId(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pdf, pageNum]);
+
   const setZoom = useCallback((s: number) => {
     const clamped = Math.min(3, Math.max(0.5, Math.round(s * 100) / 100));
     setScale(clamped);
@@ -76,7 +96,20 @@ export function EditorPage() {
         <Link to="/" className="brand">Aldus</Link>
         <div className="toolbar-group">
           <button disabled={pageNum <= 1} onClick={() => { setPageNum(p => p - 1); setSelectedId(null); }}>‹</button>
-          <span>{pageNum} / {numPages || '…'}</span>
+          <input
+            className="page-input"
+            type="number"
+            min={1}
+            max={numPages || 1}
+            value={pageNum}
+            onChange={e => {
+              const v = Number(e.target.value);
+              if (!Number.isFinite(v)) return;
+              setPageNum(Math.min(Math.max(1, Math.round(v)), numPages || 1));
+              setSelectedId(null);
+            }}
+          />
+          <span className="muted">/ {numPages || '…'}</span>
           <button disabled={pageNum >= numPages} onClick={() => { setPageNum(p => p + 1); setSelectedId(null); }}>›</button>
         </div>
         <div className="toolbar-group">
@@ -119,6 +152,7 @@ export function EditorPage() {
           selectedId={selectedId}
           onSelect={setSelectedId}
           edits={edits}
+          onEdit={onEdit}
         />
       </div>
     </div>

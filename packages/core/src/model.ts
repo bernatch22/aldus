@@ -105,12 +105,25 @@ export interface PageGraph {
 
 /** Una edición pendiente sobre un segmento (lo que el server persiste y, en la
  *  fase de bake, aplica sobre el content stream). El segmento vecino no se toca:
- *  su x de anclaje ES la preservación del gap. */
+ *  su x de anclaje ES la preservación del gap.
+ *
+ *  Los campos opcionales son OVERRIDES: presentes solo si el usuario los cambió
+ *  (ausente = se conserva lo original del PDF). Mover = x/baseline nuevos. */
 export interface SegmentEdit {
   segmentId: string;
   page: number;
   /** Texto nuevo del segmento. */
   text: string;
+  bold?: boolean;
+  italic?: boolean;
+  /** Tamaño en puntos PDF. */
+  fontSize?: number;
+  /** Cambiar de familia abandona la fuente embebida → bucket estándar. */
+  font?: FontBucket;
+  /** Nueva x de anclaje (mover). */
+  x?: number;
+  /** Nueva baseline (mover). */
+  baseline?: number;
   /** Snapshot del nodo original para que el bake pueda localizarlo sin ambigüedad. */
   original: { text: string; x: number; baseline: number; width: number; fontSize: number };
 }

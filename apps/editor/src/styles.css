@@ -83,6 +83,9 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .seg-box.masked { background: #fff; cursor: text; }
 .seg-box.masked:hover { background: #fff; }
 .seg-box.edited { outline-color: var(--edited); }
+.seg-box.selected:not(.editing) { cursor: move; }
+.seg-box.editing { cursor: text; }
+.seg-mask { position: absolute; background: #fff; }
 
 .seg-text {
   white-space: pre;
@@ -100,6 +103,18 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 }
 .insp-head { display: flex; justify-content: space-between; align-items: center; }
 .insp-head h3 { margin: 0; font-size: 14px; }
+
+/* ── Object Properties ── */
+.prop-label { display: block; margin: 12px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); }
+.prop-input { width: 100%; font: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+.prop-input.num { width: 64px; }
+.prop-row { display: flex; align-items: center; gap: 6px; }
+.prop-row .prop-input { width: auto; flex: 1; min-width: 0; }
+.prop-row .prop-input.num { flex: 0 0 64px; }
+button.toggle { width: 30px; height: 30px; padding: 0; }
+button.toggle.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { margin-top: 12px; width: 100%; color: #b91c1c; border-color: #fecaca; }
+.page-input { width: 52px; text-align: center; font: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 4px 2px; }
 .insp-props { display: grid; grid-template-columns: 72px 1fr; gap: 4px 8px; margin: 12px 0; }
 .insp-props dt { color: var(--muted); }
 .insp-props dd { margin: 0; overflow-wrap: anywhere; }

@@ -4,6 +4,13 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### fix(editor): "Al fondo" desaparecía la imagen de fondo — full-page ya es la capa de atrás
+Una imagen full-page (el fondo del insurance agreement) YA es la capa más al fondo del
+contenido: mandarla "al fondo" la reubicaba ANTES del relleno blanco de la página, que
+la tapaba → la imagen desaparecía. Ahora "Al fondo" se oculta para imágenes full-page
+(coverage ≥ 0.8), tanto en la barra flotante (`ObjectBar.backDisabled`) como en el panel
+(con la nota "Fondo de página: ya está en la capa de atrás"). "Al frente" sigue disponible.
+
 ### feat(editor): imágenes full-page bloqueadas por defecto + esquema (layers) ordenado por cantidad, locked primero
 - **Auto-lock de fondos full-page**: una imagen que cubre ≥80% de la hoja (el fondo del
   insurance agreement) nace bloqueada — estorbaba al editar. Se siembra UNA vez por

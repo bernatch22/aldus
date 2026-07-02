@@ -141,7 +141,8 @@ export function Inspector(props: Props) {
   if (img) return (
     <Panel>
       <Header title="Imagen" subtitle={`${Math.round(img.width)}×${Math.round(img.height)} pt`} onClose={() => onSelect(null)} />
-      <ImageProps img={img} edit={imageEdits.get(img.id) ?? null} onImageEdit={props.onImageEdit} />
+      <ImageProps img={img} edit={imageEdits.get(img.id) ?? null} onImageEdit={props.onImageEdit}
+        fullPage={(img.width * img.height) / (graph.width * graph.height) >= 0.8} />
       {lockRow(img.id)}
     </Panel>
   );
@@ -279,7 +280,7 @@ function TextProps({ seg, edit, onEdit }:
 }
 
 // ── propiedades de IMAGEN ────────────────────────────────────────────────────
-function ImageProps({ img, edit, onImageEdit }: { img: ImageNode; edit: ImageEdit | null; onImageEdit: (a: ImageEditAction) => void }) {
+function ImageProps({ img, edit, onImageEdit, fullPage }: { img: ImageNode; edit: ImageEdit | null; onImageEdit: (a: ImageEditAction) => void; fullPage?: boolean }) {
   const commit = (patch: ImagePatch) => { const m = mergeImageEdit(img, edit, patch); onImageEdit(m ?? { imageId: img.id, revert: true }); };
   const eff = effectiveImageRect(img, edit);
   const num = (key: 'x' | 'y' | 'width' | 'height', original: number) => (v: number) => {
@@ -294,10 +295,13 @@ function ImageProps({ img, edit, onImageEdit }: { img: ImageNode; edit: ImageEdi
         <Row><NumberInput label="W" defaultValue={eff.width} onCommit={num('width', img.width)} /><NumberInput label="H" defaultValue={eff.height} onCommit={num('height', img.height)} /></Row>
       </Section>
       <Section title="Orden">
+        {/* Un fondo full-page ya es la capa de atrás: "Al fondo" lo mandaría
+            bajo el relleno blanco de la página y desaparecería. */}
         <Row>
-          <Button className="flex-1" onClick={() => commit({ zOrder: 'back' })}><SendToBack size={14} /> Al fondo</Button>
+          {!fullPage && <Button className="flex-1" onClick={() => commit({ zOrder: 'back' })}><SendToBack size={14} /> Al fondo</Button>}
           <Button className="flex-1" onClick={() => commit({ zOrder: 'front' })}><BringToFront size={14} /> Al frente</Button>
         </Row>
+        {fullPage && <div className="text-[11px] text-neutral-400">Fondo de página: ya está en la capa de atrás.</div>}
       </Section>
       <Section title="Acciones">
         <Button variant="danger" className="w-full" onClick={() => commit({ remove: eff.removed ? null : true })}>

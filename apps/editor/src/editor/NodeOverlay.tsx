@@ -262,12 +262,15 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
 }
 
 /** Toolbar flotante para IMAGEN o CAMPO: alineación + (imagen) orden Z + eliminar. */
-function ObjectBar({ rect, pageWidth, width, onAlign, onZ, onDelete }: {
+function ObjectBar({ rect, pageWidth, width, onAlign, onZ, backDisabled, onDelete }: {
   rect: { left: number; top: number };
   pageWidth: number;
   width: number;
   onAlign: (x: number) => void;
   onZ?: (o: 'front' | 'back') => void;
+  /** Imagen full-page (fondo): "Al fondo" la mandaría bajo el relleno blanco
+      de la página y desaparecería — ya es la capa de atrás. */
+  backDisabled?: boolean;
   onDelete: () => void;
 }) {
   const MARGIN = 40;
@@ -278,7 +281,7 @@ function ObjectBar({ rect, pageWidth, width, onAlign, onZ, onDelete }: {
       <FbBtn label="Alinear a la derecha" onClick={() => onAlign(pageWidth - MARGIN - width)}><AlignRight size={14} /></FbBtn>
       {onZ && <>
         <FbSep />
-        <FbBtn label="Enviar al fondo" onClick={() => onZ('back')}><SendToBack size={14} /></FbBtn>
+        {!backDisabled && <FbBtn label="Enviar al fondo" onClick={() => onZ('back')}><SendToBack size={14} /></FbBtn>}
         <FbBtn label="Traer al frente" onClick={() => onZ('front')}><BringToFront size={14} /></FbBtn>
       </>}
       <FbSep />
@@ -588,6 +591,7 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
           rect={rect} pageWidth={pageWidth} width={eff.width}
           onAlign={x => onPatch({ x: round1(clampX(x, eff.width, pageWidth)) })}
           onZ={o => onPatch({ zOrder: o })}
+          backDisabled={!canMask}
           onDelete={() => onPatch({ remove: true })}
         />
       )}

@@ -12,7 +12,7 @@
  *    getOperatorList() se ejecuta antes para que los fonts estén resueltos.
  */
 
-import type { FontBucket, FontInfo, ImageNode, LineNode, PageGraph, SegmentNode, TextRunNode } from './model.js';
+import type { FontBucket, FontInfo, ImageNode, LineNode, PageGraph, SegmentNode, TextRunNode, WidgetKind, WidgetNode } from './model.js';
 import { segmentText, splitSegments } from './tokens.js';
 
 export interface PdfJsTextItem {
@@ -30,7 +30,50 @@ export interface PdfJsPage {
   view: number[];
   getTextContent(opts?: { disableNormalization?: boolean }): Promise<{ items: unknown[] }>;
   getOperatorList(): Promise<{ fnArray: number[]; argsArray: unknown[][] }>;
+  getAnnotations(): Promise<unknown[]>;
   commonObjs: { get(name: string): unknown };
+}
+
+interface RawAnnotation {
+  subtype?: string;
+  fieldName?: string;
+  fieldType?: string;
+  rect?: number[];
+  checkBox?: boolean;
+  radioButton?: boolean;
+  pushButton?: boolean;
+  combo?: boolean;
+  readOnly?: boolean;
+  hidden?: boolean;
+}
+
+function widgetKindOf(a: RawAnnotation): WidgetKind {
+  if (a.fieldType === 'Tx') return 'text';
+  if (a.fieldType === 'Sig') return 'signature';
+  if (a.fieldType === 'Ch') return a.combo ? 'select' : 'list';
+  if (a.fieldType === 'Btn') return a.checkBox ? 'checkbox' : a.radioButton ? 'radio' : 'button';
+  return 'text';
+}
+
+function extractWidgets(annots: unknown[], page: number, x0: number, y0: number): WidgetNode[] {
+  const out: WidgetNode[] = [];
+  for (const raw of annots as RawAnnotation[]) {
+    if (raw?.subtype !== 'Widget' || !Array.isArray(raw.rect) || raw.hidden) continue;
+    const [ax, ay, bx, by] = raw.rect;
+    out.push({
+      id: `p${page}-w${out.length}`,
+      kind: 'widget',
+      page,
+      fieldName: raw.fieldName ?? '',
+      widgetType: widgetKindOf(raw),
+      readOnly: raw.readOnly === true,
+      x: Math.min(ax, bx) - x0,
+      y: Math.min(ay, by) - y0,
+      width: Math.abs(bx - ax),
+      height: Math.abs(by - ay),
+    });
+  }
+  return out;
 }
 
 // Valores estables de pdfjs OPS (src/shared/util.js) — el único acople a
@@ -143,6 +186,7 @@ export async function extractPageGraph(page: PdfJsPage): Promise<PageGraph> {
   // list del que salen las imágenes.
   const opList = await page.getOperatorList();
   const tc = await page.getTextContent({ disableNormalization: true });
+  const annots = await page.getAnnotations().catch(() => [] as unknown[]);
   const [x0, y0, x1, y1] = page.view;
   const fontCache = new Map<string, FontInfo>();
   const runs: TextRunNode[] = [];
@@ -172,6 +216,7 @@ export async function extractPageGraph(page: PdfJsPage): Promise<PageGraph> {
     lines,
     segments: lines.flatMap(l => l.segments),
     images: extractImages(opList.fnArray, opList.argsArray, page.pageNumber, x0, y0),
+    widgets: extractWidgets(annots, page.pageNumber, x0, y0),
   };
 }
 

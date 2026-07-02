@@ -16,8 +16,10 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
   effectiveGeometry,
   effectiveImageRect,
+  effectiveWidgetRect,
   mergeImageEdit,
   mergeSegmentEdit,
+  mergeWidgetEdit,
   originalStyledRuns,
   pdfRectToCss,
   styledRunsEqual,
@@ -29,6 +31,9 @@ import {
   type SegmentEdit,
   type SegmentNode,
   type SegmentPatch,
+  type WidgetEdit,
+  type WidgetNode,
+  type WidgetPatch,
 } from '@aldus/core';
 import {
   applySelectionStyle,
@@ -43,6 +48,7 @@ import {
 
 export type EditAction = SegmentEdit | { segmentId: string; revert: true };
 export type ImageEditAction = ImageEdit | { imageId: string; revert: true };
+export type WidgetEditAction = WidgetEdit | { widgetId: string; revert: true };
 
 interface Props {
   graph: PageGraph;
@@ -53,6 +59,8 @@ interface Props {
   onEdit: (action: EditAction) => void;
   imageEdits: Map<string, ImageEdit>;
   onImageEdit: (action: ImageEditAction) => void;
+  widgetEdits: Map<string, WidgetEdit>;
+  onWidgetEdit: (action: WidgetEditAction) => void;
   /** Snapshot de la página renderizada (para previews de imágenes movidas). */
   snapshot: { url: string; width: number; height: number } | null;
 }
@@ -71,12 +79,27 @@ function containerStyle(seg: SegmentNode, edit: SegmentEdit | null, scale: numbe
   };
 }
 
-export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, snapshot }: Props) {
+export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, snapshot }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => setEditingId(null), [graph.page]);
 
   return (
     <div className="node-overlay" onClick={() => onSelect(null)}>
+      {graph.widgets.map(w => (
+        <WidgetBox
+          key={w.id}
+          widget={w}
+          pageHeight={graph.height}
+          scale={scale}
+          selected={selectedId === w.id}
+          edit={widgetEdits.get(w.id) ?? null}
+          onSelect={() => onSelect(w.id)}
+          onPatch={patch => {
+            const merged = mergeWidgetEdit(w, widgetEdits.get(w.id) ?? null, patch);
+            onWidgetEdit(merged ?? { widgetId: w.id, revert: true });
+          }}
+        />
+      ))}
       {graph.images.map(img => (
         <ImageBox
           key={img.id}
@@ -111,6 +134,121 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           }}
         />
       ))}
+    </div>
+  );
+}
+
+interface WidgetBoxProps {
+  widget: WidgetNode;
+  pageHeight: number;
+  scale: number;
+  selected: boolean;
+  edit: WidgetEdit | null;
+  onSelect: () => void;
+  onPatch: (patch: WidgetPatch) => void;
+}
+
+const WIDGET_LABEL: Record<WidgetNode['widgetType'], string> = {
+  text: 'texto', checkbox: 'checkbox', radio: 'radio', select: 'select',
+  list: 'lista', button: 'botón', signature: 'firma',
+};
+
+/** Un campo de formulario: seleccionar, arrastrar (mover), grip (escalar).
+ *  La edición se aplica al instante (reescritura del /Rect de la anotación). */
+function WidgetBox({ widget, pageHeight, scale, selected, edit, onSelect, onPatch }: WidgetBoxProps) {
+  const eff = effectiveWidgetRect(widget, edit);
+  const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
+  const dragStart = useRef<{ px: number; py: number; moved: boolean } | null>(null);
+  const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
+  const gripStart = useRef<{ px: number; py: number } | null>(null);
+  const [gripDelta, setGripDelta] = useState<{ dx: number; dy: number } | null>(null);
+
+  if (eff.removed) {
+    return (
+      <div
+        className="img-removed"
+        style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height }}
+      >
+        <span className="ghost-label">eliminando…</span>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`widget-box${selected ? ' selected' : ''}${edit ? ' edited' : ''}`}
+      style={{
+        left: rect.left,
+        top: rect.top,
+        width: gripDelta ? rect.width + gripDelta.dx : rect.width,
+        height: gripDelta ? rect.height + gripDelta.dy : rect.height,
+        transform: drag ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
+      }}
+      title={`Campo ${WIDGET_LABEL[widget.widgetType]} · ${widget.fieldName}`}
+      onClick={e => { e.stopPropagation(); onSelect(); }}
+      onPointerDown={e => {
+        if (!selected || e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        dragStart.current = { px: e.clientX, py: e.clientY, moved: false };
+      }}
+      onPointerMove={e => {
+        const start = dragStart.current;
+        if (!start) return;
+        const dx = e.clientX - start.px;
+        const dy = e.clientY - start.py;
+        if (Math.abs(dx) + Math.abs(dy) > 3) start.moved = true;
+        if (start.moved) setDrag({ dx, dy });
+      }}
+      onPointerUp={e => {
+        const start = dragStart.current;
+        dragStart.current = null;
+        setDrag(null);
+        if (!start?.moved) return;
+        const nx = round1(eff.x + (e.clientX - start.px) / scale);
+        const ny = round1(eff.y - (e.clientY - start.py) / scale);
+        onPatch({
+          x: nx === round1(widget.x) ? null : nx,
+          y: ny === round1(widget.y) ? null : ny,
+        });
+      }}
+    >
+      {selected && <span className="widget-label">{WIDGET_LABEL[widget.widgetType]} · {widget.fieldName}</span>}
+      {selected && (
+        <div
+          className="seg-grip"
+          title="Arrastrar para redimensionar el campo"
+          onPointerDown={e => {
+            e.preventDefault();
+            e.stopPropagation();
+            e.currentTarget.setPointerCapture(e.pointerId);
+            gripStart.current = { px: e.clientX, py: e.clientY };
+          }}
+          onPointerMove={e => {
+            if (!gripStart.current) return;
+            e.stopPropagation();
+            setGripDelta({ dx: e.clientX - gripStart.current.px, dy: e.clientY - gripStart.current.py });
+          }}
+          onPointerUp={e => {
+            e.stopPropagation();
+            const start = gripStart.current;
+            gripStart.current = null;
+            setGripDelta(null);
+            if (!start) return;
+            const newW = Math.max(6, round1(eff.width + (e.clientX - start.px) / scale));
+            const newH = Math.max(6, round1(eff.height + (e.clientY - start.py) / scale));
+            const top = eff.y + eff.height;
+            const newY = round1(top - newH);
+            onPatch({
+              width: newW === round1(widget.width) ? null : newW,
+              height: newH === round1(widget.height) ? null : newH,
+              y: newY === round1(widget.y) ? null : newY,
+            });
+          }}
+          onClick={e => e.stopPropagation()}
+        />
+      )}
     </div>
   );
 }

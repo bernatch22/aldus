@@ -1,6 +1,6 @@
 /** Cliente del server de Aldus. Un solo origen (/api, proxied por Vite). */
 
-import type { ImageEdit, SegmentEdit } from '@aldus/core';
+import type { ImageEdit, SegmentEdit, WidgetEdit } from '@aldus/core';
 
 export interface DocMeta {
   id: string;
@@ -38,11 +38,11 @@ export const api = {
   loadEdits: (id: string): Promise<{ edits: SegmentEdit[]; savedAt: string | null }> =>
     fetch(`/api/documents/${id}/edits`).then(r => ok<{ edits: SegmentEdit[]; savedAt: string | null }>(r)),
 
-  /** Aplica las ediciones AL PDF (bake del content stream) y lo persiste. */
-  bake: (id: string, edits: SegmentEdit[], imageEdits: ImageEdit[]): Promise<{ ok: boolean; applied: string[]; warnings: string[] }> =>
+  /** Aplica las ediciones AL PDF (bake del content stream + /Annots) y lo persiste. */
+  bake: (id: string, edits: SegmentEdit[], imageEdits: ImageEdit[] = [], widgetEdits: WidgetEdit[] = []): Promise<{ ok: boolean; applied: string[]; warnings: string[] }> =>
     fetch(`/api/documents/${id}/bake`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ edits, imageEdits }),
+      body: JSON.stringify({ edits, imageEdits, widgetEdits }),
     }).then(r => ok<{ ok: boolean; applied: string[]; warnings: string[] }>(r)),
 };

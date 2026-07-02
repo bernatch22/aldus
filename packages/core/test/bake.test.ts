@@ -5,7 +5,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFRawStream, PDFRef, StandardFonts, decodePDFRawStream } from 'pdf-lib';
+import { walkContent } from '../src/bake/index.js';
 import {
   extractPageGraph,
   mergeSegmentEdit,
@@ -109,6 +110,43 @@ describe('imágenes', () => {
     expect(segByText(g2, 'Con imagen').x).toBeCloseTo(72, 0);
   });
 
+  it('mover una imagen preserva el Z-ORDER (una imagen de fondo sigue DEBAJO del texto)', async () => {
+    // Fondo (imagen primero) + texto encima.
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    const helv = await doc.embedFont(StandardFonts.Helvetica);
+    const png = await doc.embedPng(Buffer.from(PNG_1PX, 'base64'));
+    page.drawImage(png, { x: 0, y: 0, width: 612, height: 792 });
+    page.drawText('Texto encima del fondo', { x: 72, y: 700, size: 12, font: helv });
+    const pdf = await doc.save();
+
+    const g = await graphOf(pdf);
+    const img = g.images[0];
+    const { pdf: baked, warnings } = await bakeSegmentEdits(pdf, [], [{
+      imageId: img.id, page: 1, x: 50, y: 100, width: 300, height: 400,
+      original: { x: img.x, y: img.y, width: img.width, height: img.height },
+    }]);
+    expect(warnings).toEqual([]);
+
+    // En el stream horneado, el Do de la imagen sigue ANTES que el texto.
+    const doc2 = await PDFDocument.load(baked);
+    const page2 = doc2.getPages()[0];
+    const raw = page2.node.get(PDFName.of('Contents'));
+    const stream = raw instanceof PDFRef ? doc2.context.lookup(raw) : raw;
+    if (!(stream instanceof PDFRawStream)) throw new Error('stream inesperado');
+    const bytes = decodePDFRawStream(stream).decode();
+    const walk = walkContent(bytes);
+    expect(walk.xobjects.length).toBeGreaterThan(0);
+    expect(walk.shows.length).toBeGreaterThan(0);
+    expect(walk.xobjects[0].record.start).toBeLessThan(walk.shows[0].record.start);
+
+    // Y la geometría nueva es exacta.
+    const g2 = await graphOf(baked);
+    expect(g2.images[0].x).toBeCloseTo(50, 0);
+    expect(g2.images[0].width).toBeCloseTo(300, 0);
+    expect(segByText(g2, 'Texto encima del fondo').x).toBeCloseTo(72, 0);
+  });
+
   it('elimina la imagen', async () => {
     const pdf = await makePdfWithImage();
     const g = await graphOf(pdf);
@@ -120,6 +158,65 @@ describe('imágenes', () => {
     const g2 = await graphOf(baked);
     expect(g2.images).toHaveLength(0);
     expect(segByText(g2, 'Con imagen').x).toBeCloseTo(72, 0);
+  });
+});
+
+describe('widgets (AcroForm)', () => {
+  async function makeFormPdf(): Promise<Uint8Array> {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    const form = doc.getForm();
+    const name = form.createTextField('cliente.nombre');
+    name.addToPage(page, { x: 150, y: 600, width: 200, height: 20 });
+    const check = form.createCheckBox('acepta');
+    check.addToPage(page, { x: 150, y: 560, width: 14, height: 14 });
+    return doc.save();
+  }
+
+  it('extrae los widgets con tipo y rect', async () => {
+    const g = await graphOf(await makeFormPdf());
+    expect(g.widgets).toHaveLength(2);
+    const text = g.widgets.find(w => w.fieldName === 'cliente.nombre');
+    const check = g.widgets.find(w => w.fieldName === 'acepta');
+    expect(text?.widgetType).toBe('text');
+    expect(check?.widgetType).toBe('checkbox');
+    // pdf-lib escribe el /Rect con ±0.5pt de inset por el borde del widget.
+    expect(Math.abs((text?.x ?? 0) - 150)).toBeLessThanOrEqual(1);
+    expect(Math.abs((text?.width ?? 0) - 200)).toBeLessThanOrEqual(2);
+  });
+
+  it('mueve y escala un campo (reescribe /Rect)', async () => {
+    const pdf = await makeFormPdf();
+    const g = await graphOf(pdf);
+    const w = g.widgets.find(x => x.fieldName === 'cliente.nombre');
+    if (!w) throw new Error('widget no encontrado');
+    const { pdf: baked, warnings } = await bakeSegmentEdits(pdf, [], [], [{
+      widgetId: w.id, page: w.page, x: 300, y: 400, width: 120, height: 24,
+      original: { fieldName: w.fieldName, x: w.x, y: w.y, width: w.width, height: w.height },
+    }]);
+    expect(warnings).toEqual([]);
+    const g2 = await graphOf(baked);
+    const moved = g2.widgets.find(x => x.fieldName === 'cliente.nombre');
+    expect(Math.abs((moved?.x ?? 0) - 300)).toBeLessThanOrEqual(1);
+    expect(Math.abs((moved?.y ?? 0) - 400)).toBeLessThanOrEqual(1);
+    expect(Math.abs((moved?.width ?? 0) - 120)).toBeLessThanOrEqual(2);
+    expect(Math.abs((moved?.height ?? 0) - 24)).toBeLessThanOrEqual(2);
+    // El otro campo no se movió.
+    expect(Math.abs((g2.widgets.find(x => x.fieldName === 'acepta')?.x ?? 0) - 150)).toBeLessThanOrEqual(1);
+  });
+
+  it('elimina un campo', async () => {
+    const pdf = await makeFormPdf();
+    const g = await graphOf(pdf);
+    const w = g.widgets.find(x => x.fieldName === 'acepta');
+    if (!w) throw new Error('widget no encontrado');
+    const { pdf: baked } = await bakeSegmentEdits(pdf, [], [], [{
+      widgetId: w.id, page: w.page, remove: true,
+      original: { fieldName: w.fieldName, x: w.x, y: w.y, width: w.width, height: w.height },
+    }]);
+    const g2 = await graphOf(baked);
+    expect(g2.widgets).toHaveLength(1);
+    expect(g2.widgets[0].fieldName).toBe('cliente.nombre');
   });
 });
 

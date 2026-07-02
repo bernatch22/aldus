@@ -115,9 +115,37 @@ export interface ImageEdit {
   original: { x: number; y: number; width: number; height: number };
 }
 
-// Próximas fases del roadmap — mismos principios, nuevos kinds:
-//   FormWidgetNode (AcroForm) → SignatureNode.
-export type PdfNode = TextRunNode | SegmentNode | LineNode | ImageNode;
+export type WidgetKind = 'text' | 'checkbox' | 'radio' | 'select' | 'list' | 'button' | 'signature';
+
+/** Un campo de formulario (widget annotation de AcroForm). Vive en la capa
+ *  /Annots — no en el content stream — así que editarlo es actualizar /Rect. */
+export interface WidgetNode {
+  id: string;
+  kind: 'widget';
+  page: number;
+  fieldName: string;
+  widgetType: WidgetKind;
+  readOnly: boolean;
+  /** Rect en puntos PDF, origen abajo-izquierda. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Una edición pendiente sobre un widget: mover/escalar/eliminar el campo. */
+export interface WidgetEdit {
+  widgetId: string;
+  page: number;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  remove?: boolean;
+  original: { fieldName: string; x: number; y: number; width: number; height: number };
+}
+
+export type PdfNode = TextRunNode | SegmentNode | LineNode | ImageNode | WidgetNode;
 
 /** El grafo completo de una página. */
 export interface PageGraph {
@@ -130,6 +158,7 @@ export interface PageGraph {
   /** Todos los segmentos de la página (las unidades de edición), aplanados. */
   segments: SegmentNode[];
   images: ImageNode[];
+  widgets: WidgetNode[];
 }
 
 /** Un tramo de texto con su estilo, DENTRO de una edición. El estilo vive a

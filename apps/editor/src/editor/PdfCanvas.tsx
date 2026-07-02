@@ -8,8 +8,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
-import { extractPageGraph, type ImageEdit, type PageGraph, type PdfJsPage, type SegmentEdit } from '@aldus/core';
-import { NodeOverlay, type EditAction, type ImageEditAction } from './NodeOverlay';
+import { extractPageGraph, type ImageEdit, type PageGraph, type PdfJsPage, type SegmentEdit, type WidgetEdit } from '@aldus/core';
+import { NodeOverlay, type EditAction, type ImageEditAction, type WidgetEditAction } from './NodeOverlay';
 
 interface Props {
   pdf: PDFDocumentProxy;
@@ -23,9 +23,11 @@ interface Props {
   onEdit: (action: EditAction) => void;
   imageEdits: Map<string, ImageEdit>;
   onImageEdit: (action: ImageEditAction) => void;
+  widgetEdits: Map<string, WidgetEdit>;
+  onWidgetEdit: (action: WidgetEditAction) => void;
 }
 
-export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit }: Props) {
+export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
@@ -90,6 +92,8 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
           onEdit={onEdit}
           imageEdits={imageEdits}
           onImageEdit={onImageEdit}
+          widgetEdits={widgetEdits}
+          onWidgetEdit={onWidgetEdit}
           snapshot={snapshot}
         />
       )}

@@ -11,7 +11,7 @@
  * segmento: quitar la negrita a una parte no toca el resto.
  */
 
-import type { FontBucket, ImageEdit, ImageNode, SegmentEdit, SegmentNode, StyledRun } from './model.js';
+import type { FontBucket, ImageEdit, ImageNode, SegmentEdit, SegmentNode, StyledRun, WidgetEdit, WidgetNode } from './model.js';
 import { classifyGap } from './tokens.js';
 
 /** Un parche parcial: `undefined` = no tocar; `null` = LIMPIAR el override
@@ -183,6 +183,45 @@ export function effectiveImageRect(img: ImageNode, edit: ImageEdit | null) {
     height: edit?.height ?? img.height,
     removed: edit?.remove === true,
     moved: edit?.x !== undefined || edit?.y !== undefined || edit?.width !== undefined || edit?.height !== undefined,
+  };
+}
+
+/** Parche parcial de un widget: `undefined` = no tocar; `null` = limpiar. */
+export interface WidgetPatch {
+  x?: number | null;
+  y?: number | null;
+  width?: number | null;
+  height?: number | null;
+  remove?: boolean | null;
+}
+
+const WIDGET_KEYS = ['x', 'y', 'width', 'height', 'remove'] as const;
+
+export function mergeWidgetEdit(w: WidgetNode, prev: WidgetEdit | null, patch: WidgetPatch): WidgetEdit | null {
+  const next: WidgetEdit = prev
+    ? { ...prev }
+    : {
+        widgetId: w.id,
+        page: w.page,
+        original: { fieldName: w.fieldName, x: w.x, y: w.y, width: w.width, height: w.height },
+      };
+  for (const key of WIDGET_KEYS) {
+    const value = patch[key];
+    if (value === undefined) continue;
+    if (value === null) delete next[key];
+    else (next as Record<string, unknown>)[key] = value;
+  }
+  return WIDGET_KEYS.every(k => next[k] === undefined) ? null : next;
+}
+
+/** Rect EFECTIVO de un widget con su edición aplicada. */
+export function effectiveWidgetRect(w: WidgetNode, edit: WidgetEdit | null) {
+  return {
+    x: edit?.x ?? w.x,
+    y: edit?.y ?? w.y,
+    width: edit?.width ?? w.width,
+    height: edit?.height ?? w.height,
+    removed: edit?.remove === true,
   };
 }
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { getDocument, type PDFDocumentProxy } from 'pdfjs-dist';
-import { effectiveGeometry, mergeSegmentEdit, type ImageEdit, type PageGraph, type SegmentEdit } from '@aldus/core';
+import { effectiveGeometry, mergeSegmentEdit, type ImageEdit, type PageGraph, type SegmentEdit, type WidgetEdit } from '@aldus/core';
 import { api } from '../lib/api';
 import { PdfCanvas } from '../editor/PdfCanvas';
 import { Inspector } from '../editor/Inspector';
@@ -21,6 +21,7 @@ export function EditorPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [edits, setEdits] = useState<Map<string, SegmentEdit>>(new Map());
   const [imageEdits, setImageEdits] = useState<Map<string, ImageEdit>>(new Map());
+  const [widgetEdits, setWidgetEdits] = useState<Map<string, WidgetEdit>>(new Map());
   const [baking, setBaking] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -73,6 +74,37 @@ export function EditorPage() {
         setImageEdits(prev => {
           const next = new Map(prev);
           next.delete(edit.imageId);
+          return next;
+        });
+      });
+  }, [id]);
+
+  // Los WIDGETS (campos de formulario) también se aplican al instante: su
+  // edición es reescribir el /Rect de la anotación — atómica y segura.
+  const onWidgetEdit = useCallback((edit: WidgetEdit | { widgetId: string; revert: true }) => {
+    if ('revert' in edit) {
+      setWidgetEdits(prev => {
+        const next = new Map(prev);
+        next.delete(edit.widgetId);
+        return next;
+      });
+      return;
+    }
+    if (imgBusy.current) return;
+    imgBusy.current = true;
+    setWidgetEdits(prev => new Map(prev).set(edit.widgetId, edit));
+    setError('');
+    api.bake(id, [], [], [edit])
+      .then(r => {
+        setDocVersion(v => v + 1);
+        setNotice(r.warnings.length ? `Campo: ${r.warnings.join(' · ')}` : 'Campo aplicado ✓');
+      })
+      .catch(e => setError(e instanceof Error ? e.message : 'No se pudo aplicar el campo'))
+      .finally(() => {
+        imgBusy.current = false;
+        setWidgetEdits(prev => {
+          const next = new Map(prev);
+          next.delete(edit.widgetId);
           return next;
         });
       });
@@ -152,6 +184,10 @@ export function EditorPage() {
     () => new Map([...imageEdits].filter(([, e]) => e.page === pageNum)),
     [imageEdits, pageNum],
   );
+  const pageWidgetEdits = useMemo(
+    () => new Map([...widgetEdits].filter(([, e]) => e.page === pageNum)),
+    [widgetEdits, pageNum],
+  );
 
   return (
     <div className="editor-shell">
@@ -207,6 +243,8 @@ export function EditorPage() {
               onEdit={onEdit}
               imageEdits={pageImageEdits}
               onImageEdit={onImageEdit}
+              widgetEdits={pageWidgetEdits}
+              onWidgetEdit={onWidgetEdit}
             />
           ) : (
             <p className="muted center">{error || 'Abriendo el PDF…'}</p>
@@ -220,6 +258,8 @@ export function EditorPage() {
           onEdit={onEdit}
           imageEdits={imageEdits}
           onImageEdit={onImageEdit}
+          widgetEdits={widgetEdits}
+          onWidgetEdit={onWidgetEdit}
         />
       </div>
     </div>

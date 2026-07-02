@@ -9,8 +9,10 @@
 
 import {
   effectiveImageRect,
+  effectiveWidgetRect,
   mergeImageEdit,
   mergeSegmentEdit,
+  mergeWidgetEdit,
   originalStyledRuns,
   type FontBucket,
   type ImageEdit,
@@ -21,9 +23,12 @@ import {
   type SegmentNode,
   type SegmentPatch,
   type StyledRun,
+  type WidgetEdit,
+  type WidgetNode,
+  type WidgetPatch,
 } from '@aldus/core';
 import { useEffect, useState } from 'react';
-import type { EditAction, ImageEditAction } from './NodeOverlay';
+import type { EditAction, ImageEditAction, WidgetEditAction } from './NodeOverlay';
 import { activeEditingBox, selectionStyle, SELECTION_STYLE_EVENT } from './styledDom';
 
 interface Props {
@@ -34,7 +39,14 @@ interface Props {
   onEdit: (action: EditAction) => void;
   imageEdits: Map<string, ImageEdit>;
   onImageEdit: (action: ImageEditAction) => void;
+  widgetEdits: Map<string, WidgetEdit>;
+  onWidgetEdit: (action: WidgetEditAction) => void;
 }
+
+const WIDGET_TYPE_LABEL: Record<WidgetNode['widgetType'], string> = {
+  text: 'texto', checkbox: 'checkbox', radio: 'radio', select: 'select',
+  list: 'lista', button: 'botón', signature: 'firma',
+};
 
 const n1 = (v: number) => (Math.round(v * 10) / 10).toString();
 
@@ -53,14 +65,23 @@ function StyledPreview({ seg, edit }: { seg: SegmentNode; edit: SegmentEdit | nu
   );
 }
 
-export function Inspector({ graph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit }: Props) {
+export function Inspector({ graph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit }: Props) {
   if (!graph) return <aside className="inspector" />;
   const selected = graph.segments.find(s => s.id === selectedId) ?? null;
   const selectedImage = graph.images.find(i => i.id === selectedId) ?? null;
+  const selectedWidget = graph.widgets.find(w => w.id === selectedId) ?? null;
 
   return (
     <aside className="inspector">
-      {selectedImage ? (
+      {selectedWidget ? (
+        <WidgetProperties
+          key={selectedWidget.id}
+          widget={selectedWidget}
+          edit={widgetEdits.get(selectedWidget.id) ?? null}
+          onClose={() => onSelect(null)}
+          onWidgetEdit={onWidgetEdit}
+        />
+      ) : selectedImage ? (
         <ImageProperties
           key={selectedImage.id}
           img={selectedImage}
@@ -87,6 +108,24 @@ export function Inspector({ graph, selectedId, onSelect, edits, onEdit, imageEdi
             {graph.images.length > 0 && <> · {graph.images.length} imagen{graph.images.length > 1 ? 'es' : ''}</>}
             {(edits.size + imageEdits.size) > 0 && <> · {edits.size + imageEdits.size} edición{edits.size + imageEdits.size > 1 ? 'es' : ''} pendiente{edits.size + imageEdits.size > 1 ? 's' : ''}</>}
           </p>
+          {graph.widgets.length > 0 && (
+            <>
+              <h4>Campos</h4>
+              <ul className="line-list">
+                {graph.widgets.map(w => (
+                  <li key={w.id} className="line-group">
+                    <div
+                      className={`seg-item${widgetEdits.has(w.id) ? ' edited' : ''}`}
+                      onClick={() => onSelect(w.id)}
+                    >
+                      <span className="mono">▭ {w.fieldName || '(sin nombre)'} · {WIDGET_TYPE_LABEL[w.widgetType]}</span>
+                      <span className="muted">x={n1(w.x)} · y={n1(w.y)} · {n1(w.width)}×{n1(w.height)}pt</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
           {graph.images.length > 0 && (
             <>
               <h4>Imágenes</h4>
@@ -124,6 +163,68 @@ export function Inspector({ graph, selectedId, onSelect, edits, onEdit, imageEdi
         </>
       )}
     </aside>
+  );
+}
+
+interface WidgetPropsPanelProps {
+  widget: WidgetNode;
+  edit: WidgetEdit | null;
+  onClose: () => void;
+  onWidgetEdit: (action: WidgetEditAction) => void;
+}
+
+function WidgetProperties({ widget, edit, onClose, onWidgetEdit }: WidgetPropsPanelProps) {
+  const commit = (patch: WidgetPatch) => {
+    const merged = mergeWidgetEdit(widget, edit, patch);
+    onWidgetEdit(merged ?? { widgetId: widget.id, revert: true });
+  };
+  const eff = effectiveWidgetRect(widget, edit);
+
+  const numPatch = (key: 'x' | 'y' | 'width' | 'height', originalValue: number) => (raw: string) => {
+    const v = parseFloat(raw);
+    if (!Number.isFinite(v)) return;
+    const rounded = Math.round(v * 10) / 10;
+    commit({ [key]: rounded === Math.round(originalValue * 10) / 10 ? null : rounded });
+  };
+
+  const fields: Array<['x' | 'y' | 'width' | 'height', string, number, number]> = [
+    ['x', 'x', eff.x, widget.x],
+    ['y', 'y', eff.y, widget.y],
+    ['width', 'ancho', eff.width, widget.width],
+    ['height', 'alto', eff.height, widget.height],
+  ];
+
+  return (
+    <>
+      <div className="insp-head">
+        <h3>Campo — {widget.fieldName || widget.id}</h3>
+        <button onClick={onClose}>×</button>
+      </div>
+      <dl className="insp-props">
+        <dt>tipo</dt><dd>{WIDGET_TYPE_LABEL[widget.widgetType]}</dd>
+        <dt>nombre</dt><dd className="mono">{widget.fieldName || '(sin nombre)'}</dd>
+        {widget.readOnly && (<><dt>flags</dt><dd>read-only</dd></>)}
+      </dl>
+      <label className="prop-label">Geometría (pt)</label>
+      <div className="prop-grid2">
+        {fields.map(([key, label, value, original]) => (
+          <label key={key} className="prop-cell">
+            <span className="muted">{label}</span>
+            <input
+              className="prop-input num"
+              type="number"
+              step="0.5"
+              defaultValue={n1(value)}
+              onBlur={e => numPatch(key, original)(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+            />
+          </label>
+        ))}
+      </div>
+      <button className="danger" onClick={() => commit({ remove: true })}>
+        Eliminar campo
+      </button>
+    </>
   );
 }
 

@@ -27,6 +27,17 @@ export function mul(m: Matrix, n: Matrix): Matrix {
   ];
 }
 
+/** Inversa afín (null si degenerada). mul(m, invert(m)) = identidad. */
+export function invert(m: Matrix): Matrix | null {
+  const det = m[0] * m[3] - m[1] * m[2];
+  if (!det) return null;
+  const ia = m[3] / det;
+  const ib = -m[1] / det;
+  const ic = -m[2] / det;
+  const id = m[0] / det;
+  return [ia, ib, ic, id, -(m[4] * ia + m[5] * ic), -(m[4] * ib + m[5] * id)];
+}
+
 export interface ShowOp {
   /** El OpRecord original (rango de bytes + operandos crudos). */
   record: OpRecord;
@@ -37,6 +48,9 @@ export interface ShowOp {
   y: number;
   /** Matriz completa Tm × CTM (para re-emitir con la misma orientación/escala). */
   matrix: Matrix;
+  /** El CTM solo (sin Tm) vigente en el op — la re-emisión IN-PLACE ejecuta
+   *  dentro de este CTM y debe compensarlo (M_rel = M_abs × inv(ctm)). */
+  ctm: Matrix;
   /** Nombre del recurso de fuente (/F1) y tamaño de Tf. */
   fontName: string;
   fontSize: number;
@@ -107,7 +121,7 @@ export function walkContent(src: Uint8Array): ContentWalk {
     const m = mul(tm, ctm);
     shows.push({
       record: rec, op,
-      x: m[4], y: m[5], matrix: m,
+      x: m[4], y: m[5], matrix: m, ctm,
       fontName, fontSize, charSpacing, wordSpacing, hScale,
       fillColorRaw,
       stale,

@@ -4,6 +4,19 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### feat: Z-ORDER preservado + WIDGETS AcroForm editables
+**Z-order**: la re-emisión del bake ahora es un REEMPLAZO IN-PLACE en el stream (Splice
+{start,end,text}), no extirpar+append — una imagen de fondo movida sigue quedando DEBAJO
+del texto. Sutileza clave: el reemplazo ejecuta dentro del CTM vigente (los q/cm originales
+quedan alrededor), así que la matriz emitida es RELATIVA (M_rel = M_abs × inv(CTM)) — se
+agregó `invert()` y el CTM registrado por op. Test que verifica el orden de ops en el
+stream horneado. **Widgets**: `WidgetNode` en el grafo (getAnnotations de pdf.js: tipo
+text/checkbox/radio/select/lista/botón/firma, nombre de campo, rect); overlay con box
+punteado teal — seleccionar/arrastrar/redimensionar (grip) — e Inspector con propiedades
+(tipo, nombre, geometría numérica, eliminar campo); sección "Campos" en el grafo. Bake vía
+/Annots: reescritura del /Rect del widget (pdf-lib setRectangle + updateFieldAppearances)
+o removeField; aplicación INSTANTÁNEA como las imágenes. 3 tests nuevos (18/18 core).
+
 ### feat: IMÁGENES — extracción, edición y bake (Tier 1)
 El grafo ahora incluye `ImageNode` (extraído del operator list de pdf.js: cada paint de
 XObject con su CTM → bounding box; detecta rotación). Overlay: box por imagen con

@@ -23,16 +23,18 @@ import {
   PDFArray,
   PDFDict,
   PDFDocument,
+  PDFField,
   PDFFont,
   PDFName,
   PDFRawStream,
   PDFRef,
+  PDFWidgetAnnotation,
   StandardFonts,
   decodePDFRawStream,
   rgb,
 } from 'pdf-lib';
-import type { FontBucket, ImageEdit, SegmentEdit, StyledRun } from '../model.js';
-import { walkContent, type ShowOp, type XObjectOp } from './textWalk.js';
+import type { FontBucket, ImageEdit, SegmentEdit, StyledRun, WidgetEdit } from '../model.js';
+import { invert, mul, walkContent, type Matrix, type ShowOp, type XObjectOp } from './textWalk.js';
 import { parseToUnicode, type ReverseEncoder } from './toUnicode.js';
 
 export interface BakeResult {
@@ -199,45 +201,67 @@ function matchOps(
 
 // ── re-emisión ───────────────────────────────────────────────────────────────
 
+/** Matriz de texto RELATIVA al CTM del punto de inserción: la re-emisión es
+ *  in-place (dentro de los q/cm originales), así que hay que compensarlos. */
+function relTm(o: ShowOp, ratio: number, x: number, y: number): Matrix | null {
+  const m = o.matrix;
+  const abs: Matrix = [m[0] * ratio, m[1] * ratio, m[2] * ratio, m[3] * ratio, x, y];
+  const inv = invert(o.ctm);
+  return inv ? mul(abs, inv) : null;
+}
+
 /** Bloque que re-emite UN show-op verbatim, reubicado/escalado. */
-function reemitBlock(o: ShowOp, src: Uint8Array, ratio: number, x: number, y: number): string {
+function reemitBlock(o: ShowOp, src: Uint8Array, ratio: number, x: number, y: number): string | null {
   const show =
     o.op === 'Tj' || o.op === 'TJ'
       ? latin1(src, o.record.start, o.record.end)
       : o.op === "'"
         ? `${o.record.operands[0]?.raw ?? '()'} Tj`
         : `${o.record.operands[2]?.raw ?? '()'} Tj`;
-  const m = o.matrix;
+  const t = relTm(o, ratio, x, y);
+  if (!t) return null;
   const color = o.fillColorRaw ? `${o.fillColorRaw} ` : '';
   return (
     `q BT ${color}/${o.fontName} ${fmt(o.fontSize)} Tf ` +
     `${fmt(o.charSpacing * ratio)} Tc ${fmt(o.wordSpacing * ratio)} Tw ${fmt(o.hScale)} Tz ` +
-    `${fmt(m[0] * ratio)} ${fmt(m[1] * ratio)} ${fmt(m[2] * ratio)} ${fmt(m[3] * ratio)} ${fmt(x)} ${fmt(y)} Tm ` +
+    `${fmt(t[0])} ${fmt(t[1])} ${fmt(t[2])} ${fmt(t[3])} ${fmt(t[4])} ${fmt(t[5])} Tm ` +
     `${show} ET Q`
   );
 }
 
 /** Bloque de texto NUEVO re-codificado con la fuente original. */
-function newTextBlock(o: ShowOp, ratio: number, x: number, y: number, bytes: Uint8Array): string {
-  const m = o.matrix;
+function newTextBlock(o: ShowOp, ratio: number, x: number, y: number, bytes: Uint8Array): string | null {
+  const t = relTm(o, ratio, x, y);
+  if (!t) return null;
   const color = o.fillColorRaw ? `${o.fillColorRaw} ` : '';
   return (
     `q BT ${color}/${o.fontName} ${fmt(o.fontSize)} Tf 0 Tc 0 Tw ${fmt(o.hScale)} Tz ` +
-    `${fmt(m[0] * ratio)} ${fmt(m[1] * ratio)} ${fmt(m[2] * ratio)} ${fmt(m[3] * ratio)} ${fmt(x)} ${fmt(y)} Tm ` +
+    `${fmt(t[0])} ${fmt(t[1])} ${fmt(t[2])} ${fmt(t[3])} ${fmt(t[4])} ${fmt(t[5])} Tm ` +
     `${hexString(bytes)} Tj ET Q`
   );
 }
 
-function rebuild(src: Uint8Array, removals: Array<[number, number]>, appendix: string): Uint8Array {
-  const sorted = [...removals].sort((a, b) => a[0] - b[0]);
+/** Un reemplazo in-place en el stream: [start, end) → text ('' = solo borrar).
+ *  Reemplazar EN EL LUGAR (no extirpar + append) preserva el Z-ORDER: lo
+ *  re-emitido se dibuja en el mismo turno que el original — una imagen de
+ *  fondo movida sigue quedando DEBAJO del texto. */
+interface Splice {
+  start: number;
+  end: number;
+  text: string;
+}
+
+function rebuild(src: Uint8Array, splices: Splice[]): Uint8Array {
+  const sorted = [...splices].sort((a, b) => a.start - b.start);
   let out = '';
   let pos = 0;
-  for (const [a, b] of sorted) {
-    if (a > pos) out += latin1(src, pos, a);
-    pos = Math.max(pos, b);
+  for (const s of sorted) {
+    if (s.start < pos) continue; // solapado (defensivo): el primero gana
+    out += latin1(src, pos, s.start);
+    if (s.text) out += `\n${s.text}\n`;
+    pos = s.end;
   }
   out += latin1(src, pos, src.length);
-  out += `\n${appendix}\n`;
   return toBytes(out);
 }
 
@@ -254,16 +278,82 @@ interface FallbackDraw {
   italic: boolean;
 }
 
+/** Widgets AcroForm: viven en /Annots, no en el content stream — mover/escalar
+ *  es reescribir el /Rect del widget; eliminar es sacar el campo del form. */
+function applyWidgetEdits(doc: PDFDocument, edits: WidgetEdit[], applied: string[], warnings: string[]): void {
+  if (!edits.length) return;
+  let form: ReturnType<PDFDocument['getForm']>;
+  try {
+    form = doc.getForm();
+  } catch {
+    warnings.push('el documento no tiene AcroForm — ediciones de campos saltadas');
+    return;
+  }
+  let touched = false;
+  for (const edit of edits) {
+    const tol = 2.5;
+    let matchedField: PDFField | null = null;
+    let matchedWidget: PDFWidgetAnnotation | null = null;
+    for (const field of form.getFields()) {
+      if (field.getName() !== edit.original.fieldName) continue;
+      for (const widget of field.acroField.getWidgets()) {
+        const r = widget.getRectangle();
+        if (
+          Math.abs(r.x - edit.original.x) <= tol && Math.abs(r.y - edit.original.y) <= tol &&
+          Math.abs(r.width - edit.original.width) <= tol && Math.abs(r.height - edit.original.height) <= tol
+        ) {
+          matchedField = field;
+          matchedWidget = widget;
+          break;
+        }
+      }
+      if (matchedField) break;
+    }
+    if (!matchedField || !matchedWidget) {
+      warnings.push(`${edit.widgetId}: campo "${edit.original.fieldName}" no encontrado en su rect — sin cambios`);
+      continue;
+    }
+    if (edit.remove) {
+      try {
+        form.removeField(matchedField);
+        applied.push(`${edit.widgetId}: campo "${edit.original.fieldName}" eliminado`);
+        touched = true;
+      } catch (err) {
+        warnings.push(`${edit.widgetId}: no se pudo eliminar (${err instanceof Error ? err.message : 'error'})`);
+      }
+      continue;
+    }
+    matchedWidget.setRectangle({
+      x: edit.x ?? edit.original.x,
+      y: edit.y ?? edit.original.y,
+      width: edit.width ?? edit.original.width,
+      height: edit.height ?? edit.original.height,
+    });
+    applied.push(`${edit.widgetId}: campo "${edit.original.fieldName}" reubicado/escalado`);
+    touched = true;
+  }
+  if (touched) {
+    try {
+      form.updateFieldAppearances();
+    } catch {
+      /* apariencias: el viewer las regenera */
+    }
+  }
+}
+
 export async function bakeSegmentEdits(
   pdfBytes: Uint8Array,
   edits: SegmentEdit[],
   imageEdits: ImageEdit[] = [],
+  widgetEdits: WidgetEdit[] = [],
 ): Promise<BakeResult> {
   const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
   const pages = doc.getPages();
   const applied: string[] = [];
   const warnings: string[] = [];
   const fallbackDraws: FallbackDraw[] = [];
+
+  applyWidgetEdits(doc, widgetEdits, applied, warnings);
 
   const byPage = new Map<number, SegmentEdit[]>();
   for (const e of edits) byPage.set(e.page, [...(byPage.get(e.page) ?? []), e]);
@@ -288,11 +378,10 @@ export async function bakeSegmentEdits(
     }
     const { shows, xobjects } = walkContent(src);
     const encCache = new Map<string, ReverseEncoder | null>();
-    const removals: Array<[number, number]> = [];
-    const blocks: string[] = [];
+    const splices: Splice[] = [];
 
-    // ── imágenes: mover/escalar re-emite `q cm /Nombre Do Q`; eliminar solo
-    //    extirpa el Do (los cm huérfanos no dibujan nada) ──
+    // ── imágenes: mover/escalar REEMPLAZA el Do en su lugar por
+    //    `q cm /Nombre Do Q` (z-order intacto); eliminar solo lo borra ──
     const imgNames = pageImgEdits.length ? imageResourceNames(doc, page) : new Set<string>();
     const imageOps = xobjects.filter(o => imgNames.has(o.name));
     for (const edit of pageImgEdits) {
@@ -301,15 +390,14 @@ export async function bakeSegmentEdits(
         warnings.push(`${edit.imageId}: no se encontró el XObject en la posición original — sin cambios`);
         continue;
       }
-      removals.push([op.record.start, op.record.end]);
       if (edit.remove) {
+        splices.push({ start: op.record.start, end: op.record.end, text: '' });
         applied.push(`${edit.imageId}: eliminada`);
         continue;
       }
       const r = xobjectRect(op.matrix);
       if (r.rotated) {
         warnings.push(`${edit.imageId}: la imagen tiene rotación — mover/escalar no soportado aún, queda intacta`);
-        removals.pop();
         continue;
       }
       const [a, , , d] = op.matrix;
@@ -323,7 +411,19 @@ export async function bakeSegmentEdits(
       const nd = d * (newH / r.height);
       const ne = newX - Math.min(0, na);
       const nf = newY - Math.min(0, nd);
-      blocks.push(`q ${fmt(na)} 0 0 ${fmt(nd)} ${fmt(ne)} ${fmt(nf)} cm /${op.name} Do Q`);
+      // La matriz emitida es RELATIVA al CTM vigente en el Do (el q/cm original
+      // sigue en el stream alrededor del reemplazo).
+      const inv = invert(op.matrix);
+      if (!inv) {
+        warnings.push(`${edit.imageId}: matriz degenerada — sin cambios`);
+        continue;
+      }
+      const rel = mul([na, 0, 0, nd, ne, nf], inv);
+      splices.push({
+        start: op.record.start,
+        end: op.record.end,
+        text: `q ${fmt(rel[0])} ${fmt(rel[1])} ${fmt(rel[2])} ${fmt(rel[3])} ${fmt(rel[4])} ${fmt(rel[5])} cm /${op.name} Do Q`,
+      });
       applied.push(`${edit.imageId}: reubicada/escalada`);
     }
 
@@ -339,18 +439,31 @@ export async function bakeSegmentEdits(
       const textChanged = edit.text !== edit.original.text;
       const familyChanged = edit.font !== undefined;
 
-      for (const o of ops) removals.push([o.record.start, o.record.end]);
-
       if (!textChanged && !familyChanged && !edit.runs) {
-        // A: mover/escalar — verbatim reubicado.
+        // A: mover/escalar — cada op verbatim reubicado EN SU LUGAR (z-order intacto).
+        const editSplices: Splice[] = [];
+        let degenerate = false;
         for (const o of ops) {
-          blocks.push(reemitBlock(o, src, ratio,
+          const block = reemitBlock(o, src, ratio,
             newX + (o.x - edit.original.x) * ratio,
-            newBaseline + (o.y - edit.original.baseline) * ratio));
+            newBaseline + (o.y - edit.original.baseline) * ratio);
+          if (!block) { degenerate = true; break; }
+          editSplices.push({ start: o.record.start, end: o.record.end, text: block });
         }
+        if (degenerate) {
+          warnings.push(`${edit.segmentId}: matriz degenerada — sin cambios`);
+          continue;
+        }
+        splices.push(...editSplices);
         applied.push(`${edit.segmentId}: reubicado/escalado (${ops.length} op${ops.length > 1 ? 's' : ''})`);
         continue;
       }
+
+      // Los ops del segmento se vacían; el contenido nuevo entra EN EL LUGAR
+      // del primero (z-order intacto).
+      for (const o of ops.slice(1)) splices.push({ start: o.record.start, end: o.record.end, text: '' });
+      const firstOp = ops[0];
+      const inlineBlocks: string[] = [];
 
       // B/C: contenido o estilo nuevos — SIEMPRE por run estilado. El estilo de
       // cada tramo decide la FUENTE: el mapa estilo→recurso sale de los runs
@@ -375,9 +488,11 @@ export async function bakeSegmentEdits(
         const x = newX + sr.dx * ratio;
         const fontName = familyChanged ? undefined : fontForStyle.get(`${sr.bold}|${sr.italic}`);
         const bytes = fontName ? encoderForFont(doc, page, fontName, encCache)?.encode(sr.text) ?? null : null;
-        if (fontName && bytes) {
-          const op = ops.find(o => o.fontName === fontName) ?? ops[0];
-          blocks.push(newTextBlock(op, ratio, x, newBaseline, bytes));
+        const inlineBlock = fontName && bytes
+          ? newTextBlock(ops.find(o => o.fontName === fontName) ?? firstOp, ratio, x, newBaseline, bytes)
+          : null;
+        if (inlineBlock) {
+          inlineBlocks.push(inlineBlock);
         } else {
           if (!/^\s+$/.test(sr.text)) {
             fallbackDraws.push({
@@ -394,6 +509,7 @@ export async function bakeSegmentEdits(
           substituted++;
         }
       }
+      splices.push({ start: firstOp.record.start, end: firstOp.record.end, text: inlineBlocks.join('\n') });
       if (substituted && !familyChanged) {
         warnings.push(`${edit.segmentId}: ${substituted} tramo${substituted > 1 ? 's' : ''} sin fuente original disponible (estilo nuevo o subset insuficiente) — sustituido por estándar`);
       }
@@ -402,8 +518,8 @@ export async function bakeSegmentEdits(
         : `${edit.segmentId}: reescrito por tramos (${runsToEmit.length})`);
     }
 
-    if (removals.length || blocks.length) {
-      setPageContents(doc, page, rebuild(src, removals, blocks.join('\n')));
+    if (splices.length) {
+      setPageContents(doc, page, rebuild(src, splices));
     }
   }
 

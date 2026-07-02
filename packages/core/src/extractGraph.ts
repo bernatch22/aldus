@@ -38,7 +38,10 @@ interface RawFont {
   fallbackName?: string;
   ascent?: number;
   descent?: number;
-  data?: unknown;
+  /** true cuando el font file NO viene en el PDF (pdf.js cae a una del sistema).
+   *  OJO: no usar `data` para esto — pdf.js lo libera tras renderizar salvo
+   *  `fontExtraProperties`, dando falsos "no embebido". */
+  missingFile?: boolean;
   bold?: boolean;
   italic?: boolean;
 }
@@ -73,7 +76,7 @@ function fontInfoFor(page: PdfJsPage, loadedName: string, cache: Map<string, Fon
     bucket: style.bucket,
     ascent: typeof raw?.ascent === 'number' && raw.ascent > 0 ? raw.ascent : 0.8,
     descent: typeof raw?.descent === 'number' && raw.descent < 0 ? raw.descent : -0.2,
-    embedded: raw?.data != null,
+    embedded: raw != null && raw.missingFile !== true,
   };
   cache.set(loadedName, info);
   return info;

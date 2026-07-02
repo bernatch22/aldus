@@ -29,6 +29,21 @@ interface Props {
 
 const n1 = (v: number) => (Math.round(v * 10) / 10).toString();
 
+/** Texto de un segmento con su estilo REAL por tramo (negritas visibles). */
+function StyledPreview({ seg, edit }: { seg: SegmentNode; edit: SegmentEdit | null }) {
+  const styled = edit?.runs ?? originalStyledRuns(seg);
+  if (!edit?.runs && edit) return <span className="mono">{edit.text}</span>;
+  return (
+    <span className="mono">
+      {styled.map((r, i) => (
+        <span key={i} style={{ fontWeight: r.bold ? 700 : 400, fontStyle: r.italic ? 'italic' : 'normal' }}>
+          {r.text}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 export function Inspector({ graph, selectedId, onSelect, edits, onEdit }: Props) {
   if (!graph) return <aside className="inspector" />;
   const selected = graph.segments.find(s => s.id === selectedId) ?? null;
@@ -62,7 +77,7 @@ export function Inspector({ graph, selectedId, onSelect, edits, onEdit }: Props)
                     className={`seg-item${edits.has(s.id) ? ' edited' : ''}`}
                     onClick={() => onSelect(s.id)}
                   >
-                    <span className="mono">{edits.get(s.id)?.text ?? s.text}</span>
+                    <StyledPreview seg={s} edit={edits.get(s.id) ?? null} />
                     <span className="muted">x={n1(s.x)} · y={n1(s.baseline)} · {n1(s.fontSize)}pt</span>
                   </div>
                 ))}
@@ -164,7 +179,10 @@ function ObjectProperties({ seg, edit, onClose, onEdit }: PropsPanelProps) {
           <ul className="tramo-list">
             {styled.map((r, i) => (
               <li key={i}>
-                <span className="mono tramo-text">{r.text || '·'}</span>
+                <span
+                  className="mono tramo-text"
+                  style={{ fontWeight: r.bold ? 700 : 400, fontStyle: r.italic ? 'italic' : 'normal' }}
+                >{r.text || '·'}</span>
                 <button
                   className={`toggle mini${r.bold ? ' active' : ''}`}
                   title="Bold de este tramo"

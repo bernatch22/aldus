@@ -48,6 +48,7 @@ import {
   family,
   round1,
   seedHtml,
+  selectionStyle,
   serializeStyled,
   SELECTION_STYLE_EVENT,
 } from './styledDom';
@@ -153,8 +154,20 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
   onHighlightColor: (c: string) => void;
 }) {
   const styled: StyledRun[] = edit?.runs ?? originalStyledRuns(seg);
-  const allBold = styled.length > 0 && styled.every(r => r.bold);
-  const allItalic = styled.length > 0 && styled.every(r => r.italic);
+  // Con el editor abierto, B/I reflejan el estilo BAJO LA SELECCIÓN (no el del
+  // segmento entero) y el toggle aplica solo a esa parte.
+  const [selSty, setSelSty] = useState<{ bold: boolean; italic: boolean } | null>(null);
+  useEffect(() => {
+    const update = () => {
+      const el = activeEditingBox();
+      setSelSty(el ? selectionStyle(el, seg, edit) : null);
+    };
+    update();
+    document.addEventListener('selectionchange', update);
+    return () => document.removeEventListener('selectionchange', update);
+  }, [seg, edit]);
+  const allBold = selSty ? selSty.bold : styled.length > 0 && styled.every(r => r.bold);
+  const allItalic = selSty ? selSty.italic : styled.length > 0 && styled.every(r => r.italic);
   const toggle = (key: 'bold' | 'italic') => {
     if (activeEditingBox()) {
       window.dispatchEvent(new CustomEvent(SELECTION_STYLE_EVENT, { detail: { key } }));
@@ -241,6 +254,14 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
   const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => setEditingId(null), [graph.page]);
 
+  // Seleccionar OTRO nodo cierra (con commit) el editor de texto abierto — el
+  // preventDefault de los pointerdown impide el blur natural, así que lo
+  // forzamos acá. Sin esto, la B de la toolbar le pegaba al editor viejo.
+  const selectNode = (nodeId: string | null) => {
+    if (editingId && editingId !== nodeId) activeEditingBox()?.blur();
+    onSelect(nodeId);
+  };
+
   return (
     <div
       className={`node-overlay${placing ? ' placing' : ''}`}
@@ -251,7 +272,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           onPlace(p.x, p.y);
           return;
         }
-        onSelect(null);
+        selectNode(null);
       }}
     >
       {graph.images.map(img => (
@@ -265,7 +286,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           edit={imageEdits.get(img.id) ?? null}
           isLocked={locked.has(img.id)}
           snapshot={snapshot}
-          onSelect={() => onSelect(img.id)}
+          onSelect={() => selectNode(img.id)}
           onPatch={patch => {
             const merged = mergeImageEdit(img, imageEdits.get(img.id) ?? null, patch);
             onImageEdit(merged ?? { imageId: img.id, revert: true });
@@ -283,8 +304,8 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           editing={editingId === seg.id}
           edit={edits.get(seg.id) ?? null}
           isLocked={locked.has(seg.id)}
-          onSelect={() => onSelect(seg.id)}
-          onStartEdit={() => { onSelect(seg.id); setEditingId(seg.id); }}
+          onSelect={() => selectNode(seg.id)}
+          onStartEdit={() => { selectNode(seg.id); setEditingId(seg.id); }}
           onStopEdit={() => setEditingId(null)}
           onPatch={patch => {
             const merged = mergeSegmentEdit(seg, edits.get(seg.id) ?? null, patch);
@@ -311,7 +332,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           edit={widgetEdits.get(w.id) ?? null}
           isLocked={locked.has(w.id)}
           snapshot={snapshot}
-          onSelect={() => onSelect(w.id)}
+          onSelect={() => selectNode(w.id)}
           onPatch={patch => {
             const merged = mergeWidgetEdit(w, widgetEdits.get(w.id) ?? null, patch);
             onWidgetEdit(merged ?? { widgetId: w.id, revert: true });
@@ -489,19 +510,21 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
   // Eliminada: el preview local ya la quitó del render (Ctrl+Z la restaura).
   if (eff.removed) return null;
 
-  // SOLO durante el drag: píxeles reales viajando + máscara del origen (salvo
-  // imágenes casi full-page). Al soltar, el preview local re-renderiza la
-  // imagen realmente movida — sin duplicados.
+  // SOLO durante el drag: píxeles reales viajando + máscara del origen. Una
+  // imagen casi full-page NO puede enmascararse (taparía el texto) → ahí el
+  // ghost es solo un marco punteado (sin píxeles = sin duplicado); al soltar,
+  // el preview local renderiza la verdad.
   const ghost = drag != null;
-  const ghostPixels = ghost && snapshot && orig.width > 0 && orig.height > 0
+  const coverage = (img.width * img.height) / (pageWidth * pageHeight);
+  const canMask = coverage < 0.8;
+  const ghostPixels = ghost && canMask && snapshot && orig.width > 0 && orig.height > 0
     ? {
         backgroundImage: `url(${snapshot.url})`,
         backgroundSize: `${(snapshot.width * rect.width) / orig.width}px ${(snapshot.height * rect.height) / orig.height}px`,
         backgroundPosition: `${(-orig.left * rect.width) / orig.width}px ${(-orig.top * rect.height) / orig.height}px`,
       }
     : undefined;
-  const coverage = (img.width * img.height) / (pageWidth * pageHeight);
-  const maskOriginal = ghost && coverage < 0.8;
+  const maskOriginal = ghost && canMask;
   return (
     <>
       {maskOriginal && (
@@ -646,7 +669,9 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
   // inputType formatBold/formatItalic → nuestro modelo; el resto de format* y
   // el undo nativo se bloquean — el browser jamás muta el DOM por su cuenta.
   useEffect(() => {
-    if (!editing) return;
+    // Solo el box editando Y seleccionado atiende el evento de estilo — evita
+    // que un editor viejo (aún abierto) reciba la B destinada a otro nodo.
+    if (!editing || !selected) return;
     const el = editRef.current;
     if (!el) return;
     const onStyle = (ev: Event) => {
@@ -668,7 +693,7 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
       window.removeEventListener(SELECTION_STYLE_EVENT, onStyle);
       el.removeEventListener('beforeinput', onBeforeInput as EventListener);
     };
-  }, [editing, seg, edit, scale]);
+  }, [editing, selected, seg, edit, scale]);
 
   // Segmento marcado para ELIMINAR: velo rojo, sin edición (se restaura desde
   // el panel; se concreta con "Aplicar al PDF").
@@ -704,7 +729,7 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
       {showMask && (
         <div className="seg-mask" style={{ left: originalRect.left, top: originalRect.top, width: originalRect.width, height: originalRect.height }} />
       )}
-      {selected && !isLocked && !editing && (
+      {selected && !isLocked && (
         <FloatingBar seg={seg} edit={edit} rect={rect} pageWidth={pageWidth} onPatch={onPatch} onDocOp={onDocOp} onRequestLink={onRequestLink} highlightColor={highlightColor} onHighlightColor={onHighlightColor} />
       )}
       <div

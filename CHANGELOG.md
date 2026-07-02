@@ -4,6 +4,18 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### fix(editor): editor huérfano, toolbar durante la edición, y drag de imagen full-page
+- **Seleccionar otro nodo CIERRA el editor abierto** (con commit): el preventDefault de los
+  pointerdown impedía el blur natural, y la B de la toolbar del nodo nuevo le pegaba al
+  editor viejo. `selectNode` fuerza el blur del editable activo antes de cambiar la
+  selección (+ guard: solo el box editando Y seleccionado atiende el evento de estilo).
+- **La toolbar flotante queda visible mientras editás** y sus B/I reflejan el estilo BAJO
+  LA SELECCIÓN (selectionchange → selectionStyle) — marcás una palabra, la barra muestra su
+  estado y el toggle aplica solo a esa parte.
+- **Drag de imagen full-page sin duplicado**: si la imagen no se puede enmascarar (≥80% de
+  la página), el ghost del drag es solo un marco punteado — sin píxeles duplicados; al
+  soltar, el preview local renderiza la verdad.
+
 ### feat(editor): PREVIEW HORNEADO EN EL BROWSER — adiós duplicados/máscaras fantasma
 El cambio de arquitectura que mata la familia entera de bugs de preview (duplicados al
 mover, cajas blancas remanentes, "recién se ve al Aplicar"): las ediciones pendientes de

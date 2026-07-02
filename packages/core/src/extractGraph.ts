@@ -47,6 +47,7 @@ interface RawAnnotation {
   hidden?: boolean;
   url?: string;
   unsafeUrl?: string;
+  options?: Array<{ exportValue?: string; displayValue?: string }>;
 }
 
 function extractLinks(annots: unknown[], page: number, x0: number, y0: number): LinkNode[] {
@@ -83,13 +84,17 @@ function extractWidgets(annots: unknown[], page: number, x0: number, y0: number)
   for (const raw of annots as RawAnnotation[]) {
     if (raw?.subtype !== 'Widget' || !Array.isArray(raw.rect) || raw.hidden) continue;
     const [ax, ay, bx, by] = raw.rect;
+    const kind = widgetKindOf(raw);
     out.push({
       id: `p${page}-w${out.length}`,
       kind: 'widget',
       page,
       fieldName: raw.fieldName ?? '',
-      widgetType: widgetKindOf(raw),
+      widgetType: kind,
       readOnly: raw.readOnly === true,
+      options: (kind === 'select' || kind === 'list') && Array.isArray(raw.options)
+        ? raw.options.map(o => o.displayValue || o.exportValue || '').filter(Boolean)
+        : undefined,
       x: Math.min(ax, bx) - x0,
       y: Math.min(ay, by) - y0,
       width: Math.abs(bx - ax),

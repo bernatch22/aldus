@@ -67,6 +67,20 @@ export function styledRunsEqual(a: StyledRun[], b: StyledRun[]): boolean {
 
 export const styledText = (runs: StyledRun[]): string => runs.map(r => r.text).join('');
 
+/** Si el texto arranca con un marcador de LISTA, devuelve el marcador del
+ *  SIGUIENTE ítem (comportamiento Word/Acrobat: Enter continúa la lista):
+ *  "• " → "• " · "3. " → "4. " · "b) " → "c) " · "B) " → "C) ". null = no es lista. */
+export function nextListMarker(text: string): string | null {
+  const m = /^(\s*)(?:([•·▪‣*-])|(\d{1,3})([.)])|([a-z])([.)])|([A-Z])([.)]))(\s+)/.exec(text);
+  if (!m) return null;
+  const [, indent, bullet, num, numSep, low, lowSep, up, upSep, gap] = m;
+  if (bullet) return `${indent}${bullet}${gap}`;
+  if (num) return `${indent}${Number(num) + 1}${numSep}${gap}`;
+  if (low) return `${indent}${low === 'z' ? 'a' : String.fromCharCode(low.charCodeAt(0) + 1)}${lowSep}${gap}`;
+  if (up) return `${indent}${up === 'Z' ? 'A' : String.fromCharCode(up.charCodeAt(0) + 1)}${upSep}${gap}`;
+  return null;
+}
+
 /** Aplica un toggle de estilo SOLO al rango [start, end) del texto plano de los
  *  runs (offsets en caracteres): corta los tramos en los límites, decide el
  *  destino (si TODO el rango ya tiene el estilo → quitarlo; si no → ponerlo),

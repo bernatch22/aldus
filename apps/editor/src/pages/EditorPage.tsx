@@ -13,6 +13,7 @@ import {
 import { api } from '../lib/api';
 import { PdfCanvas } from '../editor/PdfCanvas';
 import { Inspector } from '../editor/Inspector';
+import type { AddTextRequest } from '../editor/NodeOverlay';
 import { Button, IconButton, ToolButton, Toast, cx } from '../ui/primitives';
 import { WatermarkDialog, HeaderFooterDialog, LinkDialog } from '../ui/dialogs';
 
@@ -30,14 +31,25 @@ type Dialog =
   | { kind: 'headerFooter' }
   | { kind: 'link'; target: { page: number; x: number; y: number; width: number; height: number } };
 
-const INSERT_TOOLS: Array<{ id: string; icon: LucideIcon; label: string; placing: Placing }> = [
-  { id: 'text', icon: Pilcrow, label: 'Párrafo de texto', placing: { kind: 'text', bullet: false } },
-  { id: 'bullet', icon: List, label: 'Viñeta', placing: { kind: 'text', bullet: true } },
-  { id: 'field-text', icon: TextCursorInput, label: 'Campo de texto', placing: { kind: 'field', type: 'text' } },
-  { id: 'field-checkbox', icon: SquareCheck, label: 'Checkbox', placing: { kind: 'field', type: 'checkbox' } },
-  { id: 'field-radio', icon: CircleDot, label: 'Radio', placing: { kind: 'field', type: 'radio' } },
-  { id: 'field-select', icon: SquareChevronDown, label: 'Select', placing: { kind: 'field', type: 'select' } },
-  { id: 'field-signature', icon: Signature, label: 'Campo de firma', placing: { kind: 'field', type: 'signature' } },
+interface NavTool { id: string; icon: LucideIcon; label: string; placing: Placing }
+const NAV_GROUPS: Array<{ label: string; tools: NavTool[] }> = [
+  {
+    label: 'Texto',
+    tools: [
+      { id: 'text', icon: Pilcrow, label: 'Párrafo de texto (Enter continúa listas)', placing: { kind: 'text', bullet: false } },
+      { id: 'bullet', icon: List, label: 'Lista con viñeta (Enter agrega el siguiente ítem)', placing: { kind: 'text', bullet: true } },
+    ],
+  },
+  {
+    label: 'Forms',
+    tools: [
+      { id: 'field-text', icon: TextCursorInput, label: 'Campo de texto', placing: { kind: 'field', type: 'text' } },
+      { id: 'field-checkbox', icon: SquareCheck, label: 'Checkbox', placing: { kind: 'field', type: 'checkbox' } },
+      { id: 'field-radio', icon: CircleDot, label: 'Grupo de radios (agregá opciones desde el panel)', placing: { kind: 'field', type: 'radio' } },
+      { id: 'field-select', icon: SquareChevronDown, label: 'Select (editá las opciones desde el panel)', placing: { kind: 'field', type: 'select' } },
+      { id: 'field-signature', icon: Signature, label: 'Campo de firma', placing: { kind: 'field', type: 'signature' } },
+    ],
+  },
 ];
 
 export function EditorPage() {
@@ -80,6 +92,21 @@ export function EditorPage() {
     });
   }, [id]);
 
+  // El estilo DOMINANTE de la página (mediana de tamaño + bucket más común):
+  // el texto nuevo nace pareciéndose a los grafos existentes, no a Helvetica 11.
+  const pageTextStyle = useMemo(() => {
+    if (!graph?.segments.length) return { size: 11, bucket: 'sans' as const };
+    const sizes = graph.segments.map(s => s.fontSize).sort((a, b) => a - b);
+    const size = r1(sizes[Math.floor(sizes.length / 2)]);
+    const counts = new Map<string, number>();
+    for (const s of graph.segments) {
+      const b = s.runs[0]?.font.bucket ?? 'sans';
+      counts.set(b, (counts.get(b) ?? 0) + 1);
+    }
+    const bucket = ([...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'sans') as 'sans' | 'serif' | 'mono';
+    return { size, bucket };
+  }, [graph]);
+
   // ── INSERTAR: paleta → modo colocación → click en la página crea el nodo. ──
   const [placing, setPlacing] = useState<Placing>(null);
   const imageFileRef = useRef<HTMLInputElement>(null);
@@ -92,11 +119,22 @@ export function EditorPage() {
       ? api.createField(id, { type: p.type, page: pageNum, x: r1(x), y: r1(y - FIELD_DEFAULT_SIZE[p.type].height) })
       : p.kind === 'image'
         ? api.insertImage(id, p.file, { page: pageNum, x: r1(x), y: r1(y) })
-        : api.docOp(id, 'addText', { page: pageNum, x: r1(x), y: r1(y), text: p.bullet ? '•  Elemento nuevo' : 'Texto nuevo' });
+        : api.docOp(id, 'addText', {
+            page: pageNum, x: r1(x), y: r1(y),
+            text: p.bullet ? '•  Elemento nuevo' : 'Texto nuevo',
+            size: pageTextStyle.size, bucket: pageTextStyle.bucket,
+          });
     run
       .then(() => { setDocVersion(v => v + 1); setNotice('Creado — doble click para editar'); })
       .catch(e => setError(e instanceof Error ? e.message : 'No se pudo crear'));
-  }, [placing, id, pageNum]);
+  }, [placing, id, pageNum, pageTextStyle]);
+
+  // Enter al final de un ítem de lista → crear el siguiente ítem debajo.
+  const onAddText = useCallback((req: AddTextRequest) => {
+    api.docOp(id, 'addText', { page: req.page, x: r1(req.x), y: r1(req.baseline + req.size), text: req.text, size: req.size, bucket: req.bucket })
+      .then(() => { setDocVersion(v => v + 1); setNotice('Ítem agregado — doble click para editarlo'); })
+      .catch(e => setError(e instanceof Error ? e.message : 'No se pudo agregar'));
+  }, [id]);
 
   // Operaciones de documento instantáneas (highlight, links, watermark…).
   const docOp = useCallback((action: string, params: Record<string, unknown>) => {
@@ -279,20 +317,25 @@ export function EditorPage() {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        {/* ── Rail de herramientas (izquierda) ── */}
-        <nav className="flex w-13 shrink-0 flex-col items-center gap-1 border-r border-neutral-200 bg-white py-2" style={{ width: 52 }}>
-          <ToolButton icon={MousePointer2} label="Seleccionar" active={!placing} onClick={() => setPlacing(null)} />
-          <div className="my-1 h-px w-6 bg-neutral-200" />
-          {INSERT_TOOLS.map(t => (
-            <ToolButton key={t.id} icon={t.icon} label={t.label} active={toolActive(t.placing)}
-              onClick={() => setPlacing(prev => (toolActive(t.placing) ? null : t.placing))} />
+        {/* ── Rail de herramientas (izquierda), agrupado por categoría ── */}
+        <nav className="thin-scroll flex shrink-0 flex-col items-center gap-0.5 overflow-y-auto border-r border-neutral-200 bg-white py-2" style={{ width: 56 }}>
+          <ToolButton icon={MousePointer2} label="Seleccionar (Esc)" active={!placing} onClick={() => setPlacing(null)} />
+          {NAV_GROUPS.map(g => (
+            <div key={g.label} className="flex w-full flex-col items-center gap-0.5">
+              <div className="mt-2 mb-0.5 w-full text-center text-[8.5px] font-semibold uppercase tracking-[0.1em] text-neutral-300 select-none">{g.label}</div>
+              {g.tools.map(t => (
+                <ToolButton key={t.id} icon={t.icon} label={t.label} active={toolActive(t.placing)}
+                  onClick={() => setPlacing(() => (toolActive(t.placing) ? null : t.placing))} />
+              ))}
+            </div>
           ))}
+          <div className="mt-2 mb-0.5 w-full text-center text-[8.5px] font-semibold uppercase tracking-[0.1em] text-neutral-300 select-none">Objetos</div>
           <ToolButton icon={ImagePlus} label="Insertar imagen (PNG/JPEG)" active={placing?.kind === 'image'} onClick={() => imageFileRef.current?.click()} />
           <input ref={imageFileRef} type="file" accept="image/png,image/jpeg" hidden
             onChange={e => { const f = e.target.files?.[0]; if (f) setPlacing({ kind: 'image', file: f }); e.target.value = ''; }} />
-          <div className="my-1 h-px w-6 bg-neutral-200" />
-          <ToolButton icon={Droplets} label="Marca de agua" onClick={() => setDialog({ kind: 'watermark' })} />
-          <ToolButton icon={PanelTop} label="Encabezado y pie" onClick={() => setDialog({ kind: 'headerFooter' })} />
+          <div className="mt-2 mb-0.5 w-full text-center text-[8.5px] font-semibold uppercase tracking-[0.1em] text-neutral-300 select-none">Doc</div>
+          <ToolButton icon={Droplets} label="Marca de agua (todas las páginas)" onClick={() => setDialog({ kind: 'watermark' })} />
+          <ToolButton icon={PanelTop} label="Encabezado y pie de página" onClick={() => setDialog({ kind: 'headerFooter' })} />
         </nav>
 
         {/* ── Área de la página ── */}
@@ -307,6 +350,7 @@ export function EditorPage() {
                 imageEdits={pageImageEdits} onImageEdit={onImageEdit}
                 widgetEdits={pageWidgetEdits} onWidgetEdit={onWidgetEdit}
                 locked={locked} placing={placing != null} onPlace={onPlace}
+                onDocOp={docOp} onRequestLink={requestLink} onAddText={onAddText}
               />
             </div>
           ) : (

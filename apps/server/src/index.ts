@@ -22,11 +22,13 @@ import {
   addHeaderFooter,
   addHighlight,
   addLink,
+  addRadioOption,
   addText,
   addWatermark,
   bakeSegmentEdits,
   insertImage,
   removeLink,
+  setFieldOptions,
 } from '@aldus/core/bake';
 
 const PORT = Number(process.env.ALDUS_PORT || 4100);
@@ -148,6 +150,8 @@ app.post('/api/documents/:id/ops', async (req, res) => {
       case 'headerFooter': ({ pdf } = await addHeaderFooter(original, params)); break;
       case 'highlight': ({ pdf } = await addHighlight(original, params)); break;
       case 'addLink': ({ pdf } = await addLink(original, params)); break;
+      case 'setFieldOptions': ({ pdf } = await setFieldOptions(original, params)); break;
+      case 'addRadioOption': ({ pdf } = await addRadioOption(original, params)); break;
       case 'removeLink': {
         const r = await removeLink(original, params);
         if (!r.removed) return res.status(404).json({ error: 'Link no encontrado.' });

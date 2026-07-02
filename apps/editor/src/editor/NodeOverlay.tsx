@@ -21,10 +21,12 @@ import {
   mergeImageEdit,
   mergeSegmentEdit,
   mergeWidgetEdit,
+  nextListMarker,
   originalStyledRuns,
   pdfRectToCss,
   styledRunsEqual,
   styledText,
+  type FontBucket,
   type ImageEdit,
   type ImageNode,
   type ImagePatch,
@@ -32,11 +34,14 @@ import {
   type SegmentEdit,
   type SegmentNode,
   type SegmentPatch,
+  type StyledRun,
   type WidgetEdit,
   type WidgetNode,
   type WidgetPatch,
 } from '@aldus/core';
+import { AlignLeft, AlignCenter, AlignRight, Bold, Italic, Highlighter, Link2, Trash2 } from 'lucide-react';
 import {
+  activeEditingBox,
   applySelectionStyle,
   bucketFallback,
   dominantRun,
@@ -50,6 +55,17 @@ import {
 export type EditAction = SegmentEdit | { segmentId: string; revert: true };
 export type ImageEditAction = ImageEdit | { imageId: string; revert: true };
 export type WidgetEditAction = WidgetEdit | { widgetId: string; revert: true };
+
+/** Pedido de un ítem de LISTA nuevo (Enter al final de un ítem existente). */
+export interface AddTextRequest {
+  page: number;
+  x: number;
+  /** Baseline del ítem nuevo (una línea debajo del actual). */
+  baseline: number;
+  text: string;
+  size: number;
+  bucket: FontBucket;
+}
 
 interface Props {
   graph: PageGraph;
@@ -69,6 +85,12 @@ interface Props {
   onPlace: (x: number, y: number) => void;
   /** Snapshot de la página renderizada (para previews de imágenes movidas). */
   snapshot: { url: string; width: number; height: number } | null;
+  /** Operación de documento instantánea (highlight, addLink…). */
+  onDocOp: (action: string, params: Record<string, unknown>) => void;
+  /** Abre el modal de link para un rect. */
+  onRequestLink: (target: { page: number; x: number; y: number; width: number; height: number }) => void;
+  /** Enter al final de un ítem de lista → crear el siguiente. */
+  onAddText: (req: AddTextRequest) => void;
 }
 
 /** Tipografía del CONTENEDOR editable: la dominante del segmento (con tamaño/
@@ -91,7 +113,60 @@ const MIN_VISIBLE = 24;
 const clampX = (x: number, w: number, pageW: number) => Math.min(Math.max(x, MIN_VISIBLE - w), pageW - MIN_VISIBLE);
 const clampY = (y: number, h: number, pageH: number) => Math.min(Math.max(y, MIN_VISIBLE - h), pageH - MIN_VISIBLE);
 
-export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot }: Props) {
+/** Toolbar flotante arriba del segmento seleccionado: alineación (relativa a
+ *  la página), B/I, resaltar, link, eliminar. */
+function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLink }: {
+  seg: SegmentNode;
+  edit: SegmentEdit | null;
+  rect: { left: number; top: number };
+  pageWidth: number;
+  onPatch: (patch: SegmentPatch) => void;
+  onDocOp: (action: string, params: Record<string, unknown>) => void;
+  onRequestLink: (target: { page: number; x: number; y: number; width: number; height: number }) => void;
+}) {
+  const styled: StyledRun[] = edit?.runs ?? originalStyledRuns(seg);
+  const allBold = styled.length > 0 && styled.every(r => r.bold);
+  const allItalic = styled.length > 0 && styled.every(r => r.italic);
+  const toggle = (key: 'bold' | 'italic') => {
+    if (activeEditingBox()) {
+      window.dispatchEvent(new CustomEvent(SELECTION_STYLE_EVENT, { detail: { key } }));
+      return;
+    }
+    const next = key === 'bold' ? !allBold : !allItalic;
+    onPatch({ runs: styled.map(r => ({ ...r, [key]: next })) });
+  };
+  const eff = effectiveGeometry(seg, edit);
+  const MARGIN = 40;
+  const alignTo = (x: number) => onPatch({ x: Math.abs(x - seg.x) < 0.05 ? null : round1(x) });
+  const bbox = { page: seg.page, x: eff.x, y: eff.y, width: eff.width, height: eff.height };
+
+  const btn = (label: string, onClick: () => void, child: React.ReactNode, active = false, danger = false) => (
+    <button
+      title={label}
+      aria-label={label}
+      onMouseDown={e => e.preventDefault()}
+      onClick={e => { e.stopPropagation(); onClick(); }}
+      className={`fb-btn${active ? ' active' : ''}${danger ? ' danger' : ''}`}
+    >{child}</button>
+  );
+
+  return (
+    <div className="float-bar" style={{ left: rect.left, top: Math.max(2, rect.top - 36) }} onClick={e => e.stopPropagation()}>
+      {btn('Alinear a la izquierda', () => alignTo(MARGIN), <AlignLeft size={14} />)}
+      {btn('Centrar en la página', () => alignTo((pageWidth - eff.width) / 2), <AlignCenter size={14} />)}
+      {btn('Alinear a la derecha', () => alignTo(pageWidth - MARGIN - eff.width), <AlignRight size={14} />)}
+      <span className="fb-sep" />
+      {btn('Negrita', () => toggle('bold'), <Bold size={14} />, allBold)}
+      {btn('Itálica', () => toggle('italic'), <Italic size={14} />, allItalic)}
+      <span className="fb-sep" />
+      {btn('Resaltar', () => onDocOp('highlight', bbox), <Highlighter size={14} />)}
+      {btn('Link', () => onRequestLink(bbox), <Link2 size={14} />)}
+      {btn('Eliminar', () => onPatch({ remove: true }), <Trash2 size={14} />, false, true)}
+    </div>
+  );
+}
+
+export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, onDocOp, onRequestLink, onAddText }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => setEditingId(null), [graph.page]);
 
@@ -144,6 +219,9 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
             const merged = mergeSegmentEdit(seg, edits.get(seg.id) ?? null, patch);
             onEdit(merged ?? { segmentId: seg.id, revert: true });
           }}
+          onDocOp={onDocOp}
+          onRequestLink={onRequestLink}
+          onAddText={onAddText}
         />
       ))}
       {/* Los widgets al FINAL del DOM = arriba de todo para el mouse (como en
@@ -221,7 +299,8 @@ function WidgetBox({ widget, pageWidth, pageHeight, scale, selected, edit, isLoc
       title={`Campo ${WIDGET_LABEL[widget.widgetType]} · ${widget.fieldName}`}
       onClick={e => { e.stopPropagation(); onSelect(); }}
       onPointerDown={e => {
-        if (!selected || e.button !== 0) return;
+        if (e.button !== 0) return;
+        if (!selected) onSelect();
         e.preventDefault();
         e.stopPropagation();
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -352,7 +431,8 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
         title={`Imagen · ${Math.round(eff.width)}×${Math.round(eff.height)} pt`}
         onClick={e => { e.stopPropagation(); onSelect(); }}
         onPointerDown={e => {
-          if (!selected || e.button !== 0) return;
+          if (e.button !== 0) return;
+          if (!selected) onSelect();
           e.preventDefault();
           e.stopPropagation();
           e.currentTarget.setPointerCapture(e.pointerId);
@@ -433,9 +513,12 @@ interface SegmentBoxProps {
   onStartEdit: () => void;
   onStopEdit: () => void;
   onPatch: (patch: SegmentPatch) => void;
+  onDocOp: (action: string, params: Record<string, unknown>) => void;
+  onRequestLink: (target: { page: number; x: number; y: number; width: number; height: number }) => void;
+  onAddText: (req: AddTextRequest) => void;
 }
 
-function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, isLocked, onSelect, onStartEdit, onStopEdit, onPatch }: SegmentBoxProps) {
+function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, isLocked, onSelect, onStartEdit, onStopEdit, onPatch, onDocOp, onRequestLink, onAddText }: SegmentBoxProps) {
   const eff = effectiveGeometry(seg, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
   const originalRect = pdfRectToCss({ x: seg.x, y: seg.y, width: seg.width, height: seg.height }, pageHeight, scale);
@@ -502,7 +585,11 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
     );
   }
 
-  const masked = editing || edit != null;
+  // Mientras se ARRASTRA, el box viaja con su texto visible (fondo blanco) y
+  // una máscara tapa los glifos originales — sin esto "se movía el frame y el
+  // texto quedaba en su lugar" hasta Aplicar.
+  const masked = editing || edit != null || drag != null;
+  const showMask = edit != null || drag != null;
   const html = seedHtml(seg, edit, scale);
 
   const commitFromDom = (el: HTMLElement) => {
@@ -516,8 +603,11 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
 
   return (
     <>
-      {edit != null && (
+      {showMask && (
         <div className="seg-mask" style={{ left: originalRect.left, top: originalRect.top, width: originalRect.width, height: originalRect.height }} />
+      )}
+      {selected && !isLocked && (
+        <FloatingBar seg={seg} edit={edit} rect={rect} pageWidth={pageWidth} onPatch={onPatch} onDocOp={onDocOp} onRequestLink={onRequestLink} />
       )}
       <div
         className={`seg-box${selected ? ' selected' : ''}${masked ? ' masked' : ''}${edit ? ' edited' : ''}${editing ? ' editing' : ''}${isLocked ? ' locked' : ''}`}
@@ -537,7 +627,10 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
         onClick={e => { e.stopPropagation(); onSelect(); }}
         onDoubleClick={e => { e.stopPropagation(); onStartEdit(); }}
         onPointerDown={e => {
-          if (editing || !selected || e.button !== 0) return;
+          // Arrastrar directo, sin pre-seleccionar: el pointerdown selecciona
+          // Y arma el drag en el mismo gesto.
+          if (editing || e.button !== 0) return;
+          if (!selected) onSelect();
           e.preventDefault();
           e.stopPropagation();
           e.currentTarget.setPointerCapture(e.pointerId);
@@ -580,7 +673,28 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
               commitFromDom(e.currentTarget);
             }}
             onKeyDown={e => {
-              if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                // Enter en un ítem de LISTA → commit + crear el SIGUIENTE ítem
+                // con el marcador incrementado (• → •, "3." → "4.", "b)" → "c)").
+                const el = e.currentTarget;
+                const sizeRatio = (edit?.fontSize ?? seg.fontSize) / seg.fontSize;
+                const marker = nextListMarker(styledText(serializeStyled(el, seg, sizeRatio)));
+                el.blur();
+                if (marker) {
+                  const effNow = effectiveGeometry(seg, edit);
+                  const size = edit?.fontSize ?? seg.fontSize;
+                  onAddText({
+                    page: seg.page,
+                    x: effNow.x,
+                    baseline: round1(effNow.baseline - size * 1.4),
+                    text: marker,
+                    size,
+                    bucket: dominantRun(seg).font.bucket,
+                  });
+                }
+                return;
+              }
               if (e.key === 'Escape') {
                 e.currentTarget.innerHTML = seedHtml(seg, edit, scale);
                 e.currentTarget.blur();

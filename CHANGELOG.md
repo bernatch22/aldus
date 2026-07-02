@@ -4,6 +4,24 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### feat(editor): toolbar flotante con alineación + listas reales + fixes de drag y estilo
+- **Toolbar flotante arriba del texto seleccionado** (estilo Sejda/Acrobat): alinear
+  izquierda/centro/derecha (x relativo a los márgenes de la página), B/I (respetan la
+  selección si estás editando), resaltar, link y eliminar.
+- **Listas de verdad**: `nextListMarker` en core — **Enter al final de un ítem crea el
+  siguiente con el marcador incrementado** ("3." → "4.", "b)" → "c)", "B." → "C.", bullets
+  se repiten), con la fuente y tamaño del ítem actual. Tests de todos los marcadores.
+- **Texto nuevo con el estilo de la página**: el ¶/viñeta nacen con la MEDIANA de tamaño y
+  el bucket de fuente dominante del grafo — no más Helvetica 11 que desentona.
+- **Drag arreglado**: (1) arrastrar YA NO exige pre-seleccionar (pointerdown selecciona y
+  arma el drag en el mismo gesto — texto, imagen y campo); (2) al arrastrar un segmento el
+  box viaja con su texto visible y una máscara tapa los glifos originales (antes "se movía
+  el frame y el texto quedaba").
+- **Sidebar agrupado por categoría** (Texto / Forms / Objetos / Doc) con tooltips en todo.
+- **Select editable**: panel con las opciones actuales (una por línea, extraídas del PDF)
+  → setOptions vía pdf-lib. **Radios**: "Agregar opción al grupo" (mismo nombre = mismo
+  grupo, exclusión mutua) + eliminar grupo completo. Tests (28/28 core).
+
 ### feat(editor): REDISEÑO estilo Acrobat Pro — Tailwind + lucide-react, cero prompts
 Rediseño completo del shell y el panel de propiedades: Tailwind v4 (`@tailwindcss/vite`) +
 lucide-react, sin emojis. **Shell**: top bar minimalista (nav de página, zoom, Aplicar),

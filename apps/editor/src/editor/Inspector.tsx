@@ -113,7 +113,7 @@ export function Inspector(props: Props) {
   if (wid) return (
     <Panel>
       <Header title={wid.fieldName || 'Campo'} subtitle={WIDGET_TYPE_LABEL[wid.widgetType]} onClose={() => onSelect(null)} />
-      <WidgetProps widget={wid} edit={widgetEdits.get(wid.id) ?? null} onWidgetEdit={props.onWidgetEdit} />
+      <WidgetProps widget={wid} edit={widgetEdits.get(wid.id) ?? null} onWidgetEdit={props.onWidgetEdit} onDocOp={props.onDocOp} />
       {lockRow(wid.id)}
     </Panel>
   );
@@ -296,7 +296,7 @@ function ImageProps({ img, edit, onImageEdit }: { img: ImageNode; edit: ImageEdi
 }
 
 // ── propiedades de CAMPO ─────────────────────────────────────────────────────
-function WidgetProps({ widget, edit, onWidgetEdit }: { widget: WidgetNode; edit: WidgetEdit | null; onWidgetEdit: (a: WidgetEditAction) => void }) {
+function WidgetProps({ widget, edit, onWidgetEdit, onDocOp }: { widget: WidgetNode; edit: WidgetEdit | null; onWidgetEdit: (a: WidgetEditAction) => void; onDocOp: (a: string, p: Record<string, unknown>) => void }) {
   const commit = (patch: WidgetPatch) => { const m = mergeWidgetEdit(widget, edit, patch); onWidgetEdit(m ?? { widgetId: widget.id, revert: true }); };
   const eff = effectiveWidgetRect(widget, edit);
   const num = (key: 'x' | 'y' | 'width' | 'height', original: number) => (v: number) => {
@@ -314,8 +314,34 @@ function WidgetProps({ widget, edit, onWidgetEdit }: { widget: WidgetNode; edit:
         <Row><NumberInput label="X" defaultValue={eff.x} onCommit={num('x', widget.x)} /><NumberInput label="Y" defaultValue={eff.y} onCommit={num('y', widget.y)} /></Row>
         <Row><NumberInput label="W" defaultValue={eff.width} onCommit={num('width', widget.width)} /><NumberInput label="H" defaultValue={eff.height} onCommit={num('height', widget.height)} /></Row>
       </Section>
+      {(widget.widgetType === 'select' || widget.widgetType === 'list') && (
+        <Section title="Opciones (una por línea)">
+          <textarea
+            defaultValue={(widget.options ?? []).join('\n')}
+            rows={4}
+            className="w-full resize-y rounded-md border border-neutral-200 px-2 py-1.5 text-[13px] outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-100"
+            onBlur={e => {
+              const options = e.target.value.split('\n').map(o => o.trim()).filter(Boolean);
+              if (options.length && options.join('\n') !== (widget.options ?? []).join('\n')) {
+                onDocOp('setFieldOptions', { fieldName: widget.fieldName, options });
+              }
+            }}
+          />
+          <div className="text-[11px] text-neutral-400">Se guardan al salir del campo.</div>
+        </Section>
+      )}
+      {widget.widgetType === 'radio' && (
+        <Section title="Grupo de radios">
+          <div className="text-[11px] text-neutral-400">Las opciones del mismo grupo comparten el nombre "{widget.fieldName}" — se selecciona una sola a la vez.</div>
+          <Button className="w-full" onClick={() => onDocOp('addRadioOption', { fieldName: widget.fieldName, page: widget.page, x: widget.x, y: widget.y - widget.height - 8 })}>
+            Agregar opción al grupo
+          </Button>
+        </Section>
+      )}
       <Section title="Acciones">
-        <Button variant="danger" className="w-full" onClick={() => commit({ remove: true })}><Trash2 size={14} /> Eliminar campo</Button>
+        <Button variant="danger" className="w-full" onClick={() => commit({ remove: true })}>
+          <Trash2 size={14} /> {widget.widgetType === 'radio' ? 'Eliminar grupo completo' : 'Eliminar campo'}
+        </Button>
       </Section>
     </>
   );

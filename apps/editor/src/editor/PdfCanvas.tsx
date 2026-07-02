@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
 import { extractPageGraph, type ImageEdit, type PageGraph, type PdfJsPage, type SegmentEdit, type WidgetEdit } from '@aldus/core';
-import { NodeOverlay, type EditAction, type ImageEditAction, type WidgetEditAction } from './NodeOverlay';
+import { NodeOverlay, type AddTextRequest, type EditAction, type ImageEditAction, type WidgetEditAction } from './NodeOverlay';
 
 interface Props {
   pdf: PDFDocumentProxy;
@@ -28,9 +28,12 @@ interface Props {
   locked: Set<string>;
   placing: boolean;
   onPlace: (x: number, y: number) => void;
+  onDocOp: (action: string, params: Record<string, unknown>) => void;
+  onRequestLink: (target: { page: number; x: number; y: number; width: number; height: number }) => void;
+  onAddText: (req: AddTextRequest) => void;
 }
 
-export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace }: Props) {
+export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, onDocOp, onRequestLink, onAddText }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
@@ -101,6 +104,9 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
           placing={placing}
           onPlace={onPlace}
           snapshot={snapshot}
+          onDocOp={onDocOp}
+          onRequestLink={onRequestLink}
+          onAddText={onAddText}
         />
       )}
     </div>

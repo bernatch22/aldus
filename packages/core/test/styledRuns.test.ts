@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { toggleStyleRange, type StyledRun } from '../src/index.js';
+import { nextListMarker, toggleStyleRange, type StyledRun } from '../src/index.js';
+
+describe('nextListMarker (Enter continúa la lista)', () => {
+  it('incrementa números, letras y repite bullets', () => {
+    expect(nextListMarker('•  Elemento')).toBe('•  ');
+    expect(nextListMarker('- item')).toBe('- ');
+    expect(nextListMarker('3. Tercero')).toBe('4. ');
+    expect(nextListMarker('1) Primero')).toBe('2) ');
+    expect(nextListMarker('b) segundo')).toBe('c) ');
+    expect(nextListMarker('B. Segundo')).toBe('C. ');
+    expect(nextListMarker('  2)  indentado')).toBe('  3)  ');
+  });
+  it('texto normal no es lista', () => {
+    expect(nextListMarker('Hola mundo')).toBeNull();
+    expect(nextListMarker('2023 fue un año')).toBeNull(); // número sin separador de lista
+  });
+});
 
 const R = (text: string, bold = false, italic = false, dx = 0): StyledRun => ({ text, bold, italic, dx });
 

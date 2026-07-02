@@ -89,6 +89,29 @@ body {
   white-space: nowrap; background: #fff; padding: 0 3px; border-radius: 3px;
 }
 
+/* Toolbar flotante arriba del objeto seleccionado */
+.float-bar {
+  position: absolute;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  white-space: nowrap;
+}
+.fb-btn {
+  display: grid; place-items: center; width: 26px; height: 26px;
+  border: none; background: none; border-radius: 5px; color: #525252; cursor: pointer;
+}
+.fb-btn:hover { background: #f4f4f5; color: #171717; }
+.fb-btn.active { background: var(--accent); color: #fff; }
+.fb-btn.danger:hover { background: #fee2e2; color: var(--danger); }
+.fb-sep { width: 1px; height: 16px; background: var(--line); margin: 0 2px; }
+
 /* Scrollbars sutiles en los paneles */
 .thin-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
 .thin-scroll::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }

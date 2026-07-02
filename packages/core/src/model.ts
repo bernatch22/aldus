@@ -139,6 +139,8 @@ export interface WidgetNode {
   fieldName: string;
   widgetType: WidgetKind;
   readOnly: boolean;
+  /** Opciones actuales (solo select/lista). */
+  options?: string[];
   /** Rect en puntos PDF, origen abajo-izquierda. */
   x: number;
   y: number;

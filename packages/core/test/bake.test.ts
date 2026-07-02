@@ -15,7 +15,7 @@ import {
   type PdfJsPage,
   type SegmentEdit,
 } from '../src/index.js';
-import { addFormField, addLink, addText, addWatermark, bakeSegmentEdits, insertImage, removeLink } from '../src/bake/index.js';
+import { addFormField, addLink, addRadioOption, addText, addWatermark, bakeSegmentEdits, insertImage, removeLink, setFieldOptions } from '../src/bake/index.js';
 
 async function makePdf(): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
@@ -264,6 +264,24 @@ describe('crear nodos', () => {
     expect(types).toEqual(['check_1:checkbox', 'firma_1:signature', 'texto_1:text', 'texto_2:text']);
     const firma = g.widgets.find(w => w.widgetType === 'signature');
     expect(Math.abs((firma?.width ?? 0) - 200)).toBeLessThanOrEqual(2);
+  });
+
+  it('setea opciones de un select y agrega opciones a un grupo de radios', async () => {
+    let pdf = await makePdf();
+    ({ pdf } = await addFormField(pdf, { type: 'select', page: 1, x: 72, y: 500 }));
+    ({ pdf } = await addFormField(pdf, { type: 'radio', page: 1, x: 72, y: 460 }));
+    ({ pdf } = await setFieldOptions(pdf, { fieldName: 'select_1', options: ['Rojo', 'Verde', 'Azul'] }));
+    ({ pdf } = await addRadioOption(pdf, { fieldName: 'radio_1', page: 1, x: 72, y: 430 }));
+    ({ pdf } = await addRadioOption(pdf, { fieldName: 'radio_1', page: 1, x: 72, y: 400 }));
+
+    const g = await graphOf(pdf);
+    // El grupo de radios tiene 3 widgets (la original + 2 opciones), mismo nombre.
+    const radios = g.widgets.filter(w => w.fieldName === 'radio_1' && w.widgetType === 'radio');
+    expect(radios).toHaveLength(3);
+    // Y las opciones del select quedaron (verificable vía pdf-lib).
+    const { PDFDocument } = await import('pdf-lib');
+    const doc = await PDFDocument.load(pdf);
+    expect(doc.getForm().getDropdown('select_1').getOptions()).toEqual(['Rojo', 'Verde', 'Azul']);
   });
 
   it('inserta una imagen en el punto clickeado (aspecto preservado)', async () => {

@@ -63,6 +63,11 @@ export function sampleRunColors(graph: PageGraph, canvas: HTMLCanvasElement, sca
     }
     // Sin tinta suficiente (run vacío / muy claro) → dejar negro por defecto.
     if (bestScore < 90) continue;
+    // Trazos FINOS (guiones bajos, hairlines) salen 100% antialiaseados: el
+    // píxel más oscuro es un GRIS, no el negro real — y el texto movido
+    // "cambiaba de color". Un gris oscuro sin croma se asume negro.
+    const chroma = Math.max(br, bg, bb) - Math.min(br, bg, bb);
+    if (chroma < 28 && Math.max(br, bg, bb) < 130) continue;
     const hex = `#${toHex(br)}${toHex(bg)}${toHex(bb)}`;
     if (hex !== '#000000') run.color = hex;
   }

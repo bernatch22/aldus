@@ -59,23 +59,18 @@ import { stableFontFamily } from './fontRegistry';
 //    segmento al agarrarlo, soltarlo y re-renderizarse editado. ──
 export function dbgStyles(tag: string, seg: SegmentNode, edit: SegmentEdit | null, extra?: Record<string, unknown>): void {
   try {
-    console.log(`[aldus:${tag}]`, seg.id, JSON.stringify((edit?.text ?? seg.text).slice(0, 40)), {
-      runs: seg.runs.map(r => ({
-        t: r.text.slice(0, 14),
-        font: r.font.loadedName, ps: r.font.postScriptName ?? null, emb: r.font.embedded,
-        bucket: r.font.bucket, b: r.font.bold, i: r.font.italic,
-        size: +r.fontSize.toFixed(2), color: r.color ?? null,
-        famCss: family(r),
-        loadedNameVivo: document.fonts.check(`12px '${r.font.loadedName}'`),
-        stableVivo: r.font.postScriptName ? document.fonts.check(`12px '${stableFontFamily(r.font.postScriptName)}'`) : null,
-      })),
-      edit: edit && {
-        x: edit.x ?? null, baseline: edit.baseline ?? null, fontSize: edit.fontSize ?? null,
-        font: edit.font ?? null, color: edit.color ?? null,
-        runs: edit.runs?.map(r => ({ t: r.text.slice(0, 14), b: r.bold, i: r.italic, color: r.color ?? null })) ?? null,
-      },
-      ...extra,
+    // TODO PLANO (una línea por run): el console colapsa objetos anidados.
+    const lines = seg.runs.map(r => {
+      const vivo = document.fonts.check(`12px '${r.font.loadedName}'`);
+      const stable = r.font.postScriptName ? document.fonts.check(`12px '${stableFontFamily(r.font.postScriptName)}'`) : null;
+      return `  run "${r.text.slice(0, 12)}" font=${r.font.loadedName}(${r.font.postScriptName ?? '?'}) emb=${r.font.embedded} ` +
+        `b=${r.font.bold} i=${r.font.italic} size=${r.fontSize.toFixed(1)} color=${r.color ?? '-'} ` +
+        `VIVO=${vivo} STABLE=${stable}`;
     });
+    const e = edit
+      ? `edit{x:${edit.x ?? '-'} y:${edit.baseline ?? '-'} size:${edit.fontSize ?? '-'} font:${edit.font ?? '-'} color:${edit.color ?? '-'} runs:${edit.runs ? edit.runs.map(r => `${r.text.slice(0, 8)}|b${+r.bold}i${+r.italic}c${r.color ?? '-'}`).join(',') : '-'}}`
+      : 'edit:null';
+    console.log(`[aldus:${tag}] ${seg.id} "${(edit?.text ?? seg.text).slice(0, 40)}" ${e} ${extra ? JSON.stringify(extra) : ''}\n${lines.join('\n')}`);
   } catch { /* solo debug */ }
 }
 
@@ -295,6 +290,16 @@ function ObjectBar({ rect, pageWidth, width, onAlign, onZ, onDelete }: {
 export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => setEditingId(null), [graph.page]);
+
+  // Cuando una FontFace termina de cargar (las estables del fontRegistry son
+  // async), re-render: los fantasmas re-siembran su HTML midiendo con la
+  // fuente REAL — sin esto quedaban medidos/renderizados con el fallback.
+  const [, setFontsTick] = useState(0);
+  useEffect(() => {
+    const bump = () => setFontsTick(t => t + 1);
+    document.fonts.addEventListener('loadingdone', bump);
+    return () => document.fonts.removeEventListener('loadingdone', bump);
+  }, []);
 
   // Segmentos a dibujar: los del grafo del preview + los FANTASMAS editados
   // (extirpados del preview). Dedupe defensivo por id.

@@ -71,6 +71,14 @@ export function measureWidth(text: string, cssFont: string): number {
  *  el ancho PDF real del run y el medido se reparte como letter-spacing. */
 export function fitLetterSpacing(r: TextRunNode, text: string, scale: number): number {
   if (!text.length) return 0;
+  // Si NINGUNA fuente real está disponible (loadedName muerto y estable sin
+  // cargar), medir con el fallback del bucket hornea un tracking equivocado
+  // que DEFORMA el texto aunque la fuente cargue después. Mejor sin ajuste.
+  if (r.font.embedded && typeof document !== 'undefined' && 'fonts' in document) {
+    const vivo = document.fonts.check(`12px '${r.font.loadedName}'`)
+      || (r.font.postScriptName ? document.fonts.check(`12px '${stableFontFamily(r.font.postScriptName)}'`) : false);
+    if (!vivo) return 0;
+  }
   const fontStyle = !r.font.embedded && r.font.italic ? 'italic ' : '';
   const fontWeight = !r.font.embedded && r.font.bold ? '700 ' : '';
   const measured = measureWidth(text, `${fontStyle}${fontWeight}${(r.fontSize * scale).toFixed(2)}px ${family(r)}`);

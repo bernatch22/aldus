@@ -17,7 +17,17 @@ import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { addFormField, bakeSegmentEdits, insertImage } from '@aldus/core/bake';
+import {
+  addFormField,
+  addHeaderFooter,
+  addHighlight,
+  addLink,
+  addText,
+  addWatermark,
+  bakeSegmentEdits,
+  insertImage,
+  removeLink,
+} from '@aldus/core/bake';
 
 const PORT = Number(process.env.ALDUS_PORT || 4100);
 const DATA_DIR = process.env.ALDUS_DATA || path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
@@ -121,6 +131,36 @@ app.post('/api/documents/:id/fields', async (req, res) => {
     res.json({ ok: true, name: assigned });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'No se pudo crear el campo.' });
+  }
+});
+
+// Operaciones de documento: texto nuevo, watermark, header/footer, highlight, links.
+app.post('/api/documents/:id/ops', async (req, res) => {
+  const { id } = req.params;
+  if (!ID_RE.test(id) || !existsSync(pdfPath(id))) return res.status(404).json({ error: 'No existe.' });
+  const { action, ...params } = req.body ?? {};
+  try {
+    const original = new Uint8Array(readFileSync(pdfPath(id)));
+    let pdf: Uint8Array;
+    switch (action) {
+      case 'addText': ({ pdf } = await addText(original, params)); break;
+      case 'watermark': ({ pdf } = await addWatermark(original, params)); break;
+      case 'headerFooter': ({ pdf } = await addHeaderFooter(original, params)); break;
+      case 'highlight': ({ pdf } = await addHighlight(original, params)); break;
+      case 'addLink': ({ pdf } = await addLink(original, params)); break;
+      case 'removeLink': {
+        const r = await removeLink(original, params);
+        if (!r.removed) return res.status(404).json({ error: 'Link no encontrado.' });
+        pdf = r.pdf;
+        break;
+      }
+      default: return res.status(400).json({ error: `Acción desconocida: ${action}` });
+    }
+    copyFileSync(pdfPath(id), `${pdfPath(id)}.bak`);
+    writeFileSync(pdfPath(id), Buffer.from(pdf));
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'No se pudo aplicar la operación.' });
   }
 });
 

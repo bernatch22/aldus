@@ -12,7 +12,7 @@
  *    getOperatorList() se ejecuta antes para que los fonts estén resueltos.
  */
 
-import type { FontBucket, FontInfo, ImageNode, LineNode, PageGraph, SegmentNode, TextRunNode, WidgetKind, WidgetNode } from './model.js';
+import type { FontBucket, FontInfo, ImageNode, LineNode, LinkNode, PageGraph, SegmentNode, TextRunNode, WidgetKind, WidgetNode } from './model.js';
 import { segmentText, splitSegments } from './tokens.js';
 
 export interface PdfJsTextItem {
@@ -45,6 +45,29 @@ interface RawAnnotation {
   combo?: boolean;
   readOnly?: boolean;
   hidden?: boolean;
+  url?: string;
+  unsafeUrl?: string;
+}
+
+function extractLinks(annots: unknown[], page: number, x0: number, y0: number): LinkNode[] {
+  const out: LinkNode[] = [];
+  for (const raw of annots as RawAnnotation[]) {
+    if (raw?.subtype !== 'Link' || !Array.isArray(raw.rect)) continue;
+    const url = raw.url ?? raw.unsafeUrl;
+    if (!url) continue;
+    const [ax, ay, bx, by] = raw.rect;
+    out.push({
+      id: `p${page}-link${out.length}`,
+      kind: 'link',
+      page,
+      url,
+      x: Math.min(ax, bx) - x0,
+      y: Math.min(ay, by) - y0,
+      width: Math.abs(bx - ax),
+      height: Math.abs(by - ay),
+    });
+  }
+  return out;
 }
 
 function widgetKindOf(a: RawAnnotation): WidgetKind {
@@ -217,6 +240,7 @@ export async function extractPageGraph(page: PdfJsPage): Promise<PageGraph> {
     segments: lines.flatMap(l => l.segments),
     images: extractImages(opList.fnArray, opList.argsArray, page.pageNumber, x0, y0),
     widgets: extractWidgets(annots, page.pageNumber, x0, y0),
+    links: extractLinks(annots, page.pageNumber, x0, y0),
   };
 }
 

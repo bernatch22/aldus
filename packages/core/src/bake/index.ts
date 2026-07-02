@@ -6,5 +6,5 @@ export { walkTextOps, walkContent } from './textWalk.js';
 export type { ShowOp, Matrix, XObjectOp, ContentWalk } from './textWalk.js';
 export { parseToUnicode } from './toUnicode.js';
 export type { ReverseEncoder } from './toUnicode.js';
-export { addFormField, insertImage, FIELD_DEFAULT_SIZE } from './createNodes.js';
-export type { NewFieldSpec, NewImageSpec } from './createNodes.js';
+export { addFormField, insertImage, addText, addWatermark, addHeaderFooter, addHighlight, addLink, removeLink, FIELD_DEFAULT_SIZE } from './createNodes.js';
+export type { NewFieldSpec, NewImageSpec, NewTextSpec } from './createNodes.js';

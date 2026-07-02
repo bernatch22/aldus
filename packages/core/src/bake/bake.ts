@@ -134,7 +134,7 @@ const STD_FONTS: Record<FontBucket, [StandardFonts, StandardFonts, StandardFonts
   mono: [StandardFonts.Courier, StandardFonts.CourierBold, StandardFonts.CourierOblique, StandardFonts.CourierBoldOblique],
 };
 
-function stdFontFor(bucket: FontBucket, bold: boolean, italic: boolean): StandardFonts {
+export function stdFontFor(bucket: FontBucket, bold: boolean, italic: boolean): StandardFonts {
   return STD_FONTS[bucket][(bold ? 1 : 0) + (italic ? 2 : 0)];
 }
 
@@ -210,8 +210,26 @@ function relTm(o: ShowOp, ratio: number, x: number, y: number): Matrix | null {
   return inv ? mul(abs, inv) : null;
 }
 
-/** Bloque que re-emite UN show-op verbatim, reubicado/escalado. */
-function reemitBlock(o: ShowOp, src: Uint8Array, ratio: number, x: number, y: number): string | null {
+/** Overrides de estilo del segmento aplicables a nivel de operadores. */
+interface TextStyleOverrides {
+  /** Tc en puntos (el "AV" de Acrobat). */
+  charSpacing?: number;
+  /** Tz en % (el "T↔" de Acrobat). */
+  hScale?: number;
+  /** Operador de color de relleno ("r g b rg"). */
+  colorRaw?: string;
+}
+
+export function hexToRg(hex: string): string | undefined {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return undefined;
+  const v = parseInt(m[1], 16);
+  const c = (n: number) => fmt(n / 255);
+  return `${c((v >> 16) & 0xff)} ${c((v >> 8) & 0xff)} ${c(v & 0xff)} rg`;
+}
+
+/** Bloque que re-emite UN show-op verbatim, reubicado/escalado/re-estilado. */
+function reemitBlock(o: ShowOp, src: Uint8Array, ratio: number, x: number, y: number, ov: TextStyleOverrides = {}): string | null {
   const show =
     o.op === 'Tj' || o.op === 'TJ'
       ? latin1(src, o.record.start, o.record.end)
@@ -220,22 +238,28 @@ function reemitBlock(o: ShowOp, src: Uint8Array, ratio: number, x: number, y: nu
         : `${o.record.operands[2]?.raw ?? '()'} Tj`;
   const t = relTm(o, ratio, x, y);
   if (!t) return null;
-  const color = o.fillColorRaw ? `${o.fillColorRaw} ` : '';
+  const colorRaw = ov.colorRaw ?? o.fillColorRaw;
+  const color = colorRaw ? `${colorRaw} ` : '';
+  const tc = ov.charSpacing ?? o.charSpacing * ratio;
+  const tz = ov.hScale ?? o.hScale;
   return (
     `q BT ${color}/${o.fontName} ${fmt(o.fontSize)} Tf ` +
-    `${fmt(o.charSpacing * ratio)} Tc ${fmt(o.wordSpacing * ratio)} Tw ${fmt(o.hScale)} Tz ` +
+    `${fmt(tc)} Tc ${fmt(o.wordSpacing * ratio)} Tw ${fmt(tz)} Tz ` +
     `${fmt(t[0])} ${fmt(t[1])} ${fmt(t[2])} ${fmt(t[3])} ${fmt(t[4])} ${fmt(t[5])} Tm ` +
     `${show} ET Q`
   );
 }
 
 /** Bloque de texto NUEVO re-codificado con la fuente original. */
-function newTextBlock(o: ShowOp, ratio: number, x: number, y: number, bytes: Uint8Array): string | null {
+function newTextBlock(o: ShowOp, ratio: number, x: number, y: number, bytes: Uint8Array, ov: TextStyleOverrides = {}): string | null {
   const t = relTm(o, ratio, x, y);
   if (!t) return null;
-  const color = o.fillColorRaw ? `${o.fillColorRaw} ` : '';
+  const colorRaw = ov.colorRaw ?? o.fillColorRaw;
+  const color = colorRaw ? `${colorRaw} ` : '';
+  const tc = ov.charSpacing ?? 0;
+  const tz = ov.hScale ?? o.hScale;
   return (
-    `q BT ${color}/${o.fontName} ${fmt(o.fontSize)} Tf 0 Tc 0 Tw ${fmt(o.hScale)} Tz ` +
+    `q BT ${color}/${o.fontName} ${fmt(o.fontSize)} Tf ${fmt(tc)} Tc 0 Tw ${fmt(tz)} Tz ` +
     `${fmt(t[0])} ${fmt(t[1])} ${fmt(t[2])} ${fmt(t[3])} ${fmt(t[4])} ${fmt(t[5])} Tm ` +
     `${hexString(bytes)} Tj ET Q`
   );
@@ -450,20 +474,33 @@ export async function bakeSegmentEdits(
         warnings.push(`${edit.segmentId}: ${conflict} — sin cambios`);
         continue;
       }
+      // ELIMINAR: extirpar todos los ops del segmento y listo.
+      if (edit.remove) {
+        for (const o of ops) splices.push({ start: o.record.start, end: o.record.end, text: '' });
+        applied.push(`${edit.segmentId}: eliminado`);
+        continue;
+      }
+
       const ratio = (edit.fontSize ?? edit.original.fontSize) / edit.original.fontSize;
       const newX = edit.x ?? edit.original.x;
       const newBaseline = edit.baseline ?? edit.original.baseline;
       const textChanged = edit.text !== edit.original.text;
       const familyChanged = edit.font !== undefined;
+      const styleOv: TextStyleOverrides = {
+        charSpacing: edit.charSpacing,
+        hScale: edit.hScale,
+        colorRaw: edit.color ? hexToRg(edit.color) : undefined,
+      };
 
       if (!textChanged && !familyChanged && !edit.runs) {
-        // A: mover/escalar — cada op verbatim reubicado EN SU LUGAR (z-order intacto).
+        // A: mover/escalar/re-estilar — cada op verbatim reubicado EN SU LUGAR.
         const editSplices: Splice[] = [];
         let degenerate = false;
         for (const o of ops) {
           const block = reemitBlock(o, src, ratio,
             newX + (o.x - edit.original.x) * ratio,
-            newBaseline + (o.y - edit.original.baseline) * ratio);
+            newBaseline + (o.y - edit.original.baseline) * ratio,
+            styleOv);
           if (!block) { degenerate = true; break; }
           editSplices.push({ start: o.record.start, end: o.record.end, text: block });
         }
@@ -506,7 +543,7 @@ export async function bakeSegmentEdits(
         const fontName = familyChanged ? undefined : fontForStyle.get(`${sr.bold}|${sr.italic}`);
         const bytes = fontName ? encoderForFont(doc, page, fontName, encCache)?.encode(sr.text) ?? null : null;
         const inlineBlock = fontName && bytes
-          ? newTextBlock(ops.find(o => o.fontName === fontName) ?? firstOp, ratio, x, newBaseline, bytes)
+          ? newTextBlock(ops.find(o => o.fontName === fontName) ?? firstOp, ratio, x, newBaseline, bytes, styleOv)
           : null;
         if (inlineBlock) {
           inlineBlocks.push(inlineBlock);

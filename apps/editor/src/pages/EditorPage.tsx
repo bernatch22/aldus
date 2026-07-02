@@ -8,7 +8,11 @@ import { Inspector } from '../editor/Inspector';
 
 const r1 = (v: number) => Math.round(v * 10) / 10;
 
-type Placing = { kind: 'field'; type: WidgetKind } | { kind: 'image'; file: File } | null;
+type Placing =
+  | { kind: 'field'; type: WidgetKind }
+  | { kind: 'image'; file: File }
+  | { kind: 'text'; bullet: boolean }
+  | null;
 
 const FIELD_TOOLS: Array<{ type: WidgetKind; icon: string; label: string }> = [
   { type: 'text', icon: 'T', label: 'Campo de texto' },
@@ -63,14 +67,27 @@ export function EditorPage() {
     setNotice('');
     const run = p.kind === 'field'
       ? api.createField(id, { type: p.type, page: pageNum, x: r1(x), y: r1(y - FIELD_DEFAULT_SIZE[p.type].height) })
-      : api.insertImage(id, p.file, { page: pageNum, x: r1(x), y: r1(y) });
+      : p.kind === 'image'
+        ? api.insertImage(id, p.file, { page: pageNum, x: r1(x), y: r1(y) })
+        : api.docOp(id, 'addText', { page: pageNum, x: r1(x), y: r1(y), text: p.bullet ? '•  Elemento nuevo' : 'Texto nuevo' });
     run
       .then(() => {
         setDocVersion(v => v + 1);
-        setNotice(p.kind === 'field' ? 'Campo creado ✓' : 'Imagen insertada ✓');
+        setNotice('Creado ✓ (doble click para editar el texto)');
       })
       .catch(e => setError(e instanceof Error ? e.message : 'No se pudo crear'));
   }, [placing, id, pageNum]);
+
+  // Operaciones de documento instantáneas (highlight, links, watermark…).
+  const docOp = useCallback((action: string, params: Record<string, unknown>) => {
+    setError('');
+    api.docOp(id, action, params)
+      .then(() => {
+        setDocVersion(v => v + 1);
+        setNotice('Aplicado ✓');
+      })
+      .catch(e => setError(e instanceof Error ? e.message : 'No se pudo aplicar'));
+  }, [id]);
   const [baking, setBaking] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -171,6 +188,29 @@ export function EditorPage() {
         return;
       }
 
+      // Delete/Backspace: eliminar el nodo seleccionado.
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId && graph) {
+        const seg = graph.segments.find(s => s.id === selectedId);
+        if (seg) {
+          e.preventDefault();
+          const merged = mergeSegmentEdit(seg, edits.get(seg.id) ?? null, { remove: true });
+          if (merged) onEdit(merged);
+          return;
+        }
+        const img = graph.images.find(i => i.id === selectedId);
+        if (img) {
+          e.preventDefault();
+          onImageEdit({ imageId: img.id, page: img.page, remove: true, original: { x: img.x, y: img.y, width: img.width, height: img.height } });
+          return;
+        }
+        const w = graph.widgets.find(x => x.id === selectedId);
+        if (w) {
+          e.preventDefault();
+          onWidgetEdit({ widgetId: w.id, page: w.page, remove: true, original: { fieldName: w.fieldName, x: w.x, y: w.y, width: w.width, height: w.height } });
+          return;
+        }
+      }
+
       const seg = selectedId && graph ? graph.segments.find(s => s.id === selectedId) : null;
       if (seg && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
         e.preventDefault();
@@ -202,7 +242,7 @@ export function EditorPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [pdf, pageNum, selectedId, graph, edits, onEdit]);
+  }, [pdf, pageNum, selectedId, graph, edits, onEdit, onImageEdit, onWidgetEdit]);
 
   const setZoom = useCallback((s: number) => {
     const clamped = Math.min(3, Math.max(0.5, Math.round(s * 100) / 100));
@@ -272,6 +312,16 @@ export function EditorPage() {
         </div>
         <div className="toolbar-group palette">
           <span className="muted">Insertar:</span>
+          <button
+            className={placing?.kind === 'text' && !placing.bullet ? 'tool-active' : ''}
+            title="Párrafo de texto"
+            onClick={() => setPlacing(p => (p?.kind === 'text' && !p.bullet ? null : { kind: 'text', bullet: false }))}
+          >¶</button>
+          <button
+            className={placing?.kind === 'text' && placing.bullet ? 'tool-active' : ''}
+            title="Viñeta"
+            onClick={() => setPlacing(p => (p?.kind === 'text' && p.bullet ? null : { kind: 'text', bullet: true }))}
+          >•</button>
           {FIELD_TOOLS.map(t => (
             <button
               key={t.type}
@@ -297,6 +347,24 @@ export function EditorPage() {
             }}
           />
           {placing && <span className="muted">click en la página (Esc cancela)</span>}
+        </div>
+        <div className="toolbar-group">
+          <button
+            title="Marca de agua en todas las páginas"
+            onClick={() => {
+              const text = window.prompt('Texto de la marca de agua:', 'BORRADOR');
+              if (text) docOp('watermark', { text });
+            }}
+          >Marca de agua</button>
+          <button
+            title="Encabezado y pie de página"
+            onClick={() => {
+              const header = window.prompt('Encabezado (vacío = ninguno):', '') ?? '';
+              const footer = window.prompt('Pie de página (vacío = ninguno):', '') ?? '';
+              const pageNumbers = window.confirm('¿Numerar páginas? (Página N de M)');
+              if (header || footer || pageNumbers) docOp('headerFooter', { header: header || undefined, footer: footer || undefined, pageNumbers });
+            }}
+          >Enc/Pie</button>
         </div>
         <div className="toolbar-group grow">
           {!placing && graph && <span className="muted">{graph.lines.length} líneas · {graph.segments.length} segmentos · {graph.runs.length} runs</span>}
@@ -347,6 +415,7 @@ export function EditorPage() {
           onWidgetEdit={onWidgetEdit}
           locked={locked}
           onToggleLock={toggleLock}
+          onDocOp={docOp}
         />
       </div>
     </div>

@@ -13,6 +13,7 @@ export type {
   WidgetNode,
   WidgetEdit,
   WidgetKind,
+  LinkNode,
 } from './model.js';
 export { FIELD_DEFAULT_SIZE } from './model.js';
 export { extractPageGraph, groupIntoLines } from './extractGraph.js';

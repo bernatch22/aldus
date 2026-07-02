@@ -158,7 +158,19 @@ export interface WidgetEdit {
   original: { fieldName: string; x: number; y: number; width: number; height: number };
 }
 
-export type PdfNode = TextRunNode | SegmentNode | LineNode | ImageNode | WidgetNode;
+/** Un link (annotation /Link con acción URI). */
+export interface LinkNode {
+  id: string;
+  kind: 'link';
+  page: number;
+  url: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type PdfNode = TextRunNode | SegmentNode | LineNode | ImageNode | WidgetNode | LinkNode;
 
 /** El grafo completo de una página. */
 export interface PageGraph {
@@ -172,6 +184,7 @@ export interface PageGraph {
   segments: SegmentNode[];
   images: ImageNode[];
   widgets: WidgetNode[];
+  links: LinkNode[];
 }
 
 /** Un tramo de texto con su estilo, DENTRO de una edición. El estilo vive a
@@ -207,6 +220,14 @@ export interface SegmentEdit {
   x?: number;
   /** Nueva baseline (mover). */
   baseline?: number;
+  /** ELIMINAR el segmento (los ops se extirpan del stream). */
+  remove?: boolean;
+  /** Tracking (Tc) en puntos — el "AV" de Acrobat. */
+  charSpacing?: number;
+  /** Escala horizontal (Tz) en % — el "T↔" de Acrobat. 100 = normal. */
+  hScale?: number;
+  /** Color de relleno del texto, hex "#rrggbb". */
+  color?: string;
   /** Snapshot del nodo original para que el bake pueda localizarlo sin
    *  ambigüedad (y, si hay sustitución de fuente, imitar su estilo).
    *  `runs` trae el estilo ORIGINAL por tramo con su x — el bake lo usa para

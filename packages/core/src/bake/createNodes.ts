@@ -8,14 +8,26 @@
  */
 
 import {
+  BlendMode,
   PDFArray,
+  PDFDict,
   PDFDocument,
   PDFName,
+  PDFRef,
   PDFString,
+  degrees,
+  rgb,
   type PDFPage,
 } from 'pdf-lib';
-import { FIELD_DEFAULT_SIZE, type WidgetKind } from '../model.js';
+import { FIELD_DEFAULT_SIZE, type FontBucket, type WidgetKind } from '../model.js';
+import { stdFontFor } from './bake.js';
 export { FIELD_DEFAULT_SIZE };
+
+const hexToRgb = (hex: string) => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  const v = m ? parseInt(m[1], 16) : 0;
+  return rgb(((v >> 16) & 0xff) / 255, ((v >> 8) & 0xff) / 255, (v & 0xff) / 255);
+};
 
 export interface NewFieldSpec {
   type: WidgetKind;
@@ -133,6 +145,162 @@ export interface NewImageSpec {
   mime: string;
   /** Ancho máximo al insertar (se preserva el aspecto). */
   maxWidth?: number;
+}
+
+// ── texto nuevo ──────────────────────────────────────────────────────────────
+
+export interface NewTextSpec {
+  page: number;
+  /** Punto del click = esquina superior-izquierda del texto. */
+  x: number;
+  y: number;
+  text: string;
+  size?: number;
+  bucket?: FontBucket;
+  bold?: boolean;
+  italic?: boolean;
+  color?: string;
+}
+
+/** Agrega un párrafo de texto nuevo (con wrap hasta el margen derecho). Al
+ *  re-extraer se vuelve un segmento más del grafo → editable como cualquiera. */
+export async function addText(pdfBytes: Uint8Array, spec: NewTextSpec): Promise<{ pdf: Uint8Array }> {
+  const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+  const page = doc.getPages()[spec.page - 1];
+  if (!page) throw new Error(`página ${spec.page} fuera de rango`);
+  const size = spec.size ?? 11;
+  const font = await doc.embedFont(stdFontFor(spec.bucket ?? 'sans', spec.bold ?? false, spec.italic ?? false));
+  page.drawText(spec.text, {
+    x: spec.x,
+    y: spec.y - size,
+    size,
+    font,
+    color: spec.color ? hexToRgb(spec.color) : rgb(0, 0, 0),
+    lineHeight: size * 1.35,
+    maxWidth: Math.max(80, page.getWidth() - spec.x - 40),
+  });
+  return { pdf: await doc.save() };
+}
+
+// ── watermark / header / footer ─────────────────────────────────────────────
+
+export async function addWatermark(pdfBytes: Uint8Array, spec: { text: string; opacity?: number; color?: string }): Promise<{ pdf: Uint8Array }> {
+  const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+  const font = await doc.embedFont(stdFontFor('sans', true, false));
+  for (const page of doc.getPages()) {
+    const w = page.getWidth();
+    const h = page.getHeight();
+    const size = Math.min(84, (w * 1.1) / Math.max(4, spec.text.length) / 0.55);
+    page.drawText(spec.text, {
+      x: w * 0.14,
+      y: h * 0.28,
+      size,
+      font,
+      rotate: degrees(38),
+      opacity: spec.opacity ?? 0.14,
+      color: spec.color ? hexToRgb(spec.color) : rgb(0.4, 0.4, 0.45),
+    });
+  }
+  return { pdf: await doc.save() };
+}
+
+export async function addHeaderFooter(
+  pdfBytes: Uint8Array,
+  spec: { header?: string; footer?: string; pageNumbers?: boolean },
+): Promise<{ pdf: Uint8Array }> {
+  const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+  const font = await doc.embedFont(stdFontFor('sans', false, false));
+  const pages = doc.getPages();
+  const gray = rgb(0.35, 0.35, 0.4);
+  pages.forEach((page, i) => {
+    const w = page.getWidth();
+    const h = page.getHeight();
+    if (spec.header) page.drawText(spec.header, { x: 40, y: h - 28, size: 9, font, color: gray });
+    if (spec.footer) page.drawText(spec.footer, { x: 40, y: 18, size: 9, font, color: gray });
+    if (spec.pageNumbers) {
+      const label = `Página ${i + 1} de ${pages.length}`;
+      const lw = font.widthOfTextAtSize(label, 9);
+      page.drawText(label, { x: w - 40 - lw, y: 18, size: 9, font, color: gray });
+    }
+  });
+  return { pdf: await doc.save() };
+}
+
+// ── highlight ────────────────────────────────────────────────────────────────
+
+/** Resalta un rect (blend multiply + transparencia: el texto sigue legible). */
+export async function addHighlight(
+  pdfBytes: Uint8Array,
+  spec: { page: number; x: number; y: number; width: number; height: number; color?: string },
+): Promise<{ pdf: Uint8Array }> {
+  const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+  const page = doc.getPages()[spec.page - 1];
+  if (!page) throw new Error(`página ${spec.page} fuera de rango`);
+  page.drawRectangle({
+    x: spec.x - 1,
+    y: spec.y - 1,
+    width: spec.width + 2,
+    height: spec.height + 2,
+    color: spec.color ? hexToRgb(spec.color) : rgb(1, 0.92, 0.23),
+    opacity: 0.45,
+    blendMode: BlendMode.Multiply,
+  });
+  return { pdf: await doc.save() };
+}
+
+// ── links ────────────────────────────────────────────────────────────────────
+
+export async function addLink(
+  pdfBytes: Uint8Array,
+  spec: { page: number; x: number; y: number; width: number; height: number; url: string },
+): Promise<{ pdf: Uint8Array }> {
+  const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+  const page = doc.getPages()[spec.page - 1];
+  if (!page) throw new Error(`página ${spec.page} fuera de rango`);
+  const ctx = doc.context;
+  const dict = ctx.obj({
+    Type: 'Annot',
+    Subtype: 'Link',
+    Rect: [spec.x, spec.y, spec.x + spec.width, spec.y + spec.height],
+    Border: [0, 0, 0],
+    A: ctx.obj({ Type: 'Action', S: 'URI', URI: PDFString.of(spec.url) }),
+  });
+  const ref = ctx.register(dict);
+  const annots = page.node.lookup(PDFName.of('Annots'), PDFArray) ?? ctx.obj([]);
+  annots.push(ref);
+  page.node.set(PDFName.of('Annots'), annots);
+  return { pdf: await doc.save() };
+}
+
+export async function removeLink(
+  pdfBytes: Uint8Array,
+  spec: { page: number; x: number; y: number; width: number; height: number },
+): Promise<{ pdf: Uint8Array; removed: boolean }> {
+  const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+  const page = doc.getPages()[spec.page - 1];
+  if (!page) throw new Error(`página ${spec.page} fuera de rango`);
+  const annots = page.node.lookup(PDFName.of('Annots'), PDFArray);
+  if (!annots) return { pdf: pdfBytes, removed: false };
+  const tol = 2;
+  for (let i = 0; i < annots.size(); i++) {
+    const raw = annots.get(i);
+    const dict = raw instanceof PDFRef ? doc.context.lookup(raw) : raw;
+    if (!(dict instanceof PDFDict)) continue;
+    if (dict.get(PDFName.of('Subtype')) !== PDFName.of('Link')) continue;
+    const rect = dict.lookup(PDFName.of('Rect'), PDFArray);
+    if (!rect || rect.size() !== 4) continue;
+    const nums = [0, 1, 2, 3].map(k => Number((rect.get(k) as { asNumber?: () => number }).asNumber?.() ?? NaN));
+    if (nums.some(Number.isNaN)) continue;
+    const [ax, ay, bx, by] = nums;
+    if (
+      Math.abs(Math.min(ax, bx) - spec.x) <= tol && Math.abs(Math.min(ay, by) - spec.y) <= tol &&
+      Math.abs(Math.abs(bx - ax) - spec.width) <= tol && Math.abs(Math.abs(by - ay) - spec.height) <= tol
+    ) {
+      annots.remove(i);
+      return { pdf: await doc.save(), removed: true };
+    }
+  }
+  return { pdf: pdfBytes, removed: false };
 }
 
 /** Inserta una imagen (PNG/JPEG). Devuelve el PDF nuevo y el rect usado. */

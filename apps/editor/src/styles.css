@@ -197,6 +197,8 @@ button.danger { margin-top: 12px; width: 100%; color: #b91c1c; border-color: #fe
 .toolbar-group.palette button { min-width: 30px; }
 button.tool-active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .inspector > button { margin-top: 10px; width: 100%; }
+.prop-color { width: 30px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer; }
+.link-del { border: none; background: none; color: #b91c1c; padding: 0; text-decoration: underline; cursor: pointer; font-size: 11px; }
 .insp-props { display: grid; grid-template-columns: 72px 1fr; gap: 4px 8px; margin: 12px 0; }
 .insp-props dt { color: var(--muted); }
 .insp-props dd { margin: 0; overflow-wrap: anywhere; }

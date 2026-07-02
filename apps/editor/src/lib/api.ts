@@ -46,6 +46,14 @@ export const api = {
       body: JSON.stringify(spec),
     }).then(r => ok<{ ok: boolean; name: string }>(r)),
 
+  /** Operación de documento: addText | watermark | headerFooter | highlight | addLink | removeLink. */
+  docOp: (id: string, action: string, params: Record<string, unknown>): Promise<{ ok: boolean }> =>
+    fetch(`/api/documents/${id}/ops`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action, ...params }),
+    }).then(r => ok<{ ok: boolean }>(r)),
+
   /** Inserta una imagen (PNG/JPEG) en el punto clickeado. */
   insertImage: (id: string, file: File, spec: { page: number; x: number; y: number }): Promise<{ ok: boolean }> => {
     const fd = new FormData();

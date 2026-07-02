@@ -489,6 +489,19 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
     };
   }, [editing, seg, edit, scale]);
 
+  // Segmento marcado para ELIMINAR: velo rojo, sin edición (se restaura desde
+  // el panel; se concreta con "Aplicar al PDF").
+  if (edit?.remove) {
+    return (
+      <div
+        className={`img-removed${selected ? ' selected' : ''}`}
+        style={{ left: originalRect.left, top: originalRect.top, width: originalRect.width, height: originalRect.height }}
+        title="Texto eliminado — Aplicar al PDF para confirmar"
+        onClick={e => { e.stopPropagation(); onSelect(); }}
+      />
+    );
+  }
+
   const masked = editing || edit != null;
   const html = seedHtml(seg, edit, scale);
 

@@ -4,6 +4,22 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-02
 
+### feat: edición completa — texto nuevo, borrar todo, formato avanzado, highlight, links, watermark, enc/pie
+- **Insertar texto**: paleta ¶ (párrafo con wrap hasta el margen) y • (viñeta) — al re-extraer
+  son segmentos normales del grafo, editables con todo lo existente.
+- **Eliminar cualquier nodo**: botón Eliminar/Restaurar en el panel de texto (el bake extirpa
+  los ops) + tecla **Delete/Backspace** para el nodo seleccionado (texto acumula; imagen y
+  campo al instante).
+- **Formato avanzado estilo Acrobat** en el panel de texto: **AV** (tracking, Tc), **T↔**
+  (escala horizontal, Tz) y **color** — overrides del SegmentEdit que el bake re-emite a
+  nivel de operadores (funcionan también en el camino verbatim, sin tocar los bytes).
+- **Resaltar** (rect multiply+alpha sobre el bbox del segmento, texto legible) y **Link**
+  (annotation /Link con URI sobre el segmento; extracción en graph.links + borrar por rect).
+- **Marca de agua** (diagonal, todas las páginas, tamaño adaptado al texto) y
+  **Encabezado/Pie** con numeración "Página N de M". Endpoint único POST /:id/ops.
+- 4 tests nuevos (25/25 core). Alineación y line-height quedan para la fase de reflow de
+  párrafos (requieren la caja de párrafo como unidad).
+
 ### feat: LOCK de nodos + paleta de INSERTAR (campos, firma, imágenes)
 **Lock**: cualquier nodo (imagen/campo/segmento) se puede bloquear desde su panel — un
 nodo bloqueado es invisible al mouse (ni hover, ni selección, ni drag; pointer-events

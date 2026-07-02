@@ -15,7 +15,7 @@ import {
   type PdfJsPage,
   type SegmentEdit,
 } from '../src/index.js';
-import { addFormField, bakeSegmentEdits, insertImage } from '../src/bake/index.js';
+import { addFormField, addLink, addText, addWatermark, bakeSegmentEdits, insertImage, removeLink } from '../src/bake/index.js';
 
 async function makePdf(): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
@@ -278,6 +278,49 @@ describe('crear nodos', () => {
     expect(g.images[0].x).toBeCloseTo(rect.x, 0);
     // El texto original sigue ahí.
     expect(segByText(g, 'Nombre:').x).toBeCloseTo(72, 0);
+  });
+});
+
+describe('documento: texto nuevo, watermark, links', () => {
+  it('agrega texto nuevo que vuelve como segmento editable', async () => {
+    const pdf = await makePdf();
+    const { pdf: withText } = await addText(pdf, { page: 1, x: 72, y: 400, text: 'Parrafo nuevo agregado' });
+    const g = await graphOf(withText);
+    const seg = segByText(g, 'Parrafo nuevo agregado');
+    expect(seg.x).toBeCloseTo(72, 0);
+    // Y es editable: moverlo con el bake normal.
+    const edit = editFor(g, 'Parrafo nuevo agregado', { x: 200 });
+    const { pdf: baked, warnings } = await bakeSegmentEdits(withText, [edit]);
+    expect(warnings).toEqual([]);
+    expect(segByText(await graphOf(baked), 'Parrafo nuevo agregado').x).toBeCloseTo(200, 0);
+  });
+
+  it('elimina un segmento (remove)', async () => {
+    const pdf = await makePdf();
+    const g = await graphOf(pdf);
+    const edit = editFor(g, 'Juan Perez', { remove: true });
+    const { pdf: baked } = await bakeSegmentEdits(pdf, [edit]);
+    const g2 = await graphOf(baked);
+    expect(g2.segments.some(s => s.text === 'Juan Perez')).toBe(false);
+    expect(segByText(g2, 'Nombre:').x).toBeCloseTo(72, 0);
+  });
+
+  it('watermark en todas las páginas', async () => {
+    const pdf = await makePdf();
+    const { pdf: wm } = await addWatermark(pdf, { text: 'BORRADOR' });
+    const g = await graphOf(wm);
+    expect(g.segments.some(s => s.text.includes('BORRADOR'))).toBe(true);
+  });
+
+  it('crea y elimina un link', async () => {
+    const pdf = await makePdf();
+    const { pdf: withLink } = await addLink(pdf, { page: 1, x: 72, y: 690, width: 120, height: 16, url: 'https://aldus.dev' });
+    const g = await graphOf(withLink);
+    expect(g.links).toHaveLength(1);
+    expect(g.links[0].url).toContain('aldus.dev'); // pdf.js normaliza con barra final
+    const { pdf: without, removed } = await removeLink(withLink, { page: 1, x: g.links[0].x, y: g.links[0].y, width: g.links[0].width, height: g.links[0].height });
+    expect(removed).toBe(true);
+    expect((await graphOf(without)).links).toHaveLength(0);
   });
 });
 

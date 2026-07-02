@@ -43,6 +43,8 @@ interface Props {
   onWidgetEdit: (action: WidgetEditAction) => void;
   locked: Set<string>;
   onToggleLock: (nodeId: string) => void;
+  /** Operación de documento instantánea (highlight, addLink, removeLink…). */
+  onDocOp: (action: string, params: Record<string, unknown>) => void;
 }
 
 /** Botón compartido de lock: un nodo bloqueado no responde al mouse en el
@@ -78,7 +80,7 @@ function StyledPreview({ seg, edit }: { seg: SegmentNode; edit: SegmentEdit | nu
   );
 }
 
-export function Inspector({ graph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, onToggleLock }: Props) {
+export function Inspector({ graph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, onToggleLock, onDocOp }: Props) {
   if (!graph) return <aside className="inspector" />;
   const selected = graph.segments.find(s => s.id === selectedId) ?? null;
   const selectedImage = graph.images.find(i => i.id === selectedId) ?? null;
@@ -116,6 +118,7 @@ export function Inspector({ graph, selectedId, onSelect, edits, onEdit, imageEdi
             edit={edits.get(selected.id) ?? null}
             onClose={() => onSelect(null)}
             onEdit={onEdit}
+            onDocOp={onDocOp}
           />
           <LockButton nodeId={selected.id} locked={locked} onToggleLock={onToggleLock} />
         </>
@@ -142,6 +145,31 @@ export function Inspector({ graph, selectedId, onSelect, edits, onEdit, imageEdi
                     >
                       <span className="mono">{locked.has(w.id) ? '🔒 ' : ''}▭ {w.fieldName || '(sin nombre)'} · {WIDGET_TYPE_LABEL[w.widgetType]}</span>
                       <span className="muted">x={n1(w.x)} · y={n1(w.y)} · {n1(w.width)}×{n1(w.height)}pt</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {graph.links.length > 0 && (
+            <>
+              <h4>Links</h4>
+              <ul className="line-list">
+                {graph.links.map(l => (
+                  <li key={l.id} className="line-group">
+                    <div className="seg-item">
+                      <span className="mono">🔗 {l.url.slice(0, 42)}</span>
+                      <span className="muted">
+                        x={n1(l.x)} · y={n1(l.y)}
+                        {' · '}
+                        <button
+                          className="link-del"
+                          onClick={e => {
+                            e.stopPropagation();
+                            onDocOp('removeLink', { page: l.page, x: l.x, y: l.y, width: l.width, height: l.height });
+                          }}
+                        >borrar</button>
+                      </span>
                     </div>
                   </li>
                 ))}
@@ -327,9 +355,10 @@ interface PropsPanelProps {
   edit: SegmentEdit | null;
   onClose: () => void;
   onEdit: (action: EditAction) => void;
+  onDocOp: (action: string, params: Record<string, unknown>) => void;
 }
 
-function ObjectProperties({ seg, edit, onClose, onEdit }: PropsPanelProps) {
+function ObjectProperties({ seg, edit, onClose, onEdit, onDocOp }: PropsPanelProps) {
   const commit = (patch: SegmentPatch) => {
     const merged = mergeSegmentEdit(seg, edit, patch);
     onEdit(merged ?? { segmentId: seg.id, revert: true });
@@ -478,6 +507,61 @@ function ObjectProperties({ seg, edit, onClose, onEdit }: PropsPanelProps) {
           onBlur={e => numPatch('baseline', seg.baseline)(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
         />
+      </div>
+
+      <label className="prop-label">Avanzado</label>
+      <div className="prop-row">
+        <span className="muted" title="Tracking (AV) en pt">AV</span>
+        <input
+          className="prop-input num"
+          type="number"
+          step="0.1"
+          defaultValue={edit?.charSpacing ?? 0}
+          onBlur={e => {
+            const v = parseFloat(e.target.value);
+            if (Number.isFinite(v)) commit({ charSpacing: v === 0 ? null : v });
+          }}
+          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+        />
+        <span className="muted" title="Escala horizontal (%)">T↔</span>
+        <input
+          className="prop-input num"
+          type="number"
+          step="1"
+          min="10"
+          defaultValue={edit?.hScale ?? 100}
+          onBlur={e => {
+            const v = parseFloat(e.target.value);
+            if (Number.isFinite(v) && v > 0) commit({ hScale: v === 100 ? null : v });
+          }}
+          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+        />
+        <input
+          type="color"
+          className="prop-color"
+          title="Color del texto"
+          defaultValue={edit?.color ?? '#000000'}
+          onChange={e => commit({ color: e.target.value === '#000000' ? null : e.target.value })}
+        />
+      </div>
+
+      <label className="prop-label">Acciones</label>
+      <div className="prop-row">
+        <button
+          title="Resaltar este texto (amarillo)"
+          onClick={() => onDocOp('highlight', { page: seg.page, x: seg.x, y: seg.y, width: seg.width, height: seg.height })}
+        >Resaltar</button>
+        <button
+          title="Convertir en link"
+          onClick={() => {
+            const url = window.prompt('URL del link:', 'https://');
+            if (url && url !== 'https://') onDocOp('addLink', { page: seg.page, x: seg.x, y: seg.y, width: seg.width, height: seg.height, url });
+          }}
+        >Link</button>
+        <button
+          className="danger"
+          onClick={() => commit({ remove: edit?.remove ? null : true })}
+        >{edit?.remove ? 'Restaurar' : 'Eliminar'}</button>
       </div>
 
       <dl className="insp-props">

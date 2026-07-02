@@ -108,23 +108,6 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
         onSelect(null);
       }}
     >
-      {graph.widgets.map(w => (
-        <WidgetBox
-          key={w.id}
-          widget={w}
-          pageWidth={graph.width}
-          pageHeight={graph.height}
-          scale={scale}
-          selected={selectedId === w.id}
-          edit={widgetEdits.get(w.id) ?? null}
-          isLocked={locked.has(w.id)}
-          onSelect={() => onSelect(w.id)}
-          onPatch={patch => {
-            const merged = mergeWidgetEdit(w, widgetEdits.get(w.id) ?? null, patch);
-            onWidgetEdit(merged ?? { widgetId: w.id, revert: true });
-          }}
-        />
-      ))}
       {graph.images.map(img => (
         <ImageBox
           key={img.id}
@@ -160,6 +143,26 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           onPatch={patch => {
             const merged = mergeSegmentEdit(seg, edits.get(seg.id) ?? null, patch);
             onEdit(merged ?? { segmentId: seg.id, revert: true });
+          }}
+        />
+      ))}
+      {/* Los widgets al FINAL del DOM = arriba de todo para el mouse (como en
+          el PDF: las anotaciones se dibujan sobre el contenido). Una imagen
+          full-page nunca puede taparles los clicks. */}
+      {graph.widgets.map(w => (
+        <WidgetBox
+          key={w.id}
+          widget={w}
+          pageWidth={graph.width}
+          pageHeight={graph.height}
+          scale={scale}
+          selected={selectedId === w.id}
+          edit={widgetEdits.get(w.id) ?? null}
+          isLocked={locked.has(w.id)}
+          onSelect={() => onSelect(w.id)}
+          onPatch={patch => {
+            const merged = mergeWidgetEdit(w, widgetEdits.get(w.id) ?? null, patch);
+            onWidgetEdit(merged ?? { widgetId: w.id, revert: true });
           }}
         />
       ))}

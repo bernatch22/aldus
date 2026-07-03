@@ -4,6 +4,23 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### feat(editor+core): un grafo PUEDE tener BREAKLINES — Enter = \n real dentro del mismo nodo
+Pregunta correcta del usuario: "¿un grafo no puede tener breakline?" — sí puede (el PDF
+soporta bloques multilínea). Se elimina TODA la maquinaria de crear-segmentos en Enter:
+- **Editor**: Enter inserta `\n` en el mismo textarea (multilínea nativo); en una lista
+  continúa el marcador incrementado en la línea nueva; Enter en un ítem vacío (solo
+  marcador) lo quita y cierra. `fit()` multilínea: ancho = línea más larga, alto =
+  n×line-height (1 línea = alto real del segmento; 2+ = 1.2×size — el MISMO leading que
+  hornea el bake, WYSIWYG). El commit recomputa el `dx` de cada tramo POR LÍNEA (medido
+  con la fuente real del estilo — `measureFontFor` exportado).
+- **Bake (core)**: el texto del edit se parte en líneas por `\n`; cada línea se emite a
+  `baseline − i×1.2×size` con su dx relativo a la línea, dentro del MISMO splice (mismos
+  paths B/C: re-encode con fuente original o estándar). Test de regresión del round-trip.
+- **Toggle de lista POR LÍNEA** (patrón markdown-editors): si todas las líneas con
+  contenido tienen marcador → se quita de todas; si no → se agrega a las que falte. La
+  viñeta sigue COLGANTE (el marcador de la 1.ª línea corre el ancla x del grafo).
+- Fuera `LiveSession.newLine`/`onAddText` del layer y el flujo Enter-crea-segmento.
+
 ### fix(editor): Enter = línea de abajo SIEMPRE — continuación LOCAL, sin round-trip ni rebind
 El Enter cerraba la edición: para texto suelto no había marcador (→ commit+close) y para
 listas dependía de un round-trip al server + rebind por geometría que fallaba. Rediseño

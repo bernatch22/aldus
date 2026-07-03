@@ -573,8 +573,23 @@ export async function bakeSegmentEdits(
         if (op && !fontForStyle.has(key)) fontForStyle.set(key, op.fontName);
       }
 
-      let substituted = 0;
+      // Un grafo PUEDE tener breaklines: el texto se parte en LÍNEAS por '\n'
+      // y cada una baja `leading` (1.2×size, tipográficamente estándar). El dx
+      // de cada tramo es RELATIVO a su línea (el editor lo computa así).
+      const lineRuns: StyledRun[][] = [[]];
       for (const sr of runsToEmit) {
+        const parts = sr.text.split('\n');
+        parts.forEach((p, i) => {
+          if (i > 0) lineRuns.push([]);
+          if (p) lineRuns[lineRuns.length - 1].push({ ...sr, text: p });
+        });
+      }
+      const leading = (edit.fontSize ?? edit.original.fontSize) * 1.2;
+
+      let substituted = 0;
+      for (let li = 0; li < lineRuns.length; li++) {
+        const lineBase = newBaseline - li * leading;
+        for (const sr of lineRuns[li]) {
         if (!sr.text) continue;
         const x = newX + sr.dx * ratio;
         const fontName = familyChanged ? undefined : fontForStyle.get(`${sr.bold}|${sr.italic}`);
@@ -585,7 +600,7 @@ export async function bakeSegmentEdits(
           colorRaw: sr.color ? hexToRg(sr.color) : styleOv.colorRaw,
         };
         const inlineBlock = fontName && bytes
-          ? newTextBlock(ops.find(o => o.fontName === fontName) ?? firstOp, ratio, x, newBaseline, bytes, runOv)
+          ? newTextBlock(ops.find(o => o.fontName === fontName) ?? firstOp, ratio, x, lineBase, bytes, runOv)
           : null;
         if (inlineBlock) {
           inlineBlocks.push(inlineBlock);
@@ -603,7 +618,7 @@ export async function bakeSegmentEdits(
               page: pageNum,
               text: sr.text,
               x,
-              y: newBaseline,
+              y: lineBase,
               size: edit.fontSize ?? edit.original.fontSize,
               bucket: edit.font ?? edit.original.bucket ?? 'sans',
               bold: sr.bold,
@@ -612,6 +627,7 @@ export async function bakeSegmentEdits(
             });
           }
           substituted++;
+        }
         }
       }
       splices.push({ start: firstOp.record.start, end: firstOp.record.end, text: inlineBlocks.join('\n') });

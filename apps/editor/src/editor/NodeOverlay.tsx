@@ -52,6 +52,7 @@ import {
   bucketFallback,
   dominantRun,
   family,
+  measureFontFor,
   measureWidth,
   round1,
   seedHtml,
@@ -354,7 +355,6 @@ interface EditSession {
   /** min-width extra (px CSS) — el área tipeable ampliada por el grip. */
   minWidthCss: number;
   onPatch: (patch: SegmentPatch) => void;
-  onAddText: (req: AddTextRequest) => void;
 }
 
 interface LiveSession extends EditSession {
@@ -373,10 +373,10 @@ interface LiveSession extends EditSession {
   /** Ancla x (pt) al abrir + corrimiento acumulado por viñeta colgante. */
   anchorX: number;
   xShiftPt: number;
-  /** LÍNEA NUEVA (Enter continuó abajo): no hay segmento real detrás — el
-   *  commit crea el texto vía `onAddText` en vez de `onPatch`. El editor sigue
-   *  ABIERTO y local, sin round-trip al server ni rebind. */
-  newLine?: { page: number; x: number; baseline: number; size: number; bucket: FontBucket };
+  /** Alto de línea (px CSS): 1 línea = el del segmento; multilínea = 1.2×size
+   *  (el MISMO leading que hornea el bake — WYSIWYG). */
+  lineH1: number;
+  lineHN: number;
 }
 
 // Los runs EN VIVO de la sesión abierta (para el estado activo de B/I en la
@@ -452,15 +452,25 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
     const s = sessionRef.current;
     const ta = taRef.current;
     if (!s || !ta) return;
-    const spaces = (ta.value.match(/ /g) ?? []).length;
-    const w = measureWidth(ta.value, s.fontCss) + spaces * s.ws + ta.value.length * s.ls;
-    const width = `${Math.max(s.minW, Math.ceil(w) + 8)}px`;
-    ta.style.width = width;
-    if (backdropRef.current) backdropRef.current.style.width = width;
-    // El HOST también: sus hijos son absolute (no lo dimensionan) y sin ancho
-    // su fondo blanco no cubre nada — se veía el canvas + backdrop + box
-    // superpuestos ("el grafo impreso muchas veces").
-    if (hostRef.current) hostRef.current.style.width = width;
+    // MULTILÍNEA: ancho = la línea más larga; alto = n líneas × line-height
+    // (1 línea usa el alto real del segmento; 2+ usan el leading del bake).
+    const lines = ta.value.split('\n');
+    let maxW = 0;
+    for (const line of lines) {
+      const spaces = (line.match(/ /g) ?? []).length;
+      maxW = Math.max(maxW, measureWidth(line, s.fontCss) + spaces * s.ws + line.length * s.ls);
+    }
+    const width = `${Math.max(s.minW, Math.ceil(maxW) + 8)}px`;
+    const lineH = lines.length > 1 ? s.lineHN : s.lineH1;
+    const height = `${Math.ceil(lines.length * lineH)}px`;
+    for (const el of [ta, backdropRef.current, hostRef.current]) {
+      if (!el) continue;
+      // El HOST también: sus hijos son absolute (sin esto su fondo blanco no
+      // cubre nada — "el grafo impreso muchas veces").
+      el.style.width = width;
+      el.style.height = height;
+      if (el !== hostRef.current) el.style.lineHeight = `${lineH}px`;
+    }
   }, []);
 
   // Un cambio de contenido o estilo: re-dibujar el backdrop + re-ajustar ancho.
@@ -471,13 +481,18 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
     const ta = taRef.current;
     if (!s || !ta) return;
     const text = ta.value.replace(/\s+$/, '');
-    // Línea nueva (Enter): se crea vía onAddText (sin segmento real detrás).
-    // Un ítem VACÍO (solo el marcador, o nada) no se crea.
-    if (s.newLine) {
-      if (text.trim() && !isBareListMarker(text)) s.onAddText({ ...s.newLine, text });
-      return;
-    }
-    const runs = applyTextDiff(s.runs, text);
+    let runs = applyTextDiff(s.runs, text);
+    // dx REAL de cada tramo, POR LÍNEA (el bake posiciona con newX + dx: tras
+    // un '\n' el acumulado arranca de cero). Medido con la fuente del estilo.
+    const ratio = (s.edit?.fontSize ?? s.seg.fontSize) / s.seg.fontSize;
+    let acc = 0;
+    runs = runs.map(r => {
+      const piece = { ...r, dx: round1(acc) };
+      const w = (t: string) => measureWidth(t, measureFontFor(s.seg, r, ratio));
+      const nl = r.text.lastIndexOf('\n');
+      acc = nl >= 0 ? w(r.text.slice(nl + 1)) : acc + w(r.text);
+      return piece;
+    });
     // Viñeta colgante aplicada EN VIVO: consolidar el corrimiento de x.
     const nx = round1(Math.max(4, s.anchorX + s.xShiftPt));
     s.onPatch({
@@ -512,6 +527,8 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
         ls: 0,
         anchorX: eff.x,
         xShiftPt: 0,
+        lineH1: rect.height,
+        lineHN: (s.edit?.fontSize ?? s.seg.fontSize) * 1.2 * s.scale,
       };
       // FIT de ancho: solo con el texto ORIGINAL intacto (con texto editado el
       // ancho efectivo ya no describe el contenido). El delta target−medido va
@@ -581,38 +598,24 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       if (!s) return;
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        // ENTER en una línea NUEVA vacía (solo marcador, o nada) = TERMINAR:
-        // como Word/Acrobat, cierra sin apilar ítems vacíos.
-        if (s.newLine && (isBareListMarker(ta.value) || ta.value.trim() === '')) {
-          close();
+        // ENTER = BREAKLINE dentro del MISMO grafo (el PDF soporta bloques
+        // multilínea; el bake emite cada línea con su leading). En una lista,
+        // el marcador continúa incrementado en la línea nueva. Enter en un
+        // ítem vacío (solo el marcador) = terminar la lista, como Word.
+        const pos = ta.selectionStart;
+        const lineStart = ta.value.lastIndexOf('\n', pos - 1) + 1;
+        const curLine = ta.value.slice(lineStart, pos);
+        if (isBareListMarker(curLine) && curLine.trim() !== '') {
+          // ítem vacío: quitar el marcador huérfano y cerrar (commit + close).
+          ta.setRangeText('', lineStart, pos, 'start');
+          syncRuns();
           ta.blur();
           return;
         }
-        // ENTER = línea de abajo, SIEMPRE (lista o texto suelto). El editor NO
-        // se cierra: commit de la línea actual y sigue editando una LÍNEA NUEVA
-        // local, sin round-trip (se crea con onAddText en su propio commit).
-        // Shift+Enter cae al default del textarea (por si se quiere un salto
-        // literal — que igual no persiste, pero no molesta).
-        const marker = nextListMarker(ta.value); // "•    " en lista, null si no
-        const size = s.newLine ? s.newLine.size : (s.edit?.fontSize ?? s.seg.fontSize);
-        const curBaseline = s.newLine ? s.newLine.baseline : effectiveGeometry(s.seg, s.edit).baseline;
-        const curX = s.newLine ? s.newLine.x : round1(Math.max(4, s.anchorX + s.xShiftPt));
-        const bucket = s.newLine ? s.newLine.bucket : dominantRun(s.seg).font.bucket;
-        commit();
-        const newBaseline = round1(curBaseline - size * 1.4);
-        const value = marker ? (/\s$/.test(marker) ? marker : `${marker}${LIST_GAP}`) : '';
-        s.newLine = { page: s.seg.page, x: curX, baseline: newBaseline, size, bucket };
-        s.runs = applyTextDiff([], value);
-        s.seedText = value;
-        s.seedRuns = s.runs;
-        s.xShiftPt = 0;
-        s.anchorX = curX;
-        ta.value = value;
-        const host = hostRef.current;
-        if (host) host.style.top = `${parseFloat(host.style.top) + size * 1.4 * s.scale}px`;
-        renderBackdrop();
-        fit();
-        ta.setSelectionRange(value.length, value.length);
+        const marker = nextListMarker(curLine);
+        const insert = `\n${marker ?? ''}`;
+        ta.setRangeText(insert, pos, ta.selectionEnd, 'end');
+        syncRuns();
         return;
       }
       if (e.key === 'Escape') {
@@ -650,25 +653,35 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
         s.runs = setStyleRange(s.runs, from, to, { color: detail.color });
         refresh();
       } else if (detail?.key === 'list') {
-        // Toggle de viñeta en vivo, COLGANTE: el contenido no se mueve — el
-        // host se corre el ancho del marcador y el corrimiento se consolida
-        // en x al commit (igual que el camino de modelo).
+        // Toggle de viñeta POR LÍNEA (patrón de los editores markdown): si
+        // TODAS las líneas con contenido ya tienen marcador → se quita de
+        // todas; si no → se agrega a las que falte. La viñeta es COLGANTE:
+        // el marcador de la 1.ª línea corre el ancla x del grafo (el
+        // contenido no se mueve; se consolida en x al commit).
         const host = hostRef.current;
-        const m = /^(\s*)(?:[•·▪‣*-]|\d{1,3}[.)]|[a-zA-Z][.)])(\s*)/.exec(ta.value);
         const before = ta.selectionStart;
-        if (m) {
-          const mw = measureWidth(m[0], s.fontCss) + (m[0].match(/ /g) ?? []).length * s.ws + m[0].length * s.ls;
-          ta.value = ta.value.slice(m[0].length);
-          ta.setSelectionRange(Math.max(0, before - m[0].length), Math.max(0, before - m[0].length));
-          s.xShiftPt += mw / s.scale;
-          if (host) host.style.left = `${parseFloat(host.style.left) + mw}px`;
-        } else {
-          const marker = `${String.fromCharCode(0x2022)}${LIST_GAP}`;
+        const marker = `${String.fromCharCode(0x2022)}${LIST_GAP}`;
+        const stripRe = /^(\s*)(?:[•·▪‣*-]|\d{1,3}[.)]|[a-zA-Z][.)])(\s*)/;
+        const lines = ta.value.split('\n');
+        const content = (l: string) => l.trim() !== '';
+        const removing = lines.filter(content).length > 0 && lines.filter(content).every(l => hasListMarker(l));
+        const firstHad = hasListMarker(lines[0] ?? '');
+        const out = lines.map(l => {
+          if (removing) return l.replace(stripRe, '');
+          return !content(l) || hasListMarker(l) ? l : marker + l;
+        });
+        ta.value = out.join('\n');
+        // caret: best-effort, corrido por el delta del marcador.
+        const delta = removing ? -marker.length : marker.length;
+        const pos = Math.max(0, Math.min(ta.value.length, before + delta));
+        ta.setSelectionRange(pos, pos);
+        // ancla colgante según la 1.ª línea.
+        const firstHas = hasListMarker(out[0] ?? '');
+        if (firstHad !== firstHas) {
           const mw = measureWidth(marker, s.fontCss) + (marker.match(/ /g) ?? []).length * s.ws + marker.length * s.ls;
-          ta.value = marker + ta.value;
-          ta.setSelectionRange(before + marker.length, before + marker.length);
-          s.xShiftPt -= mw / s.scale;
-          if (host) host.style.left = `${parseFloat(host.style.left) - mw}px`;
+          const dir = firstHas ? -1 : 1;
+          s.xShiftPt += (dir * mw) / s.scale;
+          if (host) host.style.left = `${parseFloat(host.style.left) + dir * mw}px`;
         }
         syncRuns();
       }
@@ -736,7 +749,6 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
         const merged = mergeSegmentEdit(seg, editsRef.current.get(seg.id) ?? null, patch);
         onEdit(merged ?? { segmentId: seg.id, revert: true });
       },
-      onAddText,
     });
   };
 

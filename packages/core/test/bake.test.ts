@@ -487,4 +487,21 @@ describe('bake', () => {
     const g2 = await graphOf(baked);
     expect(segByText(g2, 'Nombre:').x).toBeCloseTo(72, 0);
   });
+
+  it('un grafo con BREAKLINE (\\n): cada línea baja 1.2×size, misma x', async () => {
+    const pdf = await makePdf();
+    const g = await graphOf(pdf);
+    const seg = segByText(g, 'Juan Perez');
+    const edit = editFor(g, 'Juan Perez', { text: 'Juan Perez\nSegunda linea\nTercera' });
+    const { pdf: baked } = await bakeSegmentEdits(pdf, [edit]);
+    const g2 = await graphOf(baked);
+    const l1 = segByText(g2, 'Juan Perez');
+    const l2 = segByText(g2, 'Segunda linea');
+    const l3 = segByText(g2, 'Tercera');
+    expect(l1.baseline).toBeCloseTo(seg.baseline, 0);
+    expect(l2.baseline).toBeCloseTo(seg.baseline - seg.fontSize * 1.2, 0);
+    expect(l3.baseline).toBeCloseTo(seg.baseline - seg.fontSize * 2.4, 0);
+    expect(l2.x).toBeCloseTo(l1.x, 0);
+    expect(l3.x).toBeCloseTo(l1.x, 0);
+  });
 });

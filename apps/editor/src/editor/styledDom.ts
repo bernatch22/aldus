@@ -114,7 +114,7 @@ export function styledSpanStyle(seg: SegmentNode, sr: { bold: boolean; italic: b
 }
 
 /** Font shorthand para MEDIR un tramo (en pt: tamaño original × ratio). */
-function measureFontFor(seg: SegmentNode, sr: { bold: boolean; italic: boolean }, sizeRatio: number): string {
+export function measureFontFor(seg: SegmentNode, sr: { bold: boolean; italic: boolean }, sizeRatio: number): string {
   const { base, exact } = styleBase(seg, sr.bold, sr.italic);
   const fam = exact ? family(base) : bucketFallback(base.font.bucket);
   const st = sr.italic && (!exact || !base.font.embedded) ? 'italic ' : '';

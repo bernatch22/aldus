@@ -241,6 +241,10 @@ export interface SegmentEdit {
   hScale?: number;
   /** Color de relleno del texto, hex "#rrggbb". */
   color?: string;
+  /** Alineación del texto DENTRO del área (no mueve el nodo): el editor la usa
+   *  para el text-align y para calcular el dx de cada línea; el bake solo lee
+   *  el dx resultante. */
+  align?: 'left' | 'center' | 'right';
   /** Snapshot del nodo original para que el bake pueda localizarlo sin
    *  ambigüedad (y, si hay sustitución de fuente, imitar su estilo).
    *  `runs` trae el estilo ORIGINAL por tramo con su x — el bake lo usa para

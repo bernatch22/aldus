@@ -123,6 +123,35 @@ export function measureFontFor(seg: SegmentNode, sr: { bold: boolean; italic: bo
   return `${st}${wt}${(base.fontSize * sizeRatio).toFixed(2)}px ${fam}`;
 }
 
+/** Recalcula el `dx` (y `w`) de cada tramo POR LÍNEA, con la alineación DENTRO
+ *  de un frame de ancho `frameWpt` (pt) — no mueve el nodo, corre el texto:
+ *  left = 0, center = (frame−ancho)/2, right = frame−ancho. El bake usa el dx
+ *  resultante (no sabe de "align"). Preserva los '\n'. */
+export function applyAlign(
+  runs: StyledRun[], seg: SegmentNode, sizeRatio: number,
+  frameWpt: number, align: 'left' | 'center' | 'right',
+): StyledRun[] {
+  const w = (r: StyledRun, t: string) => measureWidth(t, measureFontFor(seg, r, sizeRatio));
+  const lines: StyledRun[][] = [[]];
+  for (const r of runs) {
+    const parts = r.text.split('\n');
+    parts.forEach((p, i) => { if (i > 0) lines.push([]); lines[lines.length - 1].push({ ...r, text: p }); });
+  }
+  const out: StyledRun[] = [];
+  lines.forEach((line, li) => {
+    if (li > 0) { const prev = out[out.length - 1]; if (prev) prev.text += '\n'; else out.push({ text: '\n', bold: false, italic: false, dx: 0 }); }
+    const lw = line.reduce((a, r) => a + w(r, r.text), 0);
+    const off = align === 'center' ? Math.max(0, (frameWpt - lw) / 2) : align === 'right' ? Math.max(0, frameWpt - lw) : 0;
+    let acc = off;
+    for (const r of line) {
+      const own = w(r, r.text);
+      out.push({ ...r, dx: round1(acc), w: round1(own) });
+      acc += own;
+    }
+  });
+  return out.length ? out : runs;
+}
+
 export function runStyle(r: TextRunNode, scale: number, letterSpacing = 0, ratio = 1): string {
   const weight = !r.font.embedded && r.font.bold ? 'font-weight:bold;' : '';
   const style = !r.font.embedded && r.font.italic ? 'font-style:italic;' : '';

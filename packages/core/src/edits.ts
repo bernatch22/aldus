@@ -27,9 +27,10 @@ export interface SegmentPatch {
   charSpacing?: number | null;
   hScale?: number | null;
   color?: string | null;
+  align?: 'left' | 'center' | 'right' | null;
 }
 
-const OVERRIDE_KEYS = ['fontSize', 'font', 'x', 'baseline', 'remove', 'charSpacing', 'hScale', 'color'] as const;
+const OVERRIDE_KEYS = ['fontSize', 'font', 'x', 'baseline', 'remove', 'charSpacing', 'hScale', 'color', 'align'] as const;
 
 /** El contenido del segmento SIN editar, como runs estilados (tramos por
  *  estilo, con los espacios de palabra inferidos y su dx real). */

@@ -49,6 +49,7 @@ import {
 import { AlignLeft, AlignCenter, AlignRight, Bold, Italic, Underline, Highlighter, Link2, List, Trash2, SendToBack, BringToFront } from 'lucide-react';
 import {
   activeEditingBox,
+  applyAlign,
   bucketFallback,
   dominantRun,
   family,
@@ -179,11 +180,13 @@ const clampY = (y: number, h: number, pageH: number) => Math.min(Math.max(y, MIN
 
 /** Toolbar flotante arriba del segmento seleccionado: alineación (relativa a
  *  la página), B/I, resaltar (+color), link, eliminar. */
-function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLink, highlightColor, onHighlightColor }: {
+function FloatingBar({ seg, edit, rect, pageWidth, frameWpt, onPatch, onDocOp, onRequestLink, highlightColor, onHighlightColor }: {
   seg: SegmentNode;
   edit: SegmentEdit | null;
   rect: { left: number; top: number };
   pageWidth: number;
+  /** Ancho del ÁREA (pt) — el frame dentro del cual se alinea el texto. */
+  frameWpt: number;
   onPatch: (patch: SegmentPatch) => void;
   onDocOp: (action: string, params: Record<string, unknown>) => void;
   onRequestLink: (target: { page: number; x: number; y: number; width: number; height: number }) => void;
@@ -227,8 +230,19 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
     onPatch({ runs: styled.map(r => ({ ...r, [key]: next })) });
   };
   const eff = effectiveGeometry(seg, edit);
-  const MARGIN = 40;
-  const alignTo = (x: number) => onPatch({ x: Math.abs(x - seg.x) < 0.05 ? null : round1(x) });
+  // Alinear el TEXTO dentro del área (no mover el nodo): con el editor abierto
+  // va por evento al layer (display en vivo); si no, se recalcula el dx de cada
+  // línea acá con applyAlign (frame = ancho del área).
+  const curAlign: 'left' | 'center' | 'right' = edit?.align ?? 'left';
+  const setAlign = (a: 'left' | 'center' | 'right') => {
+    if (activeEditingBox()) {
+      window.dispatchEvent(new CustomEvent(SELECTION_STYLE_EVENT, { detail: { key: 'align', align: a } }));
+      return;
+    }
+    const base = edit?.runs ?? originalStyledRuns(seg);
+    const aligned = applyAlign(base, seg, 1, frameWpt, a);
+    onPatch({ align: a === 'left' ? null : a, runs: a === 'left' && !edit?.runs ? undefined : aligned });
+  };
   // El highlight lleva el segmentId: si después movés el texto, el resaltado
   // LO SIGUE (se resuelve contra la geometría efectiva al previsualizar/aplicar).
   const bbox = { page: seg.page, segmentId: seg.id, x: eff.x, y: eff.y, width: eff.width, height: eff.height };
@@ -315,9 +329,9 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
         <input type="color" value={textColor} onChange={e => applyColor(e.target.value)} />
       </button>
       <FbSep />
-      <FbBtn label="Alinear a la izquierda" onClick={() => alignTo(MARGIN)}><AlignLeft size={14} /></FbBtn>
-      <FbBtn label="Centrar en la página" onClick={() => alignTo((pageWidth - eff.width) / 2)}><AlignCenter size={14} /></FbBtn>
-      <FbBtn label="Alinear a la derecha" onClick={() => alignTo(pageWidth - MARGIN - eff.width)}><AlignRight size={14} /></FbBtn>
+      <FbBtn label="Texto a la izquierda del área" active={curAlign === 'left'} onClick={() => setAlign('left')}><AlignLeft size={14} /></FbBtn>
+      <FbBtn label="Centrar el texto en el área (ensanchá con el grip)" active={curAlign === 'center'} onClick={() => setAlign('center')}><AlignCenter size={14} /></FbBtn>
+      <FbBtn label="Texto a la derecha del área" active={curAlign === 'right'} onClick={() => setAlign('right')}><AlignRight size={14} /></FbBtn>
       <FbSep />
       <FbBtn label="Resaltar (acumula, se escribe con Aplicar)" onClick={() => onDocOp('highlight', { ...bbox, color: highlightColor })}><Highlighter size={14} /></FbBtn>
       <button className="fb-swatch" title="Color del resaltador" style={{ background: highlightColor }} onMouseDown={e => e.preventDefault()} onClick={e => e.stopPropagation()}>
@@ -335,22 +349,24 @@ function ObjectBar({ rect, pageWidth, width, onAlign, onZ, onDelete }: {
   rect: { left: number; top: number };
   pageWidth: number;
   width: number;
-  onAlign: (x: number) => void;
+  onAlign?: (x: number) => void;
   onZ?: (o: 'front' | 'back') => void;
   onDelete: () => void;
 }) {
   const MARGIN = 40;
   return (
     <FloatingWrap rect={rect}>
-      <FbBtn label="Alinear a la izquierda" onClick={() => onAlign(MARGIN)}><AlignLeft size={14} /></FbBtn>
-      <FbBtn label="Centrar en la página" onClick={() => onAlign((pageWidth - width) / 2)}><AlignCenter size={14} /></FbBtn>
-      <FbBtn label="Alinear a la derecha" onClick={() => onAlign(pageWidth - MARGIN - width)}><AlignRight size={14} /></FbBtn>
+      {onAlign && <>
+        <FbBtn label="Alinear a la izquierda de la página" onClick={() => onAlign(MARGIN)}><AlignLeft size={14} /></FbBtn>
+        <FbBtn label="Centrar en la página" onClick={() => onAlign((pageWidth - width) / 2)}><AlignCenter size={14} /></FbBtn>
+        <FbBtn label="Alinear a la derecha de la página" onClick={() => onAlign(pageWidth - MARGIN - width)}><AlignRight size={14} /></FbBtn>
+        {onZ && <FbSep />}
+      </>}
       {onZ && <>
-        <FbSep />
         <FbBtn label="Enviar al fondo" onClick={() => onZ('back')}><SendToBack size={14} /></FbBtn>
         <FbBtn label="Traer al frente" onClick={() => onZ('front')}><BringToFront size={14} /></FbBtn>
       </>}
-      <FbSep />
+      {(onAlign || onZ) && <FbSep />}
       <FbBtn label="Eliminar" onClick={onDelete} danger><Trash2 size={14} /></FbBtn>
     </FloatingWrap>
   );
@@ -395,6 +411,8 @@ interface LiveSession extends EditSession {
    *  (el MISMO leading que hornea el bake — WYSIWYG). */
   lineH1: number;
   lineHN: number;
+  /** Alineación del texto dentro del área (display CSS + dx del bake). */
+  align: 'left' | 'center' | 'right';
 }
 
 // Los runs EN VIVO de la sesión abierta (para el estado activo de B/I en la
@@ -514,25 +532,17 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
     const ta = taRef.current;
     if (!s || !ta) return;
     const text = ta.value.replace(/\s+$/, '');
-    let runs = applyTextDiff(s.runs, text);
-    // dx/w REALES de cada tramo, POR LÍNEA (el bake posiciona con newX + dx y
-    // tras un '\n' el acumulado arranca de cero). Medidos al tamaño ORIGINAL
-    // (ratio 1): el bake ya multiplica por el ratio del resize — medir escalado
-    // duplicaba la escala y el guardado no coincidía con el UI.
-    let acc = 0;
-    runs = runs.map(r => {
-      const w = (t: string) => measureWidth(t, measureFontFor(s.seg, r, 1));
-      const nl = r.text.lastIndexOf('\n');
-      const own = nl >= 0 ? w(r.text.slice(nl + 1)) : w(r.text);
-      const piece = { ...r, dx: round1(acc), w: round1(own) };
-      acc = nl >= 0 ? own : acc + own;
-      return piece;
-    });
+    // dx/w REALES por LÍNEA + alineación dentro del área (frame = minW). Medido
+    // al tamaño ORIGINAL (ratio 1): el bake ya multiplica por el ratio del
+    // resize. applyAlign posiciona cada línea (left = natural, center/right =
+    // corrida dentro del frame) → el bake solo lee el dx.
+    const runs = applyAlign(applyTextDiff(s.runs, text), s.seg, 1, s.minW / s.scale, s.align);
     // Viñeta colgante aplicada EN VIVO: consolidar el corrimiento de x.
     const nx = round1(Math.max(4, s.anchorX + s.xShiftPt));
     s.onPatch({
       text,
       runs: styledRunsEqual(runs, originalStyledRuns(s.seg)) ? null : runs,
+      align: s.align === 'left' ? null : s.align,
       ...(s.xShiftPt !== 0 ? { x: nx === round1(s.seg.x) ? null : nx } : {}),
     });
   }, []);
@@ -564,6 +574,7 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
         xShiftPt: 0,
         lineH1: rect.height,
         lineHN: (s.edit?.fontSize ?? s.seg.fontSize) * 1.2 * s.scale,
+        align: s.edit?.align ?? 'left',
       };
       // FIT de ancho: solo con el texto ORIGINAL intacto (con texto editado el
       // ancho efectivo ya no describe el contenido). El delta target−medido va
@@ -595,6 +606,7 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
         el.style.lineHeight = `${rect.height}px`;
         el.style.wordSpacing = live.ws ? `${live.ws.toFixed(2)}px` : '';
         el.style.letterSpacing = live.ls ? `${live.ls.toFixed(3)}px` : '';
+        el.style.textAlign = live.align; // alineación del texto dentro del área
       }
       // El texto del textarea es TRANSPARENTE (lo pinta el backdrop); solo el
       // caret queda visible, con el color real del segmento.
@@ -693,7 +705,13 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
     const onStyle = (ev: Event) => {
       const s = sessionRef.current;
       if (!s) return;
-      const detail = (ev as CustomEvent<{ key?: 'bold' | 'italic' | 'underline' | 'color' | 'list'; color?: string }>).detail;
+      const detail = (ev as CustomEvent<{ key?: 'bold' | 'italic' | 'underline' | 'color' | 'list' | 'align'; color?: string; align?: 'left' | 'center' | 'right' }>).detail;
+      if (detail?.key === 'align' && detail.align) {
+        // Alinear en vivo: solo el text-align (CSS); el dx se calcula al commit.
+        s.align = detail.align;
+        for (const el of [ta, backdropRef.current]) if (el) el.style.textAlign = detail.align;
+        return;
+      }
       const selectionStart = ta.selectionStart;
       const selectionEnd = ta.selectionEnd;
       // Caret colapsado: aplicar a la PALABRA bajo el caret (consistente con
@@ -1126,7 +1144,6 @@ function WidgetBox({ widget, pageWidth, pageHeight, scale, selected, edit, isLoc
       {selected && !isLocked && !groupMode && (
         <ObjectBar
           rect={rect} pageWidth={pageWidth} width={eff.width}
-          onAlign={x => onPatch({ x: round1(clampX(x, eff.width, pageWidth)) })}
           onDelete={() => onPatch({ remove: true })}
         />
       )}
@@ -1426,7 +1443,7 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
   return (
     <>
       {selected && !isLocked && !groupMode && (
-        <FloatingBar seg={seg} edit={edit} rect={rect} pageWidth={pageWidth} onPatch={onPatch} onDocOp={onDocOp} onRequestLink={onRequestLink} highlightColor={highlightColor} onHighlightColor={onHighlightColor} />
+        <FloatingBar seg={seg} edit={edit} rect={rect} pageWidth={pageWidth} frameWpt={areaWpx / scale} onPatch={onPatch} onDocOp={onDocOp} onRequestLink={onRequestLink} highlightColor={highlightColor} onHighlightColor={onHighlightColor} />
       )}
       <div
         className={`seg-box${selected ? ' selected' : ''}${masked ? ' masked' : ''}${edit ? ' edited' : ''}${editing ? ' editing' : ''}${isLocked ? ' locked' : ''}`}
@@ -1434,8 +1451,10 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
           left: rect.left,
           top: rect.top,
           // El ÁREA tipeable: el grip la amplía más allá del contenido (ancho
-          // y alto — espacio para escribir sin que "salte").
+          // y alto — espacio para escribir sin que "salte"). Alineado = ancho
+          // DEFINIDO (el frame del text-align).
           minWidth: gripSize?.w ?? areaWpx,
+          ...(edit?.align ? { width: gripSize?.w ?? areaWpx } : {}),
           height: boxHeight,
           lineHeight: `${boxLineH}px`,
           transform: drag ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
@@ -1500,7 +1519,7 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
         {masked && (
           <div
             className="seg-text"
-            style={containerStyle(seg, edit, scale)}
+            style={{ ...containerStyle(seg, edit, scale), ...(edit?.align ? { width: '100%', textAlign: edit.align } : {}) }}
             dangerouslySetInnerHTML={{ __html: html }}
           />
         )}

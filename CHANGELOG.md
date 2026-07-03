@@ -4,6 +4,18 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### feat(editor+core): alinear el TEXTO dentro del área (no el nodo) + inputs con barra de solo "eliminar"
+- **Alineación de texto**: los 3 botones de alineación del texto ya NO mueven el nodo a
+  los márgenes de la PÁGINA — alinean el texto DENTRO del área del grafo (left/center/
+  right), como pidió el usuario, útil cuando el área es más ancha que el texto (grip).
+  `SegmentEdit.align` (modelo, metadata) + `applyAlign` (styledDom): recalcula el `dx` de
+  cada línea dentro del frame (= ancho del área) — left = natural, center = (frame−ancho)/2,
+  right = frame−ancho. El bake solo lee el `dx` (no sabe de "align"). Display: text-align
+  CSS en el textarea/backdrop y en el fantasma (ancho = área). Estado activo en la barra.
+- **Barra de los inputs/campos**: fuera los 3 botones de alineación (no tenían sentido en
+  un widget) — queda solo "eliminar". `ObjectBar.onAlign` ahora es opcional (las imágenes
+  conservan alinear-en-la-página + orden Z).
+
 ### feat(editor): grip 2D del texto + insert con área generosa + SELECCIÓN MÚLTIPLE (marquee + grupo movible)
 - **Grip 2D**: el handle del área de texto ahora estira ANCHO y ALTO (antes solo ancho).
   `areaWidths` pasa a `{w?,h?}` por segmento (persistido). Volver al tamaño natural en

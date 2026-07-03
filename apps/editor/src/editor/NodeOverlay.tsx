@@ -397,6 +397,19 @@ function styleAtRange(runs: StyledRun[], start: number, end: number): { bold: bo
   return any ? { bold, italic } : null;
 }
 
+/** Renumera los bloques NUMERADOS contiguos ("1. 3. 3." → "1. 2. 3."): acá el
+ *  número se HORNEA al PDF (no hay motor markdown que lo normalice). El primer
+ *  ítem de cada bloque conserva su número inicial; el resto incrementa. */
+function renumberLines(text: string): string {
+  let n: number | null = null;
+  return text.split('\n').map(l => {
+    const m = /^(\s*)(\d{1,3})([.)])(\s+)/.exec(l);
+    if (!m) { n = null; return l; }
+    n = n == null ? parseInt(m[2], 10) : n + 1;
+    return `${m[1]}${n}${m[3]}${m[4]}${l.slice(m[0].length)}`;
+  }).join('\n');
+}
+
 /** Rango de la PALABRA bajo el caret (colapsado); sin palabra → todo. */
 function wordRangeAt(text: string, pos: number): [number, number] {
   const isW = (c: string | undefined) => !!c && /\S/.test(c);
@@ -615,6 +628,13 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
         const marker = nextListMarker(curLine);
         const insert = `\n${marker ?? ''}`;
         ta.setRangeText(insert, pos, ta.selectionEnd, 'end');
+        // Lista numerada: renumerar el bloque (los ítems de abajo del insert
+        // quedarían duplicados — el número acá se hornea, no es markdown).
+        if (marker && /\d/.test(marker)) {
+          const caret = ta.selectionStart;
+          ta.value = renumberLines(ta.value);
+          ta.setSelectionRange(caret, caret);
+        }
         syncRuns();
         return;
       }

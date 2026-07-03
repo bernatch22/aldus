@@ -4,6 +4,18 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### fix(editor): el guardado es IDÉNTICO a lo que muestra el editor
+Dos deltas UI↔save eliminados:
+1. **El estiramiento del fit (ws/ls) caía en el save**: el fit de apertura imita los
+   gaps del PDF del texto ORIGINAL (que el save preserva verbatim, path A) — pero con
+   texto MODIFICADO el bake escribe métrica natural, y el editor seguía mostrando la
+   versión estirada mientras tipeabas. Ahora, apenas el texto cambia respecto del seed,
+   el estiramiento se quita (textarea + backdrop pasan a métrica natural) — lo que ves
+   tipeando ES lo que se hornea.
+2. **Doble escala de dx/w con resize**: el commit medía los tramos al tamaño escalado y
+   el bake multiplica por el ratio otra vez — con `fontSize` override los tramos caían
+   corridos. Ahora se miden al tamaño ORIGINAL (ratio 1), como espera el bake.
+
 ### fix(editor): la caja de un grafo MULTILÍNEA cubre TODAS las líneas (no solo la primera)
 Con breaklines, el `.seg-box` (click + selección + mask) medía una sola línea de alto, así
 que solo se podía seleccionar/tapar la primera. Ahora el alto = n_líneas × leading

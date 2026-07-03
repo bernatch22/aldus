@@ -512,12 +512,13 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
     if (!s || !ta) return;
     const text = ta.value.replace(/\s+$/, '');
     let runs = applyTextDiff(s.runs, text);
-    // dx REAL de cada tramo, POR LÍNEA (el bake posiciona con newX + dx: tras
-    // un '\n' el acumulado arranca de cero). Medido con la fuente del estilo.
-    const ratio = (s.edit?.fontSize ?? s.seg.fontSize) / s.seg.fontSize;
+    // dx/w REALES de cada tramo, POR LÍNEA (el bake posiciona con newX + dx y
+    // tras un '\n' el acumulado arranca de cero). Medidos al tamaño ORIGINAL
+    // (ratio 1): el bake ya multiplica por el ratio del resize — medir escalado
+    // duplicaba la escala y el guardado no coincidía con el UI.
     let acc = 0;
     runs = runs.map(r => {
-      const w = (t: string) => measureWidth(t, measureFontFor(s.seg, r, ratio));
+      const w = (t: string) => measureWidth(t, measureFontFor(s.seg, r, 1));
       const nl = r.text.lastIndexOf('\n');
       const own = nl >= 0 ? w(r.text.slice(nl + 1)) : w(r.text);
       const piece = { ...r, dx: round1(acc), w: round1(own) };
@@ -614,6 +615,19 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
     const syncRuns = () => {
       const s = sessionRef.current;
       if (!s) return;
+      // El texto CAMBIÓ: fuera el estiramiento del fit (ws/ls). Ese fit imita
+      // los gaps del PDF del texto ORIGINAL (que el save preserva verbatim);
+      // con texto modificado el bake escribe métrica NATURAL — y lo que ves
+      // tipeando tiene que ser EXACTAMENTE lo que se guarda.
+      if ((s.ws !== 0 || s.ls !== 0) && ta.value !== s.seedText) {
+        s.ws = 0;
+        s.ls = 0;
+        for (const el of [ta, backdropRef.current]) {
+          if (!el) continue;
+          el.style.wordSpacing = '';
+          el.style.letterSpacing = '';
+        }
+      }
       s.runs = applyTextDiff(s.runs, ta.value);
       refresh();
     };

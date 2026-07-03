@@ -92,19 +92,11 @@ export function extractImagePixels(page: { objs: PdfObjs }, images: ImageNode[])
     }
     let url: string | null = null;
     try {
-      const has = img.objId ? page.objs.has(img.objId) : false;
-      if (img.objId && has) {
-        const raw = page.objs.get(img.objId) as PdfImageData;
-        url = imageToDataUrl(raw);
-        console.log('[aldus:px]', img.id, 'objId=', img.objId, 'has=', has,
-          'kind=', raw?.kind, 'bitmap=', !!raw?.bitmap, 'data=', raw?.data?.length,
-          'wh=', raw?.width, 'x', raw?.height, 'url=', url ? `${url.slice(0, 30)}…(${url.length})` : null);
-      } else {
-        console.log('[aldus:px]', img.id, 'objId=', img.objId, 'has=', has, '→ sin pixels (fallback snapshot)');
+      if (img.objId && page.objs.has(img.objId)) {
+        url = imageToDataUrl(page.objs.get(img.objId) as PdfImageData);
       }
-    } catch (e) {
+    } catch {
       url = null; // objeto no resuelto / forma inesperada — cae al snapshot
-      console.log('[aldus:px]', img.id, 'objId=', img.objId, 'THREW', e instanceof Error ? e.message : e);
     }
     cache.set(img.id, url);
     if (url) out.set(img.id, url);

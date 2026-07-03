@@ -1311,14 +1311,6 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
         : undefined;
   // El velo blanco del original ya NO se usa: el LIFT (re-bake sin la imagen)
   // muestra lo que hay detrás mientras se arrastra — sin rectángulo blanco.
-  if (ghost || selected) {
-    console.log('[aldus:img]', img.id, 'drag=', drag != null, 'mp=', movePending, 'ghost=', ghost,
-      'mode=', ghostPixels ? (cleanPixels ? 'clean' : 'snapshotCrop') : 'none',
-      'imgXY=', Math.round(img.x), Math.round(img.y),
-      'editXY=', edit?.x != null ? Math.round(edit.x) : '-', edit?.y != null ? Math.round(edit.y) : '-',
-      'effXY=', Math.round(eff.x), Math.round(eff.y),
-      'rect=', Math.round(rect.left), Math.round(rect.top));
-  }
   return (
     <>
       {selected && !isLocked && !groupMode && (

@@ -2,6 +2,19 @@
 
 El más reciente arriba; fecha `YYYY-MM-DD`.
 
+## 2026-07-04
+
+### fix(editor): imagen movida no desaparece al GUARDAR (front-on-save)
+Contraparte del fix in-place: el editor mantiene la imagen movida visible con un sticker al
+frente (overlay), pero el bake la reubica EN SU LUGAR (para no romper la identidad durante la
+edición en vivo), así que en el PDF **guardado** podía quedar tapada por contenido posterior
+→ "la muevo, guardo y desaparece". Al guardar (`bake()` en `EditorPage`), a cada imagen
+movida/escalada sin `zOrder` explícito se le setea `zOrder:'front'` antes de mandarla al
+server → el bake la reubica Y la sube al frente en el PDF final, coincidiendo con lo que
+muestra el editor. Seguro porque el save es definitivo (no hay re-extracción después, así que
+no rompe identidad). El preview del editor sigue in-place. Se limpiaron los logs de debug de
+la saga de imágenes. Archivo: `pages/EditorPage.tsx`.
+
 ## 2026-07-03
 
 ### fix(editor): mover imagen BIEN — píxeles reales + lift + sticker in-place

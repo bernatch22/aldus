@@ -102,8 +102,7 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
   // el original visible bajo el movido hasta el re-bake.
   const liftHoldRef = useRef(false);
 
-  const blit = (src: HTMLCanvasElement, tag = '?') => {
-    console.log('[aldus:blit]', tag, src.width, 'x', src.height);
+  const blit = (src: HTMLCanvasElement) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     if (canvas.width !== src.width || canvas.height !== src.height) {
@@ -126,7 +125,7 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
       const w = Math.floor(back.width / dpr);
       const h = Math.floor(back.height / dpr);
       mainBackRef.current = back;
-      blit(back, 'PREVIEW');
+      blit(back);
       liftShownRef.current = false; // el preview manda: el lift quedó atrás
       liftHoldRef.current = false;  // el re-bake aterrizó: se suelta el lift
       setSize({ w, h });
@@ -164,7 +163,7 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
     if (!lift) {
       // Lift cancelado (drop no-op): si estaba en pantalla, restaurar el preview.
       if (liftShownRef.current && mainBackRef.current) {
-        blit(mainBackRef.current, 'LIFT-RESTORE(preview)');
+        blit(mainBackRef.current);
         liftShownRef.current = false;
       }
       liftBackRef.current = null;
@@ -181,11 +180,8 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
       // El drag ya arrancó (o el drop está pendiente): blitear ya mismo para
       // tapar el original hasta que el re-bake aterrice.
       if (draggingRef.current === lift.segId || liftHoldRef.current) {
-        console.log('[aldus:lift] BLIT lift', lift.segId, '(dragging=', draggingRef.current, 'hold=', liftHoldRef.current, ')');
-        blit(back, 'LIFT(sin-imagen)');
+        blit(back);
         liftShownRef.current = true;
-      } else {
-        console.log('[aldus:lift] lift', lift.segId, 'listo pero NO se blitea (no dragging, no hold)');
       }
     })().catch(() => { /* doc del lift destruido a mitad de render — irrelevante */ });
     return () => {
@@ -201,7 +197,7 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
     liftHoldRef.current = true;
     const lb = liftBackRef.current;
     if (lb && lb.segId === draggingId && !liftShownRef.current) {
-      blit(lb.canvas, 'LIFT-DRAGSTART(sin-imagen)');
+      blit(lb.canvas);
       liftShownRef.current = true;
     }
   }, [draggingId]);

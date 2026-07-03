@@ -338,10 +338,6 @@ export function EditorPage() {
       if (rm) imgEditList = [...imgEditList.filter(e => e.imageId !== extraImageRemoval.id), rm];
     }
     const r = await bakeSegmentEdits(baseBytes.slice(), textRemovals, imgEditList, [...widgetEdits.values()]);
-    if (imgEditList.length) console.log('[aldus:bake]', extraImageRemoval ? 'LIFT' : 'PREVIEW',
-      'imgEdits=', imgEditList.map(e => `${e.imageId}${e.remove ? ':rm' : `→x${e.x != null ? Math.round(e.x) : '-'},y${e.y != null ? Math.round(e.y) : '-'}`}`).join(' '),
-      '| applied=', r.applied.filter(a => a.includes('img')).join(' | ') || '∅',
-      '| warnings=', r.warnings.filter(w => w.includes('img')).join(' | ') || '∅');
     // Color EXACTO del content stream → sobreescribe el muestreado en el cache
     // de fantasmas (el fantasma se ve idéntico al original, sin aproximación).
     for (const [segId, hex] of Object.entries(r.colors)) {
@@ -409,9 +405,8 @@ export function EditorPage() {
       if (cancelled) return;
       const doc = await getDocument({ data: bytes.slice(), fontExtraProperties: true }).promise;
       if (cancelled) { void doc.destroy(); return; }
-      console.log('[aldus:lift]', seg ? 'texto' : 'IMAGEN', liftId, 'listo (página sin el nodo)');
       setLift(prev => { void prev?.doc.destroy(); return { segId: liftId, doc }; });
-    })().catch(e => { console.log('[aldus:lift] FALLÓ', liftId, e instanceof Error ? e.message : e); });
+    })().catch(() => { /* sin lift: el drag cae al camino lento (blit al aterrizar) */ });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, baseBytes, bakePending, edits, imageEdits, pendingHighlights, editingActive]);
@@ -434,7 +429,6 @@ export function EditorPage() {
       setDraggingId(segId);
       return;
     }
-    console.log('[aldus:drag]', segId, active ? 'START' : (committed ? 'DROP(commit)' : 'DROP(noop)'));
     setDraggingId(null);
     if (committed) dropPendingRef.current = true;
     else setLift(prev => (prev?.segId === segId ? (void prev.doc.destroy(), null) : prev));
@@ -561,7 +555,17 @@ export function EditorPage() {
     setBaking(true);
     setError('');
     try {
-      const r = await api.bake(id, [...edits.values()], [...imageEdits.values()], [...widgetEdits.values()], resolveHighlights() as unknown as Array<Record<string, unknown>>);
+      // AL GUARDAR, subir al frente las imágenes MOVIDAS/ESCALADAS (salvo que ya
+      // tengan un zOrder explícito): el bake las reubica EN SU LUGAR (para no
+      // romper la identidad durante la edición en vivo), lo que puede dejarlas
+      // tapadas por contenido posterior → "desaparecen al guardar". El editor ya
+      // las muestra al frente (sticker); el PDF final debe coincidir. El save es
+      // definitivo (no hay re-extracción después) → reordenar acá es seguro.
+      const imgEditsForSave = [...imageEdits.values()].map(e =>
+        !e.remove && !e.zOrder && (e.x != null || e.y != null || e.width != null || e.height != null)
+          ? { ...e, zOrder: 'front' as const }
+          : e);
+      const r = await api.bake(id, [...edits.values()], imgEditsForSave, [...widgetEdits.values()], resolveHighlights() as unknown as Array<Record<string, unknown>>);
       setEdits(new Map());
       setImageEdits(new Map());
       setWidgetEdits(new Map());

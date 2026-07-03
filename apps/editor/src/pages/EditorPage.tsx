@@ -340,23 +340,27 @@ export function EditorPage() {
   //    Aplicar. El texto sigue como overlay editable aparte. ──
   // (El freeze por edición ya no existe: el TextEditLayer es un singleton
   // imperativo inmune al churn de grafos — el preview puede fluir debajo.)
+  const pending = edits.size || imageEdits.size || widgetEdits.size || pendingHighlights.length;
   useEffect(() => {
     if (!baseBytes) return;
     let cancelled = false;
-    (async () => {
-      const pending = edits.size || imageEdits.size || widgetEdits.size || pendingHighlights.length;
+    // DEBOUNCE: el re-bake local (pdf-lib + pdf.js) es CARO. Sin edición se
+    // corre ya (carga inicial); con ediciones se agrupa (150ms) para que un
+    // arrastre/tipeo rápido no dispare N bakes encolados = lag. El overlay
+    // (fantasmas + lift) ya da feedback INSTANTÁNEO; el bake solo refina.
+    const run = async () => {
       const bytes = pending ? await bakePending() : baseBytes;
       if (cancelled) return;
       // pdf.js TRANSFIERE el buffer al worker → siempre una copia.
       // fontExtraProperties: el fontRegistry necesita font.data para
       // re-registrar las embebidas bajo nombres estables.
-      const task = getDocument({ data: bytes.slice(), fontExtraProperties: true });
-      const doc = await task.promise;
+      const doc = await getDocument({ data: bytes.slice(), fontExtraProperties: true }).promise;
       if (cancelled) { void doc.destroy(); return; }
       setPdf(prev => { void prev?.destroy(); return doc; });
-    })().catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'No se pudo generar el preview'); });
-    return () => { cancelled = true; };
-  }, [baseBytes, bakePending, edits, imageEdits, widgetEdits, pendingHighlights]);
+    };
+    const t = pending ? setTimeout(() => { run().catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'No se pudo generar el preview'); }); }, 150) : (run().catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'No se pudo generar el preview'); }), null);
+    return () => { cancelled = true; if (t) clearTimeout(t); };
+  }, [baseBytes, bakePending, pending, edits, imageEdits, widgetEdits, pendingHighlights]);
 
   // ── PREPARAR EL LIFT al seleccionar un texto (todavía presente en el canvas):
   //    hornear la página sin él AHORA, en el tiempo muerto entre el click y el
@@ -661,6 +665,7 @@ export function EditorPage() {
                 lift={lift} draggingId={draggingId}
                 areaWidths={areaWidths} onAreaWidth={onAreaWidth}
                 onEditingChange={setEditingActive}
+                sampleColors={!pending}
               />
             </div>
           ) : (

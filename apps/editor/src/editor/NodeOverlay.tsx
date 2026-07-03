@@ -1450,6 +1450,12 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
 
   return (
     <>
+      {/* Mientras se ARRASTRA: máscara opaca en la posición ORIGINAL (el box se
+          va con el transform). Instantánea — no espera al lift/re-bake, así que
+          nunca se ve el original "duplicado" bajo el que arrastrás. */}
+      {drag && (
+        <div style={{ position: 'absolute', left: rect.left, top: rect.top, width: areaWpx, height: boxHeight, background: '#fff', pointerEvents: 'none' }} />
+      )}
       {selected && !isLocked && !groupMode && (
         <FloatingBar seg={seg} edit={edit} rect={rect} pageWidth={pageWidth} frameWpt={areaWpx / scale} onPatch={onPatch} onDocOp={onDocOp} onRequestLink={onRequestLink} highlightColor={highlightColor} onHighlightColor={onHighlightColor} />
       )}

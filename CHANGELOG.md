@@ -4,6 +4,20 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### perf(editor): preview mucho más fluido — sin re-muestreo de color, debounce, willReadFrequently + máscara de drag
+El re-bake local (pdf-lib + pdf.js + extracción) corría COMPLETO en cada edición y era el
+cuello de botella (lag + "duplicado" durante el arrastre en PDFs pesados). Sin cambiar la
+arquitectura WYSIWYG:
+- **No re-muestrear colores en cada re-bake**: `sampleRunColors` (getImageData sobre toda
+  la página) solo corre en el estado BASE — los colores no cambian con las ediciones y
+  los fantasmas los cachean. Era el costo más grande del hot-path.
+- **willReadFrequently** en el back buffer → getImageData más rápido, sin el warning.
+- **Debounce (150ms)** del re-bake con ediciones pendientes: un arrastre/tipeo rápido ya
+  no encola N bakes. El overlay (fantasmas) da feedback INSTANTÁNEO; el bake solo refina.
+- **Máscara de drag**: durante el arrastre, una máscara opaca instantánea tapa la posición
+  original (no espera al lift/re-bake) → nunca se ve el original "duplicado" bajo el que
+  arrastrás, aun en PDFs lentos.
+
 ### feat(editor+core): alinear el TEXTO dentro del área (no el nodo) + inputs con barra de solo "eliminar"
 - **Alineación de texto**: los 3 botones de alineación del texto ya NO mueven el nodo a
   los márgenes de la PÁGINA — alinean el texto DENTRO del área del grafo (left/center/

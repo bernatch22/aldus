@@ -4,6 +4,12 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### fix(editor): la caja de un grafo MULTILÍNEA cubre TODAS las líneas (no solo la primera)
+Con breaklines, el `.seg-box` (click + selección + mask) medía una sola línea de alto, así
+que solo se podía seleccionar/tapar la primera. Ahora el alto = n_líneas × leading
+(1.2×size, el mismo del bake) y el `line-height` es por línea; una sola línea conserva el
+alto natural del segmento. El click en cualquier línea selecciona el grafo entero.
+
 ### feat(editor+core): viñetas SOLO en la selección + SUBRAYADO + familia en la barra + esquema con seleccionado primero
 - **Toggle de lista por selección**: opera solo sobre las líneas alcanzadas por la
   selección del textarea (expandida a límites de línea; sin selección = la línea del

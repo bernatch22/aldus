@@ -1243,6 +1243,13 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
   // Mientras el TextEditLayer está abierto sobre él, su fondo blanco lo cubre.
   const masked = editing || edit != null || drag != null;
   const html = seedHtml(seg, edit, scale);
+  // MULTILÍNEA (breaklines): la caja debe cubrir TODAS las líneas — si no, el
+  // click/mask solo tomaba la primera. Alto = n × leading (1.2×size, el mismo
+  // del bake); una sola línea usa el alto natural del segmento.
+  const nLines = (edit?.text ?? seg.text).split('\n').length;
+  const lineHpx = eff.fontSize * 1.2 * scale;
+  const boxHeight = nLines > 1 ? nLines * lineHpx : rect.height;
+  const boxLineH = nLines > 1 ? lineHpx : rect.height;
 
   return (
     <>
@@ -1257,8 +1264,8 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
           // El ÁREA tipeable: el grip la amplía más allá del ancho natural del
           // texto (espacio para escribir en la línea sin que "salte").
           minWidth: gripW ?? Math.max(rect.width, areaWidth != null ? areaWidth * scale : 0),
-          height: rect.height,
-          lineHeight: `${rect.height}px`,
+          height: boxHeight,
+          lineHeight: `${boxLineH}px`,
           transform: drag ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
           transformOrigin: 'left bottom',
         }}

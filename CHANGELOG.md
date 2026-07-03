@@ -4,6 +4,22 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### fix(editor): Enter = línea de abajo SIEMPRE — continuación LOCAL, sin round-trip ni rebind
+El Enter cerraba la edición: para texto suelto no había marcador (→ commit+close) y para
+listas dependía de un round-trip al server + rebind por geometría que fallaba. Rediseño
+robusto: el editor sigue ABIERTO y edita la línea nueva LOCALMENTE (no hay segmento real
+detrás; se crea con `onAddText` en su propio commit). Sin esperar al server, sin rebind,
+sin matching frágil por x/baseline.
+- `LiveSession.newLine` (page/x/baseline/size/bucket): el commit de una línea nueva usa
+  `onAddText` en vez de `onPatch`. Cada Enter comitea la línea actual y arranca la de
+  abajo; el blur/click-away comitea la última y cierra.
+- Enter en línea nueva VACÍA (solo marcador o nada) = TERMINAR (como Word/Acrobat), sin
+  apilar ítems vacíos.
+- Eliminada toda la maquinaria `editRequestId`/`pendingItemRef`/rebind (NodeOverlay,
+  PdfCanvas, EditorPage) — el editor local la vuelve innecesaria.
+- (Formatear una línea NUEVA queda plano por ahora: `onAddText` no lleva runs; las líneas
+  ya existentes conservan bold/italic/color como siempre.)
+
 ### fix(editor): B/I encendidos según el caret + Enter en lista SIN cerrar el editor (sesión provisional)
 - **Estado activo de B/I/color**: con el textarea, `selectionStyle` (que camina DOM)
   devolvía null y los botones no reflejaban el formato bajo el caret. Ahora la barra lee

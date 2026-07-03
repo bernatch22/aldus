@@ -129,10 +129,7 @@ interface Props {
   /** Ancho de ÁREA tipeable por segmento (pt) — el grip la amplía. */
   areaWidths: Map<string, number>;
   onAreaWidth: (segId: string, w: number | null) => void;
-  /** Abrir este segmento en edición apenas exista en el grafo. */
-  editRequestId: string | null;
-  onEditRequestHandled: () => void;
-  /** Hay un editor de texto abierto (el preview se congela mientras tanto). */
+  /** Hay un editor de texto abierto (se usa para saltear el lift). */
   onEditingChange: (active: boolean) => void;
 }
 
@@ -376,9 +373,10 @@ interface LiveSession extends EditSession {
   /** Ancla x (pt) al abrir + corrimiento acumulado por viñeta colgante. */
   anchorX: number;
   xShiftPt: number;
-  /** Enter en lista: la sesión sigue abierta sobre el ítem NUEVO que aún no
-   *  existe en el grafo — commit deshabilitado hasta el rebind. */
-  provisional?: boolean;
+  /** LÍNEA NUEVA (Enter continuó abajo): no hay segmento real detrás — el
+   *  commit crea el texto vía `onAddText` en vez de `onPatch`. El editor sigue
+   *  ABIERTO y local, sin round-trip al server ni rebind. */
+  newLine?: { page: number; x: number; baseline: number; size: number; bucket: FontBucket };
 }
 
 // Los runs EN VIVO de la sesión abierta (para el estado activo de B/I en la
@@ -471,8 +469,14 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
   const commit = useCallback(() => {
     const s = sessionRef.current;
     const ta = taRef.current;
-    if (!s || !ta || s.provisional) return; // provisional: aún sin segmento real
+    if (!s || !ta) return;
     const text = ta.value.replace(/\s+$/, '');
+    // Línea nueva (Enter): se crea vía onAddText (sin segmento real detrás).
+    // Un ítem VACÍO (solo el marcador, o nada) no se crea.
+    if (s.newLine) {
+      if (text.trim() && !isBareListMarker(text)) s.onAddText({ ...s.newLine, text });
+      return;
+    }
     const runs = applyTextDiff(s.runs, text);
     // Viñeta colgante aplicada EN VIVO: consolidar el corrimiento de x.
     const nx = round1(Math.max(4, s.anchorX + s.xShiftPt));
@@ -488,19 +492,12 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       const host = hostRef.current;
       const ta = taRef.current;
       if (!host || !ta) return;
-      // REBIND de una sesión provisional (Enter en lista): el segmento real
-      // recién llegó — preservar lo tipeado y el caret, solo re-ligar.
-      const preserve = sessionRef.current?.provisional
-        ? { value: ta.value, selStart: ta.selectionStart, selEnd: ta.selectionEnd }
-        : null;
       const seedRuns = s.edit?.runs ?? originalStyledRuns(s.seg);
       const seedText = styledText(seedRuns);
       // Ítem de lista pelado: sembrar el GAP (espacios REALES — el textarea no
       // los colapsa). Con tipeo detrás quedan interiores y se hornean; sin
       // tipeo, el commit los recorta = noop.
-      const value = preserve
-        ? preserve.value
-        : isBareListMarker(seedText) ? `${seedText.replace(/\s+$/, '')}${LIST_GAP}` : seedText;
+      const value = isBareListMarker(seedText) ? `${seedText.replace(/\s+$/, '')}${LIST_GAP}` : seedText;
       const eff = effectiveGeometry(s.seg, s.edit);
       const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, s.pageHeight, s.scale);
       const style = containerStyle(s.seg, s.edit, s.scale);
@@ -556,9 +553,8 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       renderBackdrop();
       fit();
       ta.focus();
-      if (preserve) ta.setSelectionRange(preserve.selStart, preserve.selEnd);
-      else ta.setSelectionRange(value.length, value.length);
-      console.log('[aldus:edit-open]', s.seg.id, 'layer(textarea):', JSON.stringify(value.slice(0, 30)), 'focus:', document.activeElement === ta, preserve ? '(rebind)' : '');
+      ta.setSelectionRange(value.length, value.length);
+      console.log('[aldus:edit-open]', s.seg.id, 'layer(textarea):', JSON.stringify(value.slice(0, 30)), 'focus:', document.activeElement === ta);
     },
     isOpen: () => sessionRef.current != null,
   }), [fit, renderBackdrop]);
@@ -576,49 +572,42 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
     const onBlur = () => {
       const s = sessionRef.current;
       if (!s) return;
-      console.log('[aldus:blur] layer cierra', s.seg.id, s.provisional ? '(provisional: descarta)' : '(comitea)');
-      if (!s.provisional) commit();
+      console.log('[aldus:blur] layer comitea y cierra', s.seg.id);
+      commit();
       close();
     };
     const onKeyDown = (e: KeyboardEvent) => {
       const s = sessionRef.current;
       if (!s) return;
-      if (e.key === 'Enter') {
+      if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        const marker = nextListMarker(ta.value);
-        if (!marker) {
-          // Texto suelto: Enter = confirmar y cerrar.
-          commit();
+        // ENTER en una línea NUEVA vacía (solo marcador, o nada) = TERMINAR:
+        // como Word/Acrobat, cierra sin apilar ítems vacíos.
+        if (s.newLine && (isBareListMarker(ta.value) || ta.value.trim() === '')) {
           close();
           ta.blur();
           return;
         }
-        // LISTA: el editor NO se cierra — commit del ítem actual y la sesión
-        // pasa a PROVISIONAL sobre el ítem siguiente (una línea abajo, con el
-        // marcador + gap), mientras el segmento real se crea por detrás; al
-        // llegar al grafo, open() re-liga preservando lo tipeado. Breakline
-        // sin perder el flujo.
-        const size = s.edit?.fontSize ?? s.seg.fontSize;
-        const newX = round1(Math.max(4, s.anchorX + s.xShiftPt));
-        const effNow = effectiveGeometry(s.seg, s.edit);
-        const newBaseline = round1(effNow.baseline - size * 1.4);
+        // ENTER = línea de abajo, SIEMPRE (lista o texto suelto). El editor NO
+        // se cierra: commit de la línea actual y sigue editando una LÍNEA NUEVA
+        // local, sin round-trip (se crea con onAddText en su propio commit).
+        // Shift+Enter cae al default del textarea (por si se quiere un salto
+        // literal — que igual no persiste, pero no molesta).
+        const marker = nextListMarker(ta.value); // "•    " en lista, null si no
+        const size = s.newLine ? s.newLine.size : (s.edit?.fontSize ?? s.seg.fontSize);
+        const curBaseline = s.newLine ? s.newLine.baseline : effectiveGeometry(s.seg, s.edit).baseline;
+        const curX = s.newLine ? s.newLine.x : round1(Math.max(4, s.anchorX + s.xShiftPt));
+        const bucket = s.newLine ? s.newLine.bucket : dominantRun(s.seg).font.bucket;
         commit();
-        s.onAddText({
-          page: s.seg.page,
-          x: newX,
-          baseline: newBaseline,
-          text: marker,
-          size,
-          bucket: dominantRun(s.seg).font.bucket,
-        });
-        s.provisional = true;
-        const value = /\s$/.test(marker) ? marker : `${marker}${LIST_GAP}`;
-        ta.value = value;
+        const newBaseline = round1(curBaseline - size * 1.4);
+        const value = marker ? (/\s$/.test(marker) ? marker : `${marker}${LIST_GAP}`) : '';
+        s.newLine = { page: s.seg.page, x: curX, baseline: newBaseline, size, bucket };
         s.runs = applyTextDiff([], value);
         s.seedText = value;
         s.seedRuns = s.runs;
         s.xShiftPt = 0;
-        s.anchorX = newX;
+        s.anchorX = curX;
+        ta.value = value;
         const host = hostRef.current;
         if (host) host.style.top = `${parseFloat(host.style.top) + size * 1.4 * s.scale}px`;
         renderBackdrop();
@@ -723,7 +712,7 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
   );
 });
 
-export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, areaWidths, onAreaWidth, editRequestId, onEditRequestHandled, onEditingChange }: Props) {
+export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, areaWidths, onAreaWidth, onEditingChange }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => { onEditingChange(editingId != null); }, [editingId, onEditingChange]);
   // Cambio de página con editor abierto: cerrarlo (con commit) via blur.
@@ -750,18 +739,6 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
       onAddText,
     });
   };
-
-  // Ítem de lista recién creado (Enter): abrirlo en edición apenas el grafo
-  // lo traiga — el flujo de tipeo sigue sin "doble click" en el medio.
-  useEffect(() => {
-    if (!editRequestId) return;
-    const seg = graph.segments.find(s => s.id === editRequestId);
-    if (seg) {
-      openSegEditor(seg);
-      onEditRequestHandled();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editRequestId, graph, onEditRequestHandled]);
 
   // Cuando una FontFace termina de cargar (las estables del fontRegistry son
   // async), re-render: los fantasmas re-siembran su HTML midiendo con la

@@ -45,8 +45,6 @@ interface Props {
   areaWidths: Map<string, number>;
   onAreaWidth: (segId: string, w: number | null) => void;
   /** Segmento a abrir en edición apenas exista (ítem de lista recién creado). */
-  editRequestId: string | null;
-  onEditRequestHandled: () => void;
   onEditingChange: (active: boolean) => void;
 }
 
@@ -75,7 +73,7 @@ async function renderToBackBuffer(doc: PDFDocumentProxy, pageNum: number, scale:
   return back;
 }
 
-export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, lift, draggingId, areaWidths, onAreaWidth, editRequestId, onEditRequestHandled, onEditingChange }: Props) {
+export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, lift, draggingId, areaWidths, onAreaWidth, onEditingChange }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
   const liftTaskRef = useRef<RenderTask | null>(null);
@@ -209,8 +207,6 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
           onDragging={onDragging}
           areaWidths={areaWidths}
           onAreaWidth={onAreaWidth}
-          editRequestId={editRequestId}
-          onEditRequestHandled={onEditRequestHandled}
           onEditingChange={onEditingChange}
         />
       )}

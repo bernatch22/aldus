@@ -240,16 +240,12 @@ export function EditorPage() {
       .catch(e => setError(e instanceof Error ? e.message : 'No se pudo crear'));
   }, [placing, id, pageNum, pageTextStyle]);
 
-  // Enter al final de un ítem de lista → crear el siguiente ítem debajo y
-  // ABRIRLO en edición apenas aparezca en el grafo (nada de "doble click").
-  const pendingItemRef = useRef<{ page: number; x: number; baseline: number } | null>(null);
-  const [editRequestId, setEditRequestId] = useState<string | null>(null);
-  const onEditRequestHandled = useCallback(() => setEditRequestId(null), []);
+  // Enter en una línea → crea el texto de la línea de abajo (el editor sigue
+  // abierto LOCAL sobre la línea nueva, sin depender de que el server responda).
   const onAddText = useCallback((req: AddTextRequest) => {
-    pendingItemRef.current = { page: req.page, x: r1(req.x), baseline: r1(req.baseline) };
     api.docOp(id, 'addText', { page: req.page, x: r1(req.x), y: r1(req.baseline + req.size), text: req.text, size: req.size, bucket: req.bucket })
       .then(() => setDocVersion(v => v + 1))
-      .catch(e => { pendingItemRef.current = null; setError(e instanceof Error ? e.message : 'No se pudo agregar'); });
+      .catch(e => setError(e instanceof Error ? e.message : 'No se pudo agregar'));
   }, [id]);
 
   // Operaciones de documento. HIGHLIGHT acumula (preview local, se escribe con
@@ -402,22 +398,12 @@ export function EditorPage() {
   }, []);
 
   // El grafo nuevo llega = el preview aterrizó: si había un drop en vuelo,
-  // el documento visible ya es el re-horneado — descartar el lift. Y si hay
-  // un ítem de lista recién creado (Enter), abrirlo en edición directamente.
+  // el documento visible ya es el re-horneado — descartar el lift.
   const handleGraph = useCallback((g: PageGraph) => {
     setGraph(g);
     if (dropPendingRef.current) {
       dropPendingRef.current = false;
       setLift(prev => { void prev?.doc.destroy(); return null; });
-    }
-    const pend = pendingItemRef.current;
-    if (pend && g.page === pend.page) {
-      const seg = g.segments.find(s => Math.abs(s.x - pend.x) < 3 && Math.abs(s.baseline - pend.baseline) < 3);
-      if (seg) {
-        pendingItemRef.current = null;
-        setSelectedId(seg.id);
-        setEditRequestId(seg.id);
-      }
     }
   }, []);
 
@@ -653,7 +639,6 @@ export function EditorPage() {
                 onDragging={onDragging}
                 lift={lift} draggingId={draggingId}
                 areaWidths={areaWidths} onAreaWidth={onAreaWidth}
-                editRequestId={editRequestId} onEditRequestHandled={onEditRequestHandled}
                 onEditingChange={setEditingActive}
               />
             </div>

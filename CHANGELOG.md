@@ -4,6 +4,13 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### fix(editor): muestreo de color más FIEL — promedio del núcleo del glifo (no un pixel outlier)
+El color muestreado difería del real del canvas: elegía el pixel MÁS oscuro del bbox, que
+con antialiasing (solapes de trazos) puede ser un outlier más oscuro que el color real.
+Ahora se promedian los pixels del NÚCLEO (inkiness ≥ 80% del máximo) → el color coincide
+con lo que pinta el canvas. (Si aún se nota diferencia, el paso siguiente es leer el color
+EXACTO del content stream, pero requiere casar coordenadas con transform global.)
+
 ### fix(editor): el color del texto ya no se "rompe" al mover — CACHE de colores por run
 El culpable era mi optimización `sampleColors={!pending}`: apenas había una edición
 pendiente, dejaba de muestrear colores, así que CUALQUIER segmento que se moviera/editara

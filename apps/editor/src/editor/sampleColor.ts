@@ -61,20 +61,30 @@ export function sampleRunColors(graph: PageGraph, canvas: HTMLCanvasElement, sca
     // trazo del texto — el texto "bajo los inputs" salía #dcdcdc. Negro default.
     if (widgetRects.some(wr => wr.l < left + w && wr.r > left && wr.t < top + h && wr.b > top)) { colorCache.set(key, ''); continue; }
 
-    // El píxel con mayor "distancia al blanco" ponderada por opacidad = la tinta.
-    let bestScore = -1;
-    let br = 0, bg = 0, bb = 0;
+    // Primero: la inkiness MÁXIMA (el pixel más "tinta" = núcleo del glifo).
+    let maxInk = 0;
     for (let i = 0; i < data.length; i += 4) {
-      const a = data[i + 3];
-      if (a < 40) continue;
-      const r = data[i], g = data[i + 1], b = data[i + 2];
-      const inkiness = (255 - r) + (255 - g) + (255 - b); // qué tan oscuro/saturado
-      const score = inkiness * (a / 255);
-      if (score > bestScore) { bestScore = score; br = r; bg = g; bb = b; }
+      if (data[i + 3] < 40) continue;
+      const ink = (255 - data[i]) + (255 - data[i + 1]) + (255 - data[i + 2]);
+      if (ink > maxInk) maxInk = ink;
     }
-    // Sin tinta suficiente / grises de antialiasing → negro (display-only).
+    if (maxInk < 90) { colorCache.set(key, ''); continue; }
+    // Luego: PROMEDIAR los pixels del núcleo (inkiness ≥ 80% del máximo) — un
+    // solo pixel "más oscuro" puede ser un outlier de antialiasing y daba un
+    // color distinto al real del canvas. El promedio del núcleo = color real.
+    const thresh = maxInk * 0.8;
+    let sr = 0, sg = 0, sb = 0, n = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] < 40) continue;
+      const ink = (255 - data[i]) + (255 - data[i + 1]) + (255 - data[i + 2]);
+      if (ink < thresh) continue;
+      sr += data[i]; sg += data[i + 1]; sb += data[i + 2]; n++;
+    }
+    if (!n) { colorCache.set(key, ''); continue; }
+    const br = sr / n, bg = sg / n, bb = sb / n;
+    // Grises = antialiasing (trazos finos / chrome), no color: sin croma → negro.
     const chroma = Math.max(br, bg, bb) - Math.min(br, bg, bb);
-    if (bestScore < 90 || chroma < 30) { colorCache.set(key, ''); continue; }
+    if (chroma < 24) { colorCache.set(key, ''); continue; }
     const hex = `#${toHex(br)}${toHex(bg)}${toHex(bb)}`;
     if (hex !== '#000000') { run.color = hex; colorCache.set(key, hex); }
     else colorCache.set(key, '');

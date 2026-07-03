@@ -4,6 +4,23 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### fix(editor): B/I encendidos según el caret + Enter en lista SIN cerrar el editor (sesión provisional)
+- **Estado activo de B/I/color**: con el textarea, `selectionStyle` (que camina DOM)
+  devolvía null y los botones no reflejaban el formato bajo el caret. Ahora la barra lee
+  los runs VIVOS de la sesión (`styleAtRange` + `selectionStart/End`); el `selectionchange`
+  del document cubre textarea, y el toggle refresca al toque (dispatch síncrono). Con
+  caret colapsado, B/I aplican a la PALABRA bajo el caret (consistente con lo que muestra
+  el botón), no al segmento entero.
+- **Enter en lista = breakline real**: antes committeaba, CERRABA el editor y esperaba el
+  round-trip para reabrir — se sentía como un submit que "pierde la edición". Ahora el
+  editor NO se cierra: commit del ítem actual y la sesión pasa a PROVISIONAL (marcador +
+  gap, una línea abajo, commit deshabilitado) mientras el segmento real se crea; cuando
+  llega al grafo, `open()` re-liga la sesión preservando lo tipeado y el caret. Tipeo
+  continuo, sin interrupciones.
+- **Freeze del preview eliminado**: era el parche de la era pre-singleton (y bloqueaba el
+  flujo del Enter: sin previews no llegaba el grafo con el ítem nuevo). El layer es inmune
+  al churn — el preview fluye debajo del editor abierto.
+
 ### fix(editor): host del editor colapsado (texto "impreso muchas veces") + viñetas COLGANTES
 - **El editor se veía superpuesto** ("el grafo impreso muchas veces"): al pasar backdrop
   y textarea a `position:absolute`, el host quedó sin ancho intrínseco → su fondo blanco

@@ -332,9 +332,10 @@ export function EditorPage() {
   //    BROWSER (el mismo bake de core) sobre una copia, y se renderiza ESO.
   //    WYSIWYG real, sin máscaras ni duplicados; el server no se toca hasta
   //    Aplicar. El texto sigue como overlay editable aparte. ──
+  // (El freeze por edición ya no existe: el TextEditLayer es un singleton
+  // imperativo inmune al churn de grafos — el preview puede fluir debajo.)
   useEffect(() => {
     if (!baseBytes) return;
-    if (editingActive) return; // editor abierto: el canvas NO cambia debajo
     let cancelled = false;
     (async () => {
       const pending = edits.size || imageEdits.size || widgetEdits.size || pendingHighlights.length;
@@ -349,13 +350,13 @@ export function EditorPage() {
       setPdf(prev => { void prev?.destroy(); return doc; });
     })().catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'No se pudo generar el preview'); });
     return () => { cancelled = true; };
-  }, [baseBytes, bakePending, edits, imageEdits, widgetEdits, pendingHighlights, editingActive]);
+  }, [baseBytes, bakePending, edits, imageEdits, widgetEdits, pendingHighlights]);
 
   // ── PREPARAR EL LIFT al seleccionar un texto (todavía presente en el canvas):
   //    hornear la página sin él AHORA, en el tiempo muerto entre el click y el
   //    posible arrastre. Si el drag arranca, el blit es instantáneo. ──
   useEffect(() => {
-    if (editingActive) return; // editor abierto: nada de lifts (churn de fuentes/render)
+    if (editingActive) return; // con editor abierto no hay drags — lift innecesario
     const sid = selectedId;
     const seg = sid && !edits.has(sid) ? graphRef.current?.segments.find(s => s.id === sid) : null;
     if (!seg || !baseBytes) {

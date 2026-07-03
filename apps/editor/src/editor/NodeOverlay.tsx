@@ -199,6 +199,12 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
   useEffect(() => {
     const update = () => {
       const el = activeEditingBox();
+      // El editor es un TEXTAREA: el estilo bajo el caret/selección se lee de
+      // los runs VIVOS de la sesión + los offsets planos del textarea.
+      if (el instanceof HTMLTextAreaElement && liveEditRuns) {
+        setSelSty(styleAtRange(liveEditRuns, el.selectionStart, el.selectionEnd));
+        return;
+      }
       setSelSty(el ? selectionStyle(el, seg, edit) : null);
     };
     update();
@@ -208,8 +214,14 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
   const allBold = selSty ? selSty.bold : styled.length > 0 && styled.every(r => r.bold);
   const allItalic = selSty ? selSty.italic : styled.length > 0 && styled.every(r => r.italic);
   const toggle = (key: 'bold' | 'italic') => {
-    if (activeEditingBox()) {
+    const el = activeEditingBox();
+    if (el) {
+      // dispatchEvent es SÍNCRONO: el layer ya mutó los runs — refrescar el
+      // estado del botón al toque.
       window.dispatchEvent(new CustomEvent(SELECTION_STYLE_EVENT, { detail: { key } }));
+      if (el instanceof HTMLTextAreaElement && liveEditRuns) {
+        setSelSty(styleAtRange(liveEditRuns, el.selectionStart, el.selectionEnd));
+      }
       return;
     }
     const next = key === 'bold' ? !allBold : !allItalic;
@@ -364,6 +376,37 @@ interface LiveSession extends EditSession {
   /** Ancla x (pt) al abrir + corrimiento acumulado por viñeta colgante. */
   anchorX: number;
   xShiftPt: number;
+  /** Enter en lista: la sesión sigue abierta sobre el ítem NUEVO que aún no
+   *  existe en el grafo — commit deshabilitado hasta el rebind. */
+  provisional?: boolean;
+}
+
+// Los runs EN VIVO de la sesión abierta (para el estado activo de B/I en la
+// barra — con textarea no hay DOM que caminar). null = sin editor abierto.
+let liveEditRuns: StyledRun[] | null = null;
+
+/** Estilo uniforme del rango [start,end) sobre los runs (caret colapsado →
+ *  el carácter anterior, la convención de todo editor). */
+function styleAtRange(runs: StyledRun[], start: number, end: number): { bold: boolean; italic: boolean } | null {
+  if (end <= start) { start = Math.max(0, start - 1); end = start + 1; }
+  let pos = 0, any = false, bold = true, italic = true;
+  for (const r of runs) {
+    const a = Math.max(start, pos);
+    const b = Math.min(end, pos + r.text.length);
+    if (b > a) { any = true; bold = bold && r.bold; italic = italic && r.italic; }
+    pos += r.text.length;
+  }
+  return any ? { bold, italic } : null;
+}
+
+/** Rango de la PALABRA bajo el caret (colapsado); sin palabra → todo. */
+function wordRangeAt(text: string, pos: number): [number, number] {
+  const isW = (c: string | undefined) => !!c && /\S/.test(c);
+  let a = pos, b = pos;
+  if (!isW(text[pos]) && isW(text[pos - 1])) { a = pos - 1; b = pos; }
+  while (a > 0 && isW(text[a - 1])) a--;
+  while (b < text.length && isW(text[b])) b++;
+  return a === b ? [0, text.length] : [a, b];
 }
 
 export interface TextEditLayerHandle {
@@ -388,6 +431,7 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
     const s = sessionRef.current;
     const bd = backdropRef.current;
     if (!s || !bd) return;
+    liveEditRuns = s.runs;
     bd.innerHTML = s.runs.map(r => {
       const st: string[] = [];
       if (r.bold) st.push('text-shadow:0.02em 0 0 currentColor,-0.02em 0 0 currentColor');
@@ -400,6 +444,7 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
   const close = useCallback(() => {
     if (hostRef.current) hostRef.current.style.display = 'none';
     sessionRef.current = null;
+    liveEditRuns = null;
     onClosed();
   }, [onClosed]);
 
@@ -426,7 +471,7 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
   const commit = useCallback(() => {
     const s = sessionRef.current;
     const ta = taRef.current;
-    if (!s || !ta) return;
+    if (!s || !ta || s.provisional) return; // provisional: aún sin segmento real
     const text = ta.value.replace(/\s+$/, '');
     const runs = applyTextDiff(s.runs, text);
     // Viñeta colgante aplicada EN VIVO: consolidar el corrimiento de x.
@@ -443,12 +488,19 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       const host = hostRef.current;
       const ta = taRef.current;
       if (!host || !ta) return;
+      // REBIND de una sesión provisional (Enter en lista): el segmento real
+      // recién llegó — preservar lo tipeado y el caret, solo re-ligar.
+      const preserve = sessionRef.current?.provisional
+        ? { value: ta.value, selStart: ta.selectionStart, selEnd: ta.selectionEnd }
+        : null;
       const seedRuns = s.edit?.runs ?? originalStyledRuns(s.seg);
       const seedText = styledText(seedRuns);
       // Ítem de lista pelado: sembrar el GAP (espacios REALES — el textarea no
       // los colapsa). Con tipeo detrás quedan interiores y se hornean; sin
       // tipeo, el commit los recorta = noop.
-      const value = isBareListMarker(seedText) ? `${seedText.replace(/\s+$/, '')}${LIST_GAP}` : seedText;
+      const value = preserve
+        ? preserve.value
+        : isBareListMarker(seedText) ? `${seedText.replace(/\s+$/, '')}${LIST_GAP}` : seedText;
       const eff = effectiveGeometry(s.seg, s.edit);
       const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, s.pageHeight, s.scale);
       const style = containerStyle(s.seg, s.edit, s.scale);
@@ -504,8 +556,9 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       renderBackdrop();
       fit();
       ta.focus();
-      ta.setSelectionRange(value.length, value.length);
-      console.log('[aldus:edit-open]', s.seg.id, 'layer(textarea):', JSON.stringify(value.slice(0, 30)), 'focus:', document.activeElement === ta);
+      if (preserve) ta.setSelectionRange(preserve.selStart, preserve.selEnd);
+      else ta.setSelectionRange(value.length, value.length);
+      console.log('[aldus:edit-open]', s.seg.id, 'layer(textarea):', JSON.stringify(value.slice(0, 30)), 'focus:', document.activeElement === ta, preserve ? '(rebind)' : '');
     },
     isOpen: () => sessionRef.current != null,
   }), [fit, renderBackdrop]);
@@ -521,9 +574,10 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       refresh();
     };
     const onBlur = () => {
-      if (!sessionRef.current) return;
-      console.log('[aldus:blur] layer cierra y comitea', sessionRef.current.seg.id);
-      commit();
+      const s = sessionRef.current;
+      if (!s) return;
+      console.log('[aldus:blur] layer cierra', s.seg.id, s.provisional ? '(provisional: descarta)' : '(comitea)');
+      if (!s.provisional) commit();
       close();
     };
     const onKeyDown = (e: KeyboardEvent) => {
@@ -532,21 +586,44 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       if (e.key === 'Enter') {
         e.preventDefault();
         const marker = nextListMarker(ta.value);
-        commit();
-        close(); // el blur natural posterior encuentra session=null y no re-comitea
-        if (marker) {
-          const effNow = effectiveGeometry(s.seg, s.edit);
-          const size = s.edit?.fontSize ?? s.seg.fontSize;
-          s.onAddText({
-            page: s.seg.page,
-            x: effNow.x,
-            baseline: round1(effNow.baseline - size * 1.4),
-            text: marker,
-            size,
-            bucket: dominantRun(s.seg).font.bucket,
-          });
+        if (!marker) {
+          // Texto suelto: Enter = confirmar y cerrar.
+          commit();
+          close();
+          ta.blur();
+          return;
         }
-        ta.blur();
+        // LISTA: el editor NO se cierra — commit del ítem actual y la sesión
+        // pasa a PROVISIONAL sobre el ítem siguiente (una línea abajo, con el
+        // marcador + gap), mientras el segmento real se crea por detrás; al
+        // llegar al grafo, open() re-liga preservando lo tipeado. Breakline
+        // sin perder el flujo.
+        const size = s.edit?.fontSize ?? s.seg.fontSize;
+        const newX = round1(Math.max(4, s.anchorX + s.xShiftPt));
+        const effNow = effectiveGeometry(s.seg, s.edit);
+        const newBaseline = round1(effNow.baseline - size * 1.4);
+        commit();
+        s.onAddText({
+          page: s.seg.page,
+          x: newX,
+          baseline: newBaseline,
+          text: marker,
+          size,
+          bucket: dominantRun(s.seg).font.bucket,
+        });
+        s.provisional = true;
+        const value = /\s$/.test(marker) ? marker : `${marker}${LIST_GAP}`;
+        ta.value = value;
+        s.runs = applyTextDiff([], value);
+        s.seedText = value;
+        s.seedRuns = s.runs;
+        s.xShiftPt = 0;
+        s.anchorX = newX;
+        const host = hostRef.current;
+        if (host) host.style.top = `${parseFloat(host.style.top) + size * 1.4 * s.scale}px`;
+        renderBackdrop();
+        fit();
+        ta.setSelectionRange(value.length, value.length);
         return;
       }
       if (e.key === 'Escape') {
@@ -559,10 +636,11 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       if ((e.metaKey || e.ctrlKey) && (e.key === 'b' || e.key === 'i')) {
         e.preventDefault();
         const { selectionStart, selectionEnd } = ta;
-        if (selectionStart !== selectionEnd) {
-          s.runs = toggleStyleRange(s.runs, selectionStart, selectionEnd, e.key === 'b' ? 'bold' : 'italic');
-          refresh();
-        }
+        const [from, to] = selectionStart === selectionEnd
+          ? wordRangeAt(ta.value, selectionStart)
+          : [selectionStart, selectionEnd];
+        s.runs = toggleStyleRange(s.runs, from, to, e.key === 'b' ? 'bold' : 'italic');
+        refresh();
       }
     };
     const onStyle = (ev: Event) => {
@@ -571,9 +649,11 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       const detail = (ev as CustomEvent<{ key?: 'bold' | 'italic' | 'color' | 'list'; color?: string }>).detail;
       const selectionStart = ta.selectionStart;
       const selectionEnd = ta.selectionEnd;
-      // Sin selección: aplicar al SEGMENTO ENTERO (más útil que no hacer nada).
-      const from = selectionStart === selectionEnd ? 0 : selectionStart;
-      const to = selectionStart === selectionEnd ? ta.value.length : selectionEnd;
+      // Caret colapsado: aplicar a la PALABRA bajo el caret (consistente con
+      // el estado que muestra el botón); sin palabra → segmento entero.
+      const [from, to] = selectionStart === selectionEnd
+        ? wordRangeAt(ta.value, selectionStart)
+        : [selectionStart, selectionEnd];
       if (detail?.key === 'bold' || detail?.key === 'italic') {
         s.runs = toggleStyleRange(s.runs, from, to, detail.key);
         refresh();

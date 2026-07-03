@@ -4,6 +4,14 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### fix(editor): el texto del editor ya no se ve "más chico" — fit de ancho al abrir (word-spacing)
+El textarea muestra texto PLANO con espacios simples, pero el segmento real del PDF
+tiene gaps entre runs (los blanks "____ ____") y ajustes de ancho — el texto plano medía
+menos y se veía encogido al abrir. Ahora, al abrir con el texto original intacto, el
+delta (ancho efectivo − medido) se compensa con `word-spacing` (los gaps reales están en
+los espacios) o `letter-spacing` por carácter como fallback (clamp 0.4×fontSize) — la
+técnica del text layer de pdf.js. El auto-ancho del textarea incluye la compensación.
+
 ### fix(editor): click dentro del editor ya no deselecciona + grips descubribles + gap de lista generoso
 - **Click dentro del textarea deseleccionaba** (y podía cerrar el editor): el click
   burbujeaba al overlay, cuyo handler de fondo hace `selectNode(null)`. El host del

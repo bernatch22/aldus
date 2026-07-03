@@ -345,6 +345,11 @@ interface LiveSession extends EditSession {
   /** Font shorthand para medir el ancho del textarea. */
   fontCss: string;
   minW: number;
+  /** Fit de ancho al abrir (px): el texto plano mide MENOS que el segmento
+   *  real (gaps entre runs, ajustes del PDF) y se veía "más chico". El delta
+   *  va a los espacios (word-spacing) o se reparte por carácter. */
+  ws: number;
+  ls: number;
 }
 
 export interface TextEditLayerHandle {
@@ -363,12 +368,13 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
     onClosed();
   }, [onClosed]);
 
-  // Ancho del textarea al contenido (medido con la fuente real).
+  // Ancho del textarea al contenido (medido con la fuente real + el fit).
   const fit = useCallback(() => {
     const s = sessionRef.current;
     const ta = taRef.current;
     if (!s || !ta) return;
-    const w = measureWidth(ta.value, s.fontCss);
+    const spaces = (ta.value.match(/ /g) ?? []).length;
+    const w = measureWidth(ta.value, s.fontCss) + spaces * s.ws + ta.value.length * s.ls;
     ta.style.width = `${Math.max(s.minW, Math.ceil(w) + 8)}px`;
   }, []);
 
@@ -405,7 +411,25 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
         runs: seedRuns,
         fontCss: `${style.fontStyle === 'italic' ? 'italic ' : ''}${style.fontWeight === 700 ? '700 ' : ''}${style.fontSize} ${style.fontFamily}`,
         minW: Math.max(rect.width, s.minWidthCss),
+        ws: 0,
+        ls: 0,
       };
+      // FIT de ancho: solo con el texto ORIGINAL intacto (con texto editado el
+      // ancho efectivo ya no describe el contenido). El delta target−medido va
+      // a los espacios (los gaps reales del PDF están ahí) o por carácter.
+      if (seedText === s.seg.text) {
+        const measured = measureWidth(value, live.fontCss);
+        const spaces = (value.match(/ /g) ?? []).length;
+        const delta = rect.width - measured;
+        if (measured > 0 && Math.abs(delta) > 0.5 && value.length > 1) {
+          if (delta > 0 && spaces > 0) live.ws = delta / spaces;
+          else {
+            const ls = delta / value.length;
+            const sizePx = parseFloat(style.fontSize as string) || 12;
+            if (Math.abs(ls) <= sizePx * 0.4) live.ls = ls;
+          }
+        }
+      }
       sessionRef.current = live;
       host.style.display = 'block';
       host.style.left = `${rect.left}px`;
@@ -414,6 +438,8 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       Object.assign(ta.style, style);
       ta.style.height = `${rect.height}px`;
       ta.style.lineHeight = `${rect.height}px`;
+      ta.style.wordSpacing = live.ws ? `${live.ws.toFixed(2)}px` : '';
+      ta.style.letterSpacing = live.ls ? `${live.ls.toFixed(3)}px` : '';
       ta.value = value;
       live.runs = applyTextDiff(seedRuns, value);
       fit();

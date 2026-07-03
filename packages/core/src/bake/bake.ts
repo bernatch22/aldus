@@ -43,6 +43,10 @@ export interface BakeResult {
   applied: string[];
   /** Qué se saltó o degradó, y por qué. */
   warnings: string[];
+  /** Color EXACTO (hex "#rrggbb") de cada segmento tocado, leído del content
+   *  stream (fillColorRaw del primer op que matcheó por geometría). El editor
+   *  lo usa para los fantasmas — más fiel que muestrear píxeles. */
+  colors: Record<string, string>;
 }
 
 const fmt = (v: number): string => {
@@ -408,6 +412,11 @@ export async function bakeSegmentEdits(
   const pages = doc.getPages();
   const applied: string[] = [];
   const warnings: string[] = [];
+  const colors: Record<string, string> = {};
+  const rgbToHex = (c: { r: number; g: number; b: number }): string => {
+    const h = (v: number) => Math.max(0, Math.min(255, Math.round(v * 255))).toString(16).padStart(2, '0');
+    return `#${h(c.r)}${h(c.g)}${h(c.b)}`;
+  };
   const fallbackDraws: FallbackDraw[] = [];
 
   applyWidgetEdits(doc, widgetEdits, applied, warnings);
@@ -515,6 +524,10 @@ export async function bakeSegmentEdits(
         warnings.push(`${edit.segmentId}: ${conflict} — sin cambios`);
         continue;
       }
+      // Color EXACTO del segmento (primer op que pintó tinta) — para el
+      // fantasma del editor, más fiel que muestrear píxeles.
+      const colorOp = ops.find(o => rawFillToRgb(o.fillColorRaw));
+      if (colorOp) { const rgb = rawFillToRgb(colorOp.fillColorRaw); if (rgb) colors[edit.segmentId] = rgbToHex(rgb); }
       // ELIMINAR: extirpar todos los ops del segmento y listo.
       if (edit.remove) {
         for (const o of ops) splices.push({ start: o.record.start, end: o.record.end, text: '' });
@@ -696,5 +709,5 @@ export async function bakeSegmentEdits(
   }
 
   const pdf = await doc.save();
-  return { pdf, applied, warnings };
+  return { pdf, applied, warnings, colors };
 }

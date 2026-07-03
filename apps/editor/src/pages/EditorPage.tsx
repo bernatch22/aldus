@@ -329,6 +329,12 @@ export function EditorPage() {
       textRemovals.push({ segmentId: extraRemoval.id, page: extraRemoval.page, text: extraRemoval.text, remove: true, original: segmentOriginal(extraRemoval) });
     }
     const r = await bakeSegmentEdits(baseBytes.slice(), textRemovals, [...imageEdits.values()], [...widgetEdits.values()]);
+    // Color EXACTO del content stream → sobreescribe el muestreado en el cache
+    // de fantasmas (el fantasma se ve idéntico al original, sin aproximación).
+    for (const [segId, hex] of Object.entries(r.colors)) {
+      const s = segCache.current.get(segId);
+      if (s) s.runs.forEach(run => { run.color = hex; });
+    }
     let bytes = r.pdf;
     for (const h of resolveHighlights()) ({ pdf: bytes } = await addHighlight(bytes, h));
     return bytes;

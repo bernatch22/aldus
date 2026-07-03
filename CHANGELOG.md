@@ -4,6 +4,14 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### fix(editor+core): color EXACTO del fantasma — del content stream, no muestreado
+Alternativa definitiva al muestreo de píxeles (siempre aproximado). El BAKE ya matchea
+cada segmento con sus ops del content stream (matchOps por geometría) y esos ops llevan
+el color REAL (`fillColorRaw`). Ahora `bakeSegmentEdits` DEVUELVE `colors: {segmentId →
+hex}` con el color exacto, y el editor lo sobreescribe en el cache de fantasmas → el texto
+movido/editado se ve idéntico al original, sin la aproximación del muestreo. (El muestreo
+por promedio del núcleo queda como fallback para segmentos que el bake no toca.)
+
 ### fix(editor): muestreo de color más FIEL — promedio del núcleo del glifo (no un pixel outlier)
 El color muestreado difería del real del canvas: elegía el pixel MÁS oscuro del bbox, que
 con antialiasing (solapes de trazos) puede ser un outlier más oscuro que el color real.

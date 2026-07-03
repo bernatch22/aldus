@@ -126,11 +126,6 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
       liftShownRef.current = false; // el preview manda: el lift quedó atrás
       liftHoldRef.current = false;  // el re-bake aterrizó: se suelta el lift
       setSize({ w, h });
-      try {
-        setSnapshot({ url: back.toDataURL('image/jpeg', 0.7), width: w, height: h });
-      } catch {
-        setSnapshot(null);
-      }
       const page = await pdf.getPage(pageNum);
       const g = await extractPageGraph(page as unknown as PdfJsPage);
       if (cancelled) return;
@@ -139,7 +134,17 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
       try { registerPageFonts(page as unknown as { commonObjs: { get(id: string): unknown } }, g); } catch { /* best-effort */ }
       // Color de cada run: cache primero (barato), muestreo solo lo que falta.
       try { sampleRunColors(g, back, scale); } catch { /* best-effort */ }
+      // ORDEN: el GRAFO (que define movePending del ghost de imagen) se
+      // actualiza JUNTO/ANTES que el snapshot. Si el snapshot se actualizaba
+      // primero, había un frame con snapshot NUEVO (imagen ya movida) + grafo
+      // VIEJO (movePending true) → el ghost recortaba la posición vieja del
+      // snapshot nuevo = VACÍO → "la imagen se perdía".
       onGraph(g);
+      try {
+        setSnapshot({ url: back.toDataURL('image/jpeg', 0.7), width: w, height: h });
+      } catch {
+        setSnapshot(null);
+      }
     })();
     return () => {
       cancelled = true;

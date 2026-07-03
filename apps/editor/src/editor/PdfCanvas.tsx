@@ -46,10 +46,6 @@ interface Props {
   onAreaWidth: (segId: string, area: { w?: number; h?: number } | null) => void;
   /** Segmento a abrir en edición apenas exista (ítem de lista recién creado). */
   onEditingChange: (active: boolean) => void;
-  /** Muestrear el color de los runs (getImageData, caro). Solo en el estado
-   *  BASE — los colores no cambian con las ediciones y los fantasmas los
-   *  cachean; saltearlo en cada re-bake acelera muchísimo el preview. */
-  sampleColors: boolean;
 }
 
 /** Renderiza una página de pdf.js en un canvas offscreen (HiDPI). */
@@ -79,7 +75,7 @@ async function renderToBackBuffer(doc: PDFDocumentProxy, pageNum: number, scale:
   return back;
 }
 
-export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, lift, draggingId, areaWidths, onAreaWidth, onEditingChange, sampleColors }: Props) {
+export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, lift, draggingId, areaWidths, onAreaWidth, onEditingChange }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
   const liftTaskRef = useRef<RenderTask | null>(null);
@@ -102,8 +98,6 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
   // (incluye el post-drop). Sin esto, un drag rápido (lift aún no listo) dejaba
   // el original visible bajo el movido hasta el re-bake.
   const liftHoldRef = useRef(false);
-  const sampleColorsRef = useRef(sampleColors);
-  sampleColorsRef.current = sampleColors;
 
   const blit = (src: HTMLCanvasElement) => {
     const canvas = canvasRef.current;
@@ -143,8 +137,8 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
       // Las fuentes embebidas, bajo nombres ESTABLES (sobreviven al destroy
       // del documento — los fantasmas dependen de esto).
       try { registerPageFonts(page as unknown as { commonObjs: { get(id: string): unknown } }, g); } catch { /* best-effort */ }
-      // Muestrear el color de cada run — solo en el estado base (caro).
-      if (sampleColorsRef.current) { try { sampleRunColors(g, back, scale); } catch { /* best-effort */ } }
+      // Color de cada run: cache primero (barato), muestreo solo lo que falta.
+      try { sampleRunColors(g, back, scale); } catch { /* best-effort */ }
       onGraph(g);
     })();
     return () => {

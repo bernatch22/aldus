@@ -10,7 +10,18 @@ import type { PageGraph, TextRunNode } from '@aldus/core';
 
 const toHex = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
 
-/** Muta `run.color` de cada run del grafo leyendo el canvas (coords CSS×dpr). */
+// CACHE de colores por run (clave = página + posición + texto, estable para un
+// run que no se movió): muestrear con getImageData en CADA re-bake era caro Y,
+// peor, si se saltea, los runs pierden el color. Con cache, el estado base
+// muestrea todo y los re-bakes reaplican por clave sin leer píxeles. '' = run
+// sin color (negro) ya muestreado — no se re-muestrea.
+const colorCache = new Map<string, string>();
+export function clearColorCache(): void { colorCache.clear(); }
+const runKey = (page: number, r: TextRunNode): string =>
+  `${page}|${Math.round(r.baseline * 2)}|${Math.round(r.x * 2)}|${r.text}`;
+
+/** Muta `run.color` de cada run del grafo: cache primero, muestreo solo lo que
+ *  falta (coords CSS×dpr). */
 export function sampleRunColors(graph: PageGraph, canvas: HTMLCanvasElement, scale: number): void {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return;
@@ -27,6 +38,10 @@ export function sampleRunColors(graph: PageGraph, canvas: HTMLCanvasElement, sca
 
   for (const run of graph.runs) {
     if (run.angle && Math.abs(run.angle) > 0.01) continue;
+    // Cache: hit → reaplicar sin leer píxeles ('' = negro, sin color).
+    const key = runKey(graph.page, run);
+    const cached = colorCache.get(key);
+    if (cached !== undefined) { if (cached) run.color = cached; continue; }
     // bbox del run en píxeles del canvas (origen arriba-izquierda).
     const left = Math.floor(run.x * scale * dpr);
     const top = Math.floor((graph.height - run.baseline - run.fontSize * 0.25) * scale * dpr);
@@ -44,7 +59,7 @@ export function sampleRunColors(graph: PageGraph, canvas: HTMLCanvasElement, sca
     // Un run que TOCA un campo no se muestrea: los widgets pintan bordes/fondos
     // (y su antialiasing se derrama fuera del rect) que siempre le ganan al
     // trazo del texto — el texto "bajo los inputs" salía #dcdcdc. Negro default.
-    if (widgetRects.some(wr => wr.l < left + w && wr.r > left && wr.t < top + h && wr.b > top)) continue;
+    if (widgetRects.some(wr => wr.l < left + w && wr.r > left && wr.t < top + h && wr.b > top)) { colorCache.set(key, ''); continue; }
 
     // El píxel con mayor "distancia al blanco" ponderada por opacidad = la tinta.
     let bestScore = -1;
@@ -57,15 +72,12 @@ export function sampleRunColors(graph: PageGraph, canvas: HTMLCanvasElement, sca
       const score = inkiness * (a / 255);
       if (score > bestScore) { bestScore = score; br = r; bg = g; bb = b; }
     }
-    // Sin tinta suficiente (run vacío / muy claro) → dejar negro por defecto.
-    if (bestScore < 90) continue;
-    // GRISES = artefactos de antialiasing, no color del texto: un trazo fino
-    // (guiones bajos, hairlines) nunca alcanza el negro real, y un gris claro
-    // es chrome/borde. Sin croma → se asume negro (display-only).
+    // Sin tinta suficiente / grises de antialiasing → negro (display-only).
     const chroma = Math.max(br, bg, bb) - Math.min(br, bg, bb);
-    if (chroma < 30) continue;
+    if (bestScore < 90 || chroma < 30) { colorCache.set(key, ''); continue; }
     const hex = `#${toHex(br)}${toHex(bg)}${toHex(bb)}`;
-    if (hex !== '#000000') run.color = hex;
+    if (hex !== '#000000') { run.color = hex; colorCache.set(key, hex); }
+    else colorCache.set(key, '');
   }
 }
 

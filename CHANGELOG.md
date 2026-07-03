@@ -4,6 +4,16 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### fix(editor): el color del texto ya no se "rompe" al mover — CACHE de colores por run
+El culpable era mi optimización `sampleColors={!pending}`: apenas había una edición
+pendiente, dejaba de muestrear colores, así que CUALQUIER segmento que se moviera/editara
+después (p.ej. TÉRMINOS tras mover BASIC) perdía su color y el fantasma lo pintaba negro.
+Fix correcto: `sampleColor` cachea el color por run (clave = página+posición+texto,
+estable para un run que no se movió). El estado base muestrea todo; los re-bakes reaplican
+por clave SIN leer píxeles (barato) y solo muestrean runs genuinamente nuevos. Se vuelve a
+muestrear SIEMPRE (con cache) → ningún segmento pierde su color. `clearColorCache()` por
+documento.
+
 ### fix(editor): el lift SOSTIENE el original oculto hasta el re-bake (fin del "duplicado" sobre imágenes)
 Revert de dos parches propios que empeoraban las cosas: el **debounce** (prolongaba el
 duplicado post-drop) y la **máscara blanca de drag** (fea sobre imágenes). El mecanismo

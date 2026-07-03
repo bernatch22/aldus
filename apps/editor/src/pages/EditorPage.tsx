@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { PdfCanvas } from '../editor/PdfCanvas';
+import { clearColorCache } from '../editor/sampleColor';
 import { Inspector } from '../editor/Inspector';
 import type { AddTextRequest } from '../editor/NodeOverlay';
 import { Button, IconButton, ToolButton, Toast, cx } from '../ui/primitives';
@@ -57,6 +58,7 @@ const NAV_GROUPS: Array<{ label: string; tools: NavTool[] }> = [
 
 export function EditorPage() {
   const { id = '' } = useParams();
+  useEffect(() => clearColorCache(), [id]); // colores cacheados por documento
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [docVersion, setDocVersion] = useState(0);
   const [pageNum, setPageNum] = useState(1);
@@ -663,7 +665,6 @@ export function EditorPage() {
                 lift={lift} draggingId={draggingId}
                 areaWidths={areaWidths} onAreaWidth={onAreaWidth}
                 onEditingChange={setEditingActive}
-                sampleColors={!pending}
               />
             </div>
           ) : (

@@ -65,9 +65,16 @@ body {
    texto soltado sobre un campo quedaba bajo su tinte — "cambiaba de color". */
 .seg-box.selected, .seg-box.editing, .seg-box.edited { z-index: 20; }
 .seg-text { white-space: pre; outline: none; min-height: 100%; width: max-content; color: #000; }
-/* EL editor (TextEditLayer): un textarea plano — nada de contentEditable. */
+/* EL editor (TextEditLayer): textarea transparente ENCIMA de un backdrop que
+   dibuja los tramos estilados (bold/italic/color). Ambos superpuestos, mismas
+   métricas → el caret del textarea cae sobre el glifo dibujado. */
+.seg-backdrop {
+  position: absolute; top: 0; left: 0; pointer-events: none;
+  white-space: pre; overflow: hidden; color: #000;
+}
 textarea.seg-textarea {
-  display: block; background: transparent; border: 0; outline: none;
+  position: absolute; top: 0; left: 0;
+  background: transparent; border: 0; outline: none;
   padding: 0; margin: 0; resize: none; overflow: hidden; white-space: pre;
 }
 /* Velo esmerilado sobre la posición ORIGINAL de una imagen/widget MIENTRAS se

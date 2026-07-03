@@ -4,6 +4,17 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### fix(editor): bold/italic/color VISIBLES en el editor — backdrop estilado detrás del textarea
+El textarea es texto plano y no podía mostrar formato: aplicar bold "no hacía nada"
+(sí se committeaba al modelo, pero sin feedback). Técnica de backdrop (la de los textarea
+con syntax-highlight): un div DETRÁS del textarea dibuja los tramos estilados
+(bold/italic/color) y el textarea va TRANSPARENTE encima aportando solo caret + input.
+Mismas métricas (font/size/word-spacing/letter-spacing/ancho) → el caret cae sobre el
+glifo dibujado. Bold via `text-shadow` (faux, sin cambiar el ancho → alineación intacta),
+italic real, color real. Se re-dibuja en cada input y en cada B/I/color/lista. Además:
+sin selección, B/I/color ahora aplican al SEGMENTO ENTERO (antes no hacían nada). El
+commit sigue horneando bold/italic/color REALES en el PDF.
+
 ### fix(editor): el texto del editor ya no se ve "más chico" — fit de ancho al abrir (word-spacing)
 El textarea muestra texto PLANO con espacios simples, pero el segmento real del PDF
 tiene gaps entre runs (los blanks "____ ____") y ajustes de ancho — el texto plano medía

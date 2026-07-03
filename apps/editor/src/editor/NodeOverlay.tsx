@@ -357,10 +357,31 @@ export interface TextEditLayerHandle {
   isOpen(): boolean;
 }
 
+/** Escape mínimo para el backdrop (white-space:pre conserva los espacios). */
+const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
 const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(function TextEditLayer({ onClosed }, ref) {
   const hostRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  // Backdrop: un div DETRÁS del textarea (transparente) que dibuja los tramos
+  // estilados — el textarea no puede mostrar bold/italic/color, así que el
+  // backdrop es lo que se VE, con el caret del textarea encima. Bold via
+  // text-shadow (faux) para no cambiar el ancho → el caret queda alineado.
+  const backdropRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<LiveSession | null>(null);
+
+  const renderBackdrop = useCallback(() => {
+    const s = sessionRef.current;
+    const bd = backdropRef.current;
+    if (!s || !bd) return;
+    bd.innerHTML = s.runs.map(r => {
+      const st: string[] = [];
+      if (r.bold) st.push('text-shadow:0.02em 0 0 currentColor,-0.02em 0 0 currentColor');
+      if (r.italic) st.push('font-style:italic');
+      if (r.color) st.push(`color:${r.color}`);
+      return `<span${st.length ? ` style="${st.join(';')}"` : ''}>${escHtml(r.text)}</span>`;
+    }).join('') || '&#8203;';
+  }, []);
 
   const close = useCallback(() => {
     if (hostRef.current) hostRef.current.style.display = 'none';
@@ -368,15 +389,21 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
     onClosed();
   }, [onClosed]);
 
-  // Ancho del textarea al contenido (medido con la fuente real + el fit).
+  // Ancho al contenido (medido con la fuente real + el fit) — textarea y
+  // backdrop comparten el mismo ancho para que el caret alinee con lo dibujado.
   const fit = useCallback(() => {
     const s = sessionRef.current;
     const ta = taRef.current;
     if (!s || !ta) return;
     const spaces = (ta.value.match(/ /g) ?? []).length;
     const w = measureWidth(ta.value, s.fontCss) + spaces * s.ws + ta.value.length * s.ls;
-    ta.style.width = `${Math.max(s.minW, Math.ceil(w) + 8)}px`;
+    const width = `${Math.max(s.minW, Math.ceil(w) + 8)}px`;
+    ta.style.width = width;
+    if (backdropRef.current) backdropRef.current.style.width = width;
   }, []);
+
+  // Un cambio de contenido o estilo: re-dibujar el backdrop + re-ajustar ancho.
+  const refresh = useCallback(() => { renderBackdrop(); fit(); }, [renderBackdrop, fit]);
 
   const commit = useCallback(() => {
     const s = sessionRef.current;
@@ -435,20 +462,30 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       host.style.left = `${rect.left}px`;
       host.style.top = `${rect.top}px`;
       host.style.height = `${rect.height}px`;
-      Object.assign(ta.style, style);
-      ta.style.height = `${rect.height}px`;
-      ta.style.lineHeight = `${rect.height}px`;
-      ta.style.wordSpacing = live.ws ? `${live.ws.toFixed(2)}px` : '';
-      ta.style.letterSpacing = live.ls ? `${live.ls.toFixed(3)}px` : '';
+      const bd = backdropRef.current;
+      // Mismas métricas en textarea Y backdrop (font/size/spacing/altura).
+      for (const el of [ta, bd]) {
+        if (!el) continue;
+        Object.assign(el.style, style);
+        el.style.height = `${rect.height}px`;
+        el.style.lineHeight = `${rect.height}px`;
+        el.style.wordSpacing = live.ws ? `${live.ws.toFixed(2)}px` : '';
+        el.style.letterSpacing = live.ls ? `${live.ls.toFixed(3)}px` : '';
+      }
+      // El texto del textarea es TRANSPARENTE (lo pinta el backdrop); solo el
+      // caret queda visible, con el color real del segmento.
+      ta.style.color = 'transparent';
+      ta.style.caretColor = (style.color as string) ?? '#000';
       ta.value = value;
       live.runs = applyTextDiff(seedRuns, value);
+      renderBackdrop();
       fit();
       ta.focus();
       ta.setSelectionRange(value.length, value.length);
       console.log('[aldus:edit-open]', s.seg.id, 'layer(textarea):', JSON.stringify(value.slice(0, 30)), 'focus:', document.activeElement === ta);
     },
     isOpen: () => sessionRef.current != null,
-  }), [fit]);
+  }), [fit, renderBackdrop]);
 
   // Listeners nativos, atados UNA sola vez (nunca se re-atan).
   useEffect(() => {
@@ -458,7 +495,7 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       const s = sessionRef.current;
       if (!s) return;
       s.runs = applyTextDiff(s.runs, ta.value);
-      fit();
+      refresh();
     };
     const onBlur = () => {
       if (!sessionRef.current) return;
@@ -501,6 +538,7 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
         const { selectionStart, selectionEnd } = ta;
         if (selectionStart !== selectionEnd) {
           s.runs = toggleStyleRange(s.runs, selectionStart, selectionEnd, e.key === 'b' ? 'bold' : 'italic');
+          refresh();
         }
       }
     };
@@ -508,11 +546,17 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       const s = sessionRef.current;
       if (!s) return;
       const detail = (ev as CustomEvent<{ key?: 'bold' | 'italic' | 'color' | 'list'; color?: string }>).detail;
-      const { selectionStart, selectionEnd } = ta;
+      const selectionStart = ta.selectionStart;
+      const selectionEnd = ta.selectionEnd;
+      // Sin selección: aplicar al SEGMENTO ENTERO (más útil que no hacer nada).
+      const from = selectionStart === selectionEnd ? 0 : selectionStart;
+      const to = selectionStart === selectionEnd ? ta.value.length : selectionEnd;
       if (detail?.key === 'bold' || detail?.key === 'italic') {
-        if (selectionStart !== selectionEnd) s.runs = toggleStyleRange(s.runs, selectionStart, selectionEnd, detail.key);
+        s.runs = toggleStyleRange(s.runs, from, to, detail.key);
+        refresh();
       } else if (detail?.key === 'color' && detail.color) {
-        if (selectionStart !== selectionEnd) s.runs = setStyleRange(s.runs, selectionStart, selectionEnd, { color: detail.color });
+        s.runs = setStyleRange(s.runs, from, to, { color: detail.color });
+        refresh();
       } else if (detail?.key === 'list') {
         // Toggle de viñeta en vivo: manipulación de string plano — trivial.
         const m = /^(\s*)(?:[•·▪‣*-]|\d{1,3}[.)]|[a-zA-Z][.)])(\s*)/.exec(ta.value);
@@ -538,7 +582,7 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       ta.removeEventListener('input', syncRuns);
       window.removeEventListener(SELECTION_STYLE_EVENT, onStyle);
     };
-  }, [commit, close, fit]);
+  }, [commit, close, fit, refresh]);
 
   return (
     // stopPropagation: un click DENTRO del editor no puede burbujear al
@@ -551,6 +595,9 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       onPointerDown={e => e.stopPropagation()}
       onDoubleClick={e => e.stopPropagation()}
     >
+      {/* Backdrop (lo que se VE: tramos estilados) + textarea transparente
+          encima (caret + input). Mismas métricas → alineados. */}
+      <div ref={backdropRef} className="seg-text seg-backdrop" aria-hidden />
       <textarea
         ref={taRef}
         className="seg-text seg-textarea"

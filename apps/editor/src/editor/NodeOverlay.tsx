@@ -983,6 +983,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           selected={selectedId === seg.id || multiSel.has(seg.id)}
           editing={editingId === seg.id}
           edit={edits.get(seg.id) ?? null}
+          onCanvas={inGraph.has(seg.id)}
           isLocked={locked.has(seg.id)}
           onDragging={(active, committed) => onDragging(seg.id, active, committed)}
           area={areaWidths.get(seg.id) ?? null}
@@ -1378,6 +1379,11 @@ interface SegmentBoxProps {
   selected: boolean;
   editing: boolean;
   edit: SegmentEdit | null;
+  /** El segmento sigue en el grafo del preview (el canvas AÚN lo muestra) — el
+   *  extirpado del re-bake no llegó todavía. Con edición pendiente, ese lapso
+   *  necesita una máscara OPACA (si no, el original del canvas se transparenta
+   *  bajo el fantasma y se ve "roto" unos ms). */
+  onCanvas: boolean;
   isLocked: boolean;
   onDragging: (active: boolean, committed?: boolean) => void;
   /** Ancho de área tipeable (pt) fijado por el grip, o null (= ancho natural). */
@@ -1396,7 +1402,7 @@ interface SegmentBoxProps {
   onHighlightColor: (c: string) => void;
 }
 
-function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, isLocked, onDragging, area, onArea, groupMode, onSelect, onStartEdit, onPatch, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: SegmentBoxProps) {
+function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, onCanvas, isLocked, onDragging, area, onArea, groupMode, onSelect, onStartEdit, onPatch, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: SegmentBoxProps) {
   const eff = effectiveGeometry(seg, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
   const dragStart = useRef<{ px: number; py: number; moved: boolean } | null>(null);
@@ -1448,7 +1454,7 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
         <FloatingBar seg={seg} edit={edit} rect={rect} pageWidth={pageWidth} frameWpt={areaWpx / scale} onPatch={onPatch} onDocOp={onDocOp} onRequestLink={onRequestLink} highlightColor={highlightColor} onHighlightColor={onHighlightColor} />
       )}
       <div
-        className={`seg-box${selected ? ' selected' : ''}${masked ? ' masked' : ''}${edit ? ' edited' : ''}${editing ? ' editing' : ''}${isLocked ? ' locked' : ''}`}
+        className={`seg-box${selected ? ' selected' : ''}${masked ? ' masked' : ''}${edit ? ' edited' : ''}${editing ? ' editing' : ''}${isLocked ? ' locked' : ''}${edit && onCanvas ? ' on-canvas' : ''}`}
         style={{
           left: rect.left,
           top: rect.top,

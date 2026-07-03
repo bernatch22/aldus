@@ -57,6 +57,10 @@ body {
    en el lugar). Editado SIN editar: TRANSPARENTE — el texto flota sobre lo que
    haya debajo (imagen incluida), igual que hará el bake. */
 .seg-box.editing.masked { background: #fff; }
+/* Editado pero el original AÚN está en el canvas (el extirpado del preview no
+   llegó): máscara OPACA para que no se transparente el viejo bajo el nuevo
+   (el "roto" transitorio de unos ms). Al extirparse, cae a transparente. */
+.seg-box.edited.masked.on-canvas { background: #fff; }
 .seg-box.masked { cursor: text; }
 .seg-box.edited { outline-color: transparent; }
 .seg-box.edited.selected { outline-color: var(--accent); }

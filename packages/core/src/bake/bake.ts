@@ -188,7 +188,9 @@ function matchOps(
   shows: ShowOp[],
   orig: SegmentEdit['original'],
 ): { ops: ShowOp[]; conflict: string | null } {
-  const inLine = shows.filter(s => Math.abs(s.y - orig.baseline) <= Y_TOL);
+  // Bloque multilínea: los ops de TODAS sus baselines pertenecen al segmento.
+  const lines = orig.baselines?.length ? orig.baselines : [orig.baseline];
+  const inLine = shows.filter(s => lines.some(b => Math.abs(s.y - b) <= Y_TOL));
   if (inLine.some(s => s.stale)) {
     return { ops: [], conflict: 'la línea tiene shows encadenados sin reposicionar (x desconocida sin widths)' };
   }

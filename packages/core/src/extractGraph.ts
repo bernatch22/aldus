@@ -15,6 +15,55 @@
 import type { FontBucket, FontInfo, ImageNode, LineNode, LinkNode, PageGraph, SegmentNode, TextRunNode, WidgetKind, WidgetNode } from './model.js';
 import { segmentText, splitSegments } from './tokens.js';
 
+/** Re-agrupa en UN segmento multilínea las líneas consecutivas que llevan la
+ *  firma de un BLOQUE de Aldus: línea de un solo segmento, misma x (±0.5pt),
+ *  mismo tamaño (±0.1) y leading 1.2×size (±0.06×size) — el que escribe el
+ *  bake para los breaklines. Sin esto, guardar un bloque lo desintegraba en
+ *  un grafo por línea. `text` une las líneas con '\n' (regla del modelo). */
+function mergeBlockSegments(lines: LineNode[]): SegmentNode[] {
+  const out: SegmentNode[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.segments.length !== 1) {
+      out.push(...line.segments);
+      i++;
+      continue;
+    }
+    const chain: SegmentNode[] = [line.segments[0]];
+    let j = i + 1;
+    while (j < lines.length) {
+      const prev = chain[chain.length - 1];
+      const next = lines[j].segments.length === 1 ? lines[j].segments[0] : null;
+      if (!next) break;
+      const step = prev.baseline - next.baseline;
+      const lead = prev.fontSize * 1.2;
+      const match = Math.abs(next.x - prev.x) <= 0.5
+        && Math.abs(next.fontSize - prev.fontSize) <= 0.1
+        && Math.abs(step - lead) <= prev.fontSize * 0.06;
+      if (!match) break;
+      chain.push(next);
+      j++;
+    }
+    if (chain.length === 1) {
+      out.push(chain[0]);
+    } else {
+      const first = chain[0];
+      const last = chain[chain.length - 1];
+      out.push({
+        ...first,
+        text: chain.map(s => s.text).join('\n'),
+        runs: chain.flatMap(s => s.runs),
+        width: Math.max(...chain.map(s => s.width)),
+        y: last.y,
+        height: first.y + first.height - last.y,
+      });
+    }
+    i = j;
+  }
+  return out;
+}
+
 export interface PdfJsTextItem {
   str: string;
   transform: number[];
@@ -242,7 +291,7 @@ export async function extractPageGraph(page: PdfJsPage): Promise<PageGraph> {
     height: y1 - y0,
     runs,
     lines,
-    segments: lines.flatMap(l => l.segments),
+    segments: mergeBlockSegments(lines),
     images: extractImages(opList.fnArray, opList.argsArray, page.pageNumber, x0, y0),
     widgets: extractWidgets(annots, page.pageNumber, x0, y0),
     links: extractLinks(annots, page.pageNumber, x0, y0),

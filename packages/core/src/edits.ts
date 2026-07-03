@@ -34,24 +34,35 @@ const OVERRIDE_KEYS = ['fontSize', 'font', 'x', 'baseline', 'remove', 'charSpaci
 /** El contenido del segmento SIN editar, como runs estilados (tramos por
  *  estilo, con los espacios de palabra inferidos y su dx real). */
 export function originalStyledRuns(seg: SegmentNode): StyledRun[] {
-  const runs = [...seg.runs].sort((a, b) => a.x - b.x);
+  // Bloque MULTILÍNEA: los runs se agrupan por baseline (desc = orden de
+  // lectura) y las líneas se unen con '\n' — seg.text usa la misma regla.
+  const byLine = new Map<number, typeof seg.runs>();
+  for (const r of seg.runs) {
+    const key = Math.round(r.baseline * 10) / 10;
+    byLine.set(key, [...(byLine.get(key) ?? []), r]);
+  }
+  const lineKeys = [...byLine.keys()].sort((a, b) => b - a);
   const out: StyledRun[] = [];
-  for (let i = 0; i < runs.length; i++) {
-    const r = runs[i];
-    let space = '';
-    if (i > 0) {
-      const prev = runs[i - 1];
-      const gap = r.x - (prev.x + prev.width);
-      if (classifyGap(gap, prev, r) === 'space' && !out[out.length - 1]?.text.endsWith(' ') && !r.text.startsWith(' ')) {
-        space = ' ';
+  for (let li = 0; li < lineKeys.length; li++) {
+    const runs = [...(byLine.get(lineKeys[li]) ?? [])].sort((a, b) => a.x - b.x);
+    if (li > 0 && out.length) out[out.length - 1].text += '\n';
+    for (let i = 0; i < runs.length; i++) {
+      const r = runs[i];
+      let space = '';
+      if (i > 0) {
+        const prev = runs[i - 1];
+        const gap = r.x - (prev.x + prev.width);
+        if (classifyGap(gap, prev, r) === 'space' && !out[out.length - 1]?.text.endsWith(' ') && !r.text.startsWith(' ')) {
+          space = ' ';
+        }
       }
-    }
-    const last = out[out.length - 1];
-    if (last && last.bold === r.font.bold && last.italic === r.font.italic && last.color === r.color) {
-      last.text += space + r.text;
-    } else {
-      if (last && space) last.text += space;
-      out.push({ text: r.text, bold: r.font.bold, italic: r.font.italic, color: r.color, dx: r.x - seg.x });
+      const last = out[out.length - 1];
+      if (last && last.bold === r.font.bold && last.italic === r.font.italic && last.color === r.color) {
+        last.text += space + r.text;
+      } else {
+        if (last && space) last.text += space;
+        out.push({ text: r.text, bold: r.font.bold, italic: r.font.italic, color: r.color, dx: r.x - seg.x });
+      }
     }
   }
   return out;
@@ -241,10 +252,13 @@ export function setStyleRange(
  *  para localizar sus ops por geometría). */
 export function segmentOriginal(seg: SegmentNode): SegmentEdit['original'] {
   const dom = seg.runs.reduce((a, b) => (b.width > a.width ? b : a));
+  // Bloque multilínea: baselines únicas de los runs (desc = orden de lectura).
+  const baselines = [...new Set(seg.runs.map(r => Math.round(r.baseline * 10) / 10))].sort((a, b) => b - a);
   return {
     text: seg.text, x: seg.x, baseline: seg.baseline, width: seg.width, fontSize: seg.fontSize,
     bucket: dom.font.bucket, bold: dom.font.bold, italic: dom.font.italic,
     runs: [...seg.runs].sort((a, b) => a.x - b.x).map(r => ({ x: r.x, bold: r.font.bold, italic: r.font.italic })),
+    ...(baselines.length > 1 ? { baselines } : {}),
   };
 }
 

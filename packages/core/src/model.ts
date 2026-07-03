@@ -255,5 +255,8 @@ export interface SegmentEdit {
     bold?: boolean;
     italic?: boolean;
     runs?: Array<{ x: number; bold: boolean; italic: boolean }>;
+    /** Bloque MULTILÍNEA: las baselines de TODAS sus líneas (la primera es
+     *  `baseline`). El bake matchea/extirpa los ops de todas. */
+    baselines?: number[];
   };
 }

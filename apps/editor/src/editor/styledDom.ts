@@ -143,6 +143,19 @@ export function runsToHtml(seg: SegmentNode, runs: StyledRun[], sizeRatio: numbe
  *  letter-spacing y el gap EXACTO del PDF entre runs (como margin-left). `ratio`
  *  escala todo proporcionalmente (resize del segmento). */
 function originalLayoutHtml(seg: SegmentNode, scale: number, ratio: number): string {
+  // Bloque MULTILÍNEA: cada línea (runs agrupados por baseline) se compone por
+  // separado y se unen con '\n' (white-space:pre las quiebra).
+  const byLine = new Map<number, typeof seg.runs>();
+  for (const r of seg.runs) {
+    const key = Math.round(r.baseline * 10) / 10;
+    byLine.set(key, [...(byLine.get(key) ?? []), r]);
+  }
+  const lineKeys = [...byLine.keys()].sort((a, b) => b - a);
+  if (lineKeys.length > 1) {
+    return lineKeys
+      .map(k => originalLayoutHtml({ ...seg, runs: byLine.get(k) ?? [] }, scale, ratio))
+      .join('\n');
+  }
   const runs = seg.runs;
   // El espacio de un word-gap va al FINAL del run ANTERIOR — la MISMA regla que
   // originalStyledRuns (core). Si difieren, el roundtrip sembrar→serializar no

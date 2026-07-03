@@ -4,6 +4,18 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### fix(core+editor): un bloque multilínea SIGUE siendo UN grafo después de guardar
+Al aplicar, el bake escribe cada línea como ops separados y la re-extracción los partía
+en un grafo por línea — el bloque se desintegraba. Ahora:
+- **`mergeBlockSegments` (extracción)**: re-agrupa en UN segmento multilínea las líneas
+  consecutivas con la firma de un bloque de Aldus (línea de un solo segmento, misma x
+  ±0.5pt, mismo tamaño, leading 1.2×size ±6%) — exactamente lo que emite el bake.
+  `text` une con '\n'; los runs conservan su baseline real.
+- **`original.baselines`** (modelo) + `matchOps` multilínea: el bake matchea/extirpa los
+  ops de TODAS las líneas del bloque (el path A ya movía rígido por deltas por-op).
+- `originalStyledRuns` y `originalLayoutHtml` línea-conscientes (runs agrupados por
+  baseline, líneas unidas con '\n') — seeds, comparaciones de noop y display coherentes.
+
 ### fix(editor): el guardado es IDÉNTICO a lo que muestra el editor
 Dos deltas UI↔save eliminados:
 1. **El estiramiento del fit (ws/ls) caía en el save**: el fit de apertura imita los

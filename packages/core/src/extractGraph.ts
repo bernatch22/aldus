@@ -180,6 +180,11 @@ function extractImages(fnArray: number[], argsArray: unknown[][], page: number, 
   const images: ImageNode[] = [];
   let ctm: Mat = [1, 0, 0, 1, 0, 0];
   const stack: Mat[] = [];
+  // ID ESTABLE por objId del XObject (no por índice en el stream): mover una
+  // imagen "al frente" re-emite su Do al final → su índice cambiaría y el ID
+  // posicional saltaría a otra imagen. El objId es invariante al reorden. Un
+  // contador por objId desambigua el caso raro de la misma imagen pintada N veces.
+  const seen = new Map<string, number>();
   for (let i = 0; i < fnArray.length; i++) {
     const fn = fnArray[i];
     if (fn === OP_SAVE) stack.push(ctm);
@@ -197,8 +202,17 @@ function extractImages(fnArray: number[], argsArray: unknown[][], page: number, 
       // máscaras / inline images llevan el data object directo → sin objId.
       const arg0 = (argsArray[i] as unknown[])[0];
       const objId = (fn === OP_PAINT_IMAGE || fn === OP_PAINT_IMAGE_REPEAT) && typeof arg0 === 'string' ? arg0 : undefined;
+      // ID estable por objId (+ contador si se repite); sin objId, cae al índice.
+      let id: string;
+      if (objId) {
+        const n = seen.get(objId) ?? 0;
+        seen.set(objId, n + 1);
+        id = n === 0 ? `p${page}-${objId}` : `p${page}-${objId}#${n}`;
+      } else {
+        id = `p${page}-img${images.length}`;
+      }
       images.push({
-        id: `p${page}-img${images.length}`,
+        id,
         kind: 'image',
         page,
         x: minX - x0,

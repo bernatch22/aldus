@@ -338,6 +338,10 @@ export function EditorPage() {
       if (rm) imgEditList = [...imgEditList.filter(e => e.imageId !== extraImageRemoval.id), rm];
     }
     const r = await bakeSegmentEdits(baseBytes.slice(), textRemovals, imgEditList, [...widgetEdits.values()]);
+    if (imgEditList.length) console.log('[aldus:bake]', extraImageRemoval ? 'LIFT' : 'PREVIEW',
+      'imgEdits=', imgEditList.map(e => `${e.imageId}${e.remove ? ':rm' : `→x${e.x != null ? Math.round(e.x) : '-'},y${e.y != null ? Math.round(e.y) : '-'}`}`).join(' '),
+      '| applied=', r.applied.filter(a => a.includes('img')).join(' | ') || '∅',
+      '| warnings=', r.warnings.filter(w => w.includes('img')).join(' | ') || '∅');
     // Color EXACTO del content stream → sobreescribe el muestreado en el cache
     // de fantasmas (el fantasma se ve idéntico al original, sin aproximación).
     for (const [segId, hex] of Object.entries(r.colors)) {
@@ -386,7 +390,11 @@ export function EditorPage() {
     const seg = sid && !edits.has(sid) ? graphRef.current?.segments.find(s => s.id === sid) : null;
     // El lift también aplica a IMÁGENES: hornear la página sin la imagen
     // seleccionada, para que al arrastrarla se vea lo de atrás (no un velo).
-    const imgNode = sid && !seg ? graphRef.current?.images.find(im => im.id === sid) : null;
+    // CLAVE: solo si la imagen NO tiene ya una edición (igual que el texto usa
+    // `!edits.has`). Sin este guard, al soltar (imageEdits cambia) el efecto
+    // re-corría y horneaba un lift COMPETIDOR (página sin la imagen) que se
+    // blitea ENCIMA del preview ya aterrizado → la imagen se esfumaba.
+    const imgNode = sid && !seg && !imageEdits.has(sid) ? graphRef.current?.images.find(im => im.id === sid) : null;
     if ((!seg && !imgNode) || !baseBytes) {
       // Nada que preparar. Ojo: tras un drop consumado el lift NO se descarta
       // acá (el canvas muestra sus píxeles) — lo descarta handleGraph cuando
@@ -401,8 +409,9 @@ export function EditorPage() {
       if (cancelled) return;
       const doc = await getDocument({ data: bytes.slice(), fontExtraProperties: true }).promise;
       if (cancelled) { void doc.destroy(); return; }
+      console.log('[aldus:lift]', seg ? 'texto' : 'IMAGEN', liftId, 'listo (página sin el nodo)');
       setLift(prev => { void prev?.doc.destroy(); return { segId: liftId, doc }; });
-    })().catch(() => { /* sin lift: el drag cae al camino lento (blit al aterrizar) */ });
+    })().catch(e => { console.log('[aldus:lift] FALLÓ', liftId, e instanceof Error ? e.message : e); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, baseBytes, bakePending, edits, imageEdits, pendingHighlights, editingActive]);
@@ -425,6 +434,7 @@ export function EditorPage() {
       setDraggingId(segId);
       return;
     }
+    console.log('[aldus:drag]', segId, active ? 'START' : (committed ? 'DROP(commit)' : 'DROP(noop)'));
     setDraggingId(null);
     if (committed) dropPendingRef.current = true;
     else setLift(prev => (prev?.segId === segId ? (void prev.doc.destroy(), null) : prev));

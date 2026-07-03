@@ -1275,22 +1275,26 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
   // Eliminada: el preview local ya la quitó del render (Ctrl+Z la restaura).
   if (eff.removed) return null;
 
-  // MOVE PENDIENTE: hay una edición de posición que el canvas AÚN no re-horneó.
-  // El LIFT (página sin esta imagen) sigue en pantalla, así que el ghost cubre
-  // el DESTINO hasta que el re-bake aterrice. Con píxeles limpios no hay halo,
-  // así que persistir el ghost en ese lapso es seamless. Tolerancia (no `!==`):
-  // pdf.js re-extrae con diferencia sub-pixel.
+  // MOVIDA: tiene una edición de posición/tamaño. El bake la reubica EN SU LUGAR
+  // (z-order intacto), lo que puede dejarla TAPADA por contenido dibujado después
+  // en el destino. Por eso el overlay la mantiene visible con un "sticker" de sus
+  // píxeles limpios ARRIBA (z-index alto) de forma PERSISTENTE — no solo durante
+  // el drag. Así "lo que ves es lo que hay" sin reordenar el stream (reordenar
+  // rompería la identidad: pdf.js re-numera los objId por orden de pintado).
+  const moved = !!edit && !edit.remove && (edit.x != null || edit.y != null || edit.width != null || edit.height != null);
+  // TRANSITORIO: durante el drag y el lapso de re-bake (movePending) también se
+  // acepta el crop del snapshot como fallback si no hay píxeles limpios.
   const movePending = !!edit && !edit.remove && (
     (edit.x != null && Math.abs(edit.x - img.x) > 0.7) ||
     (edit.y != null && Math.abs(edit.y - img.y) > 0.7) ||
     (edit.width != null && Math.abs(edit.width - img.width) > 0.7) ||
     (edit.height != null && Math.abs(edit.height - img.height) > 0.7)
   );
-  const ghost = drag != null || movePending;
-  // Píxeles del ghost: PREFERIMOS los reales de la imagen (`cleanPixels`, con
-  // transparencia exacta → sin halo). Solo si no están (máscara / inline image /
-  // aún no resuelta) caemos al crop del snapshot CONGELADO — trae el fondo, pero
-  // es lo único disponible para esos casos.
+  const transient = drag != null || movePending;
+  const ghost = drag != null || moved;
+  // Píxeles del sticker: SIEMPRE los reales (`cleanPixels`, transparencia exacta,
+  // sin halo). El crop del snapshot (con fondo) solo se usa como fallback TRANSITORIO
+  // (mask/inline sin píxeles limpios) — nunca persistente, sería un recorte stale.
   const fs = dragSnap.current;
   const gSnap = fs?.snap ?? snapshot;
   const gL = fs?.origLeft ?? orig.left, gT = fs?.origTop ?? orig.top, gW = fs?.origW ?? orig.width, gH = fs?.origH ?? orig.height;
@@ -1298,7 +1302,7 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
     ? undefined
     : cleanPixels
       ? { backgroundImage: `url(${cleanPixels})`, backgroundSize: '100% 100%' as const }
-      : gSnap && gW > 0 && gH > 0
+      : transient && gSnap && gW > 0 && gH > 0
         ? {
             backgroundImage: `url(${gSnap.url})`,
             backgroundSize: `${(gSnap.width * rect.width) / gW}px ${(gSnap.height * rect.height) / gH}px`,
@@ -1307,6 +1311,14 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
         : undefined;
   // El velo blanco del original ya NO se usa: el LIFT (re-bake sin la imagen)
   // muestra lo que hay detrás mientras se arrastra — sin rectángulo blanco.
+  if (ghost || selected) {
+    console.log('[aldus:img]', img.id, 'drag=', drag != null, 'mp=', movePending, 'ghost=', ghost,
+      'mode=', ghostPixels ? (cleanPixels ? 'clean' : 'snapshotCrop') : 'none',
+      'imgXY=', Math.round(img.x), Math.round(img.y),
+      'editXY=', edit?.x != null ? Math.round(edit.x) : '-', edit?.y != null ? Math.round(edit.y) : '-',
+      'effXY=', Math.round(eff.x), Math.round(eff.y),
+      'rect=', Math.round(rect.left), Math.round(rect.top));
+  }
   return (
     <>
       {selected && !isLocked && !groupMode && (
@@ -1318,7 +1330,7 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
         />
       )}
       <div
-        className={`img-box${selected ? ' selected' : ''}${edit ? ' edited' : ''}${ghost ? ' ghost' : ''}${isLocked ? ' locked' : ''}`}
+        className={`img-box${selected ? ' selected' : ''}${edit ? ' edited' : ''}${ghost ? ' ghost' : ''}${transient ? ' dragging' : ''}${isLocked ? ' locked' : ''}`}
         style={{
           left: rect.left,
           top: rect.top,

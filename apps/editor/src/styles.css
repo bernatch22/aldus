@@ -128,9 +128,11 @@ textarea.seg-textarea {
 .img-box.selected { outline-color: var(--accent); cursor: move; }
 .img-box.edited { outline-color: transparent; }
 .img-box.edited.selected { outline-color: var(--accent); }
-/* El ghost lleva la IMAGEN recortada como background-image inline — nada de
-   `background` shorthand acá (resetearía la imagen). Solo el marco. */
-.img-box.ghost { outline: 2px dashed var(--edited); background-repeat: no-repeat; }
+/* El sticker de una imagen movida lleva sus píxeles limpios como background-image
+   inline (nada de `background` shorthand acá — resetearía la imagen). El marco
+   punteado SOLO mientras se arrastra (.dragging); persistente sería ruido visual. */
+.img-box.ghost { background-repeat: no-repeat; }
+.img-box.ghost.dragging { outline: 2px dashed var(--edited); }
 .ghost-label { position: absolute; top: -18px; left: 0; font-size: 10px; color: var(--edited); white-space: nowrap; }
 .img-removed { position: absolute; outline: 2px dashed var(--danger); background: color-mix(in srgb, var(--danger) 7%, transparent); cursor: pointer; }
 .img-removed.selected { outline-color: var(--accent); }

@@ -502,8 +502,13 @@ export async function bakeSegmentEdits(
         continue;
       }
 
-      // La matriz emitida es RELATIVA al CTM vigente en el Do (el q/cm original
-      // sigue en el stream alrededor del reemplazo).
+      // MOVER/ESCALAR EN SU LUGAR: reemplazar el Do original por uno con la
+      // matriz nueva, en el MISMO punto del stream (z-order y orden de pintado
+      // intactos). NO reordenar: pdf.js numera los objIds por orden de pintado,
+      // así que mover el Do al frente le cambiaría el objId → la identidad de la
+      // imagen saltaría a otra al re-extraer. El editor mantiene la imagen movida
+      // VISIBLE con un sticker de píxeles limpios ARRIBA (overlay), no tocando el
+      // stream. La matriz emitida es RELATIVA al CTM vigente en el Do.
       const inv = invert(op.matrix);
       if (!inv) {
         warnings.push(`${edit.imageId}: matriz degenerada — sin cambios`);

@@ -4,26 +4,30 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
-### fix(editor): mover imagen BIEN — píxeles reales + lift (como el texto)
-La causa raíz del "otro pedazo de imagen quedado arriba": el ghost recortaba la región de
-la imagen del **snapshot de la página**, que trae el FONDO detrás (la imagen grande). En
-las zonas transparentes de un PNG ese fondo se colaba → un rectángulo pegado. Y para tapar
-el original se usaba un **velo blanco** (el "queda el fondo blanco"). Dos síntomas, una
-arquitectura equivocada. Solución en dos piezas, la correcta:
+### fix(editor): mover imagen BIEN — píxeles reales + lift + sticker in-place
+Saga de varios intentos; la causa raíz final resultó ser de z-order/identidad. Piezas:
 1. **Píxeles REALES de la imagen** (`imagePixels.ts`): se sacan de `page.objs` de pdf.js
    (bitmap o data RGBA/RGB/GRAY→canvas→dataURL PNG, con transparencia exacta), cacheados
-   por documento. El ghost los usa directo (`background-size:100% 100%`) → sin halo. El
-   `objId` de cada `paintImageXObject` se captura en el core (`ImageNode.objId`). Fallback
-   al crop del snapshot solo para máscaras / inline images.
-2. **LIFT para imágenes** (reusa el del texto): al arrastrar, se re-hornea la página SIN
-   esa imagen (`bakePending(_, imgNode)` → remove) y se blitea → el canvas muestra lo que
-   hay detrás, **sin velo blanco**. Al soltar, el lift se sostiene hasta que el preview
-   re-horneado (imagen en su nuevo lugar) aterriza; `movePending` cubre el destino con el
-   ghost limpio en ese lapso. `ImageBox` ahora dispara `onDragging` como `SegmentBox`.
-Resultado: mover una imagen es idéntico al texto — sin blanco, sin halo, sin fragmento,
-sin perderse. Archivos: `core/model.ts`, `core/extractGraph.ts` (objId),
-`editor/imagePixels.ts` (nuevo), `editor/PdfCanvas.tsx`, `editor/NodeOverlay.tsx`,
-`pages/EditorPage.tsx` (lift de imagen).
+   por documento. Matan el "pedazo pegado" (antes el ghost recortaba el snapshot y traía el
+   FONDO en las zonas transparentes del PNG). `objId` capturado en core (`ImageNode.objId`).
+2. **LIFT para imágenes** (reusa el del texto): al arrastrar, se re-hornea la página SIN esa
+   imagen y se blitea → el canvas muestra lo de atrás, **sin velo blanco**. Guard clave:
+   solo se prepara el lift si la imagen NO tiene ya edición (`!imageEdits.has`) — sin él, al
+   soltar (imageEdits cambia) se horneaba un lift COMPETIDOR que se bliteaba encima del
+   preview → la imagen se esfumaba.
+3. **Reubicar EN SU LUGAR + sticker persistente** (la clave del z-order): el bake mueve el
+   `Do` en su punto del stream (NO al frente). Reordenar al frente lo arreglaba visualmente
+   pero **rompía la identidad**: pdf.js numera los `objId` por orden de pintado, así que
+   mover el `Do` al final le cambia el objId → al re-extraer la edición saltaba a OTRA imagen
+   ("dos objetos", "cambia de tamaño"). En su lugar preserva la identidad, pero puede dejar la
+   imagen tapada por contenido dibujado después → el overlay la mantiene visible con un
+   **sticker de sus píxeles limpios ARRIBA** (z-index alto) de forma persistente, sin tocar el
+   stream. IDs de imagen ahora estables por `objId` (`extractGraph`), no por índice.
+Resultado en el editor: mover una imagen queda visible donde se suelta, misma identidad, sin
+blanco/halo/fragmento/duplicado. (Pendiente aparte: en el PDF GUARDADO la imagen queda en su
+z-order original; si se necesita siempre al frente al guardar, es un cambio del save.)
+Archivos: `core/model.ts`, `core/extractGraph.ts`, `core/bake/bake.ts`, `editor/imagePixels.ts`
+(nuevo), `editor/PdfCanvas.tsx`, `editor/NodeOverlay.tsx`, `pages/EditorPage.tsx`.
 
 ### fix(editor): mover imagen — sin "pedazo" pegado; ghost solo durante el arrastre
 El ghost recorta la región de la imagen del snapshot de la página, que incluye el FONDO

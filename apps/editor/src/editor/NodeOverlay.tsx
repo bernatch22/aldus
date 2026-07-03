@@ -1266,11 +1266,15 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
   // (el img extraído sigue en la posición vieja). Sin esto, al soltar la
   // imagen desaparecía (ghost off + canvas viejo) hasta el re-bake — "se
   // pierde". Mantenemos los píxeles del ghost sobre el destino en ese lapso.
+  // TOLERANCIA, no igualdad exacta: el bake apunta a x, pero pdf.js re-extrae
+  // con diferencia sub-pixel (436.0 vs 436.1) → con `!==` movePending quedaba
+  // PEGADO en true, el ghost seguía vivo, recortaba la posición vieja (ya
+  // vacía en el snapshot nuevo) = BLANCO, y tapaba la imagen real → "se perdía".
   const movePending = !!edit && (
-    (edit.x != null && edit.x !== round1(img.x)) ||
-    (edit.y != null && edit.y !== round1(img.y)) ||
-    (edit.width != null && edit.width !== round1(img.width)) ||
-    (edit.height != null && edit.height !== round1(img.height))
+    (edit.x != null && Math.abs(edit.x - img.x) > 0.7) ||
+    (edit.y != null && Math.abs(edit.y - img.y) > 0.7) ||
+    (edit.width != null && Math.abs(edit.width - img.width) > 0.7) ||
+    (edit.height != null && Math.abs(edit.height - img.height) > 0.7)
   );
   // SOLO durante el drag O el move pendiente: píxeles reales viajando + máscara
   // del origen. Una imagen casi full-page NO puede enmascararse (taparía el
@@ -1286,7 +1290,6 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
       }
     : undefined;
   const maskOriginal = ghost && canMask;
-  if (ghost) console.log('[aldus:img]', img.id, 'drag=', drag != null, 'movePending=', movePending, 'ghostPixels=', ghostPixels ? 'SÍ' : 'NO(veil vacío)', 'canMask=', canMask, 'snap=', snapshot ? `${snapshot.width}x${snapshot.height}` : 'null', 'orig=', Math.round(orig.left), Math.round(orig.top), Math.round(orig.width), 'rect=', Math.round(rect.left), Math.round(rect.top), 'bgPos=', ghostPixels?.backgroundPosition, 'bgSize=', ghostPixels?.backgroundSize);
   return (
     <>
       {maskOriginal && (

@@ -4,6 +4,21 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### feat(editor+core): viñetas SOLO en la selección + SUBRAYADO + familia en la barra + esquema con seleccionado primero
+- **Toggle de lista por selección**: opera solo sobre las líneas alcanzadas por la
+  selección del textarea (expandida a límites de línea; sin selección = la línea del
+  caret) — ya no marca TODO el nodo. Regla de mezcla estándar intacta.
+- **Subrayado (U)** end-to-end: `StyledRun.underline` en el modelo, toggle en barra +
+  Cmd+U + evento al layer, backdrop con `text-decoration`, y en el BAKE la línea se
+  DIBUJA (rect fino y=−0.11em, alto 0.055em, color del tramo) — el PDF no tiene
+  underline como atributo. `StyledRun.w` (ancho medido por el editor) para el ancho de
+  la línea; en el path de fuente estándar, `widthOfTextAtSize` de pdf-lib.
+- **Familia tipográfica en la barra flotante** (Original/Sans/Serif/Mono → `edit.font`),
+  además del panel.
+- **Esquema (sidebar)**: el nodo seleccionado va PRIMERO en su sección y resaltado
+  (active); el esquema ahora también se muestra DEBAJO de las propiedades cuando hay
+  selección (antes desaparecía).
+
 ### feat(editor+core): un grafo PUEDE tener BREAKLINES — Enter = \n real dentro del mismo nodo
 Pregunta correcta del usuario: "¿un grafo no puede tener breakline?" — sí puede (el PDF
 soporta bloques multilínea). Se elimina TODA la maquinaria de crear-segmentos en Enter:

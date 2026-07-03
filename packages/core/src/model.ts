@@ -200,10 +200,15 @@ export interface StyledRun {
   text: string;
   bold: boolean;
   italic: boolean;
+  /** Subrayado (el PDF no lo tiene como atributo: el bake dibuja la línea). */
+  underline?: boolean;
   /** Color hex (#rrggbb) del tramo. Ausente = el del segmento/original. */
   color?: string;
   /** Offset horizontal (pt) desde el origen del segmento, medido en el editor. */
   dx: number;
+  /** Ancho medido (pt) del tramo — lo setea el editor; el bake lo usa para el
+   *  subrayado. Ausente = desconocido. */
+  w?: number;
 }
 
 /** Una edición pendiente sobre un segmento (lo que el server persiste y, en la

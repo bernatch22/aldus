@@ -131,33 +131,14 @@ export function Inspector(props: Props) {
     </Section>
   );
 
-  if (wid) return (
-    <Panel>
-      <Header title={wid.fieldName || 'Campo'} subtitle={WIDGET_TYPE_LABEL[wid.widgetType]} onClose={() => onSelect(null)} />
-      <WidgetProps widget={wid} edit={widgetEdits.get(wid.id) ?? null} onWidgetEdit={props.onWidgetEdit} onDocOp={props.onDocOp} />
-      {lockRow(wid.id)}
-    </Panel>
-  );
-  if (img) return (
-    <Panel>
-      <Header title="Imagen" subtitle={`${Math.round(img.width)}×${Math.round(img.height)} pt`} onClose={() => onSelect(null)} />
-      <ImageProps img={img} edit={imageEdits.get(img.id) ?? null} onImageEdit={props.onImageEdit} />
-      {lockRow(img.id)}
-    </Panel>
-  );
-  if (seg) return (
-    <Panel>
-      <Header title="Texto" subtitle={`${n1(seg.fontSize)} pt`} onClose={() => onSelect(null)} />
-      <TextProps seg={seg} edit={edits.get(seg.id) ?? null} onEdit={props.onEdit} />
-      {lockRow(seg.id)}
-    </Panel>
-  );
-
-  // ── esquema de la página (sin selección) ──
-  // Los nodos BLOQUEADOS van primero dentro de cada sección (para verlos de
-  // una); el sort es estable → el resto conserva su orden natural.
+  // ── esquema de la página (siempre visible: solo, o debajo de las props) ──
+  // El nodo SELECCIONADO va primero (y resaltado); después los BLOQUEADOS;
+  // el sort es estable → el resto conserva su orden natural.
   const lockFirst = <T,>(items: T[], idOf: (t: T) => string): T[] =>
-    [...items].sort((a, b) => (locked.has(idOf(a)) ? 0 : 1) - (locked.has(idOf(b)) ? 0 : 1));
+    [...items].sort((a, b) => {
+      const rank = (t: T) => (idOf(t) === selectedId ? 0 : locked.has(idOf(t)) ? 1 : 2);
+      return rank(a) - rank(b);
+    });
   const segsInOrder = graph.lines.flatMap(l => l.segments);
 
   // Secciones ordenadas por CANTIDAD ascendente: las de pocos componentes
@@ -181,6 +162,7 @@ export function Inspector(props: Props) {
       <Section title={`Imágenes (${graph.images.length})`}>
         {lockFirst(graph.images, im => im.id).map(im => (
           <OutlineItem key={im.id} icon={<ImageIcon size={14} />} onClick={() => onSelect(im.id)}
+            active={selectedId === im.id}
             edited={imageEdits.has(im.id)}
             lockable={{ locked: locked.has(im.id), onToggle: () => onToggleLock(im.id) }}
             label={`${Math.round(im.width)}×${Math.round(im.height)} pt${imageEdits.get(im.id)?.remove ? ' · eliminada' : ''}`}
@@ -195,6 +177,7 @@ export function Inspector(props: Props) {
       <Section title={`Campos (${graph.widgets.length})`}>
         {lockFirst(graph.widgets, w => w.id).map(w => (
           <OutlineItem key={w.id} icon={<TextCursorInput size={14} />} onClick={() => onSelect(w.id)}
+            active={selectedId === w.id}
             edited={widgetEdits.has(w.id)}
             lockable={{ locked: locked.has(w.id), onToggle: () => onToggleLock(w.id) }}
             label={w.fieldName || '(sin nombre)'} meta={`${WIDGET_TYPE_LABEL[w.widgetType]} · x ${n1(w.x)} · y ${n1(w.y)}`} />
@@ -208,6 +191,7 @@ export function Inspector(props: Props) {
       <Section title={`Texto (${graph.segments.length})`}>
         {lockFirst(segsInOrder, s => s.id).map(s => (
           <OutlineItem key={s.id} icon={<Type size={14} />} onClick={() => onSelect(s.id)} edited={edits.has(s.id)}
+            active={selectedId === s.id}
             lockable={{ locked: locked.has(s.id), onToggle: () => onToggleLock(s.id) }}
             label={<StyledPreview seg={s} edit={edits.get(s.id) ?? null} />} meta={`x ${n1(s.x)} · y ${n1(s.baseline)} · ${n1(s.fontSize)} pt`} />
         ))}
@@ -215,11 +199,37 @@ export function Inspector(props: Props) {
     ),
   });
   sections.sort((a, b) => a.count - b.count);
+  const outline = <>{sections.map(s => <Fragment key={s.key}>{s.node}</Fragment>)}</>;
+
+  if (wid) return (
+    <Panel>
+      <Header title={wid.fieldName || 'Campo'} subtitle={WIDGET_TYPE_LABEL[wid.widgetType]} onClose={() => onSelect(null)} />
+      <WidgetProps widget={wid} edit={widgetEdits.get(wid.id) ?? null} onWidgetEdit={props.onWidgetEdit} onDocOp={props.onDocOp} />
+      {lockRow(wid.id)}
+      {outline}
+    </Panel>
+  );
+  if (img) return (
+    <Panel>
+      <Header title="Imagen" subtitle={`${Math.round(img.width)}×${Math.round(img.height)} pt`} onClose={() => onSelect(null)} />
+      <ImageProps img={img} edit={imageEdits.get(img.id) ?? null} onImageEdit={props.onImageEdit} />
+      {lockRow(img.id)}
+      {outline}
+    </Panel>
+  );
+  if (seg) return (
+    <Panel>
+      <Header title="Texto" subtitle={`${n1(seg.fontSize)} pt`} onClose={() => onSelect(null)} />
+      <TextProps seg={seg} edit={edits.get(seg.id) ?? null} onEdit={props.onEdit} />
+      {lockRow(seg.id)}
+      {outline}
+    </Panel>
+  );
 
   return (
     <Panel>
       <Header title={`Página ${graph.page}`} subtitle={`${graph.width.toFixed(0)}×${graph.height.toFixed(0)} pt`} />
-      {sections.map(s => <Fragment key={s.key}>{s.node}</Fragment>)}
+      {outline}
     </Panel>
   );
 }

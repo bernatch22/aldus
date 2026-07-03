@@ -46,7 +46,7 @@ import {
   type WidgetNode,
   type WidgetPatch,
 } from '@aldus/core';
-import { AlignLeft, AlignCenter, AlignRight, Bold, Italic, Highlighter, Link2, List, Trash2, SendToBack, BringToFront } from 'lucide-react';
+import { AlignLeft, AlignCenter, AlignRight, Bold, Italic, Underline, Highlighter, Link2, List, Trash2, SendToBack, BringToFront } from 'lucide-react';
 import {
   activeEditingBox,
   bucketFallback,
@@ -193,7 +193,7 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
   const styled: StyledRun[] = edit?.runs ?? originalStyledRuns(seg);
   // Con el editor abierto, B/I reflejan el estilo BAJO LA SELECCIÓN (no el del
   // segmento entero) y el toggle aplica solo a esa parte.
-  const [selSty, setSelSty] = useState<{ bold: boolean; italic: boolean } | null>(null);
+  const [selSty, setSelSty] = useState<{ bold: boolean; italic: boolean; underline?: boolean } | null>(null);
   useEffect(() => {
     const update = () => {
       const el = activeEditingBox();
@@ -211,7 +211,8 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
   }, [seg, edit]);
   const allBold = selSty ? selSty.bold : styled.length > 0 && styled.every(r => r.bold);
   const allItalic = selSty ? selSty.italic : styled.length > 0 && styled.every(r => r.italic);
-  const toggle = (key: 'bold' | 'italic') => {
+  const allUnderline = selSty ? !!selSty.underline : styled.length > 0 && styled.every(r => !!r.underline);
+  const toggle = (key: 'bold' | 'italic' | 'underline') => {
     const el = activeEditingBox();
     if (el) {
       // dispatchEvent es SÍNCRONO: el layer ya mutó los runs — refrescar el
@@ -222,7 +223,7 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
       }
       return;
     }
-    const next = key === 'bold' ? !allBold : !allItalic;
+    const next = key === 'bold' ? !allBold : key === 'italic' ? !allItalic : !allUnderline;
     onPatch({ runs: styled.map(r => ({ ...r, [key]: next })) });
   };
   const eff = effectiveGeometry(seg, edit);
@@ -278,7 +279,22 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
     <FloatingWrap rect={rect}>
       <FbBtn label="Negrita" onClick={() => toggle('bold')} active={allBold}><Bold size={14} /></FbBtn>
       <FbBtn label="Itálica" onClick={() => toggle('italic')} active={allItalic}><Italic size={14} /></FbBtn>
+      <FbBtn label="Subrayado" onClick={() => toggle('underline')} active={allUnderline}><Underline size={14} /></FbBtn>
       <FbBtn label="Lista con viñeta (Enter en edición agrega el siguiente ítem)" onClick={toggleList} active={isList}><List size={14} /></FbBtn>
+      <select
+        className="fb-input"
+        style={{ width: 76 }}
+        title="Familia tipográfica"
+        value={edit?.font ?? 'original'}
+        onMouseDown={e => e.stopPropagation()}
+        onClick={e => e.stopPropagation()}
+        onChange={e => onPatch({ font: e.target.value === 'original' ? null : (e.target.value as FontBucket) })}
+      >
+        <option value="original">Original</option>
+        <option value="sans">Sans</option>
+        <option value="serif">Serif</option>
+        <option value="mono">Mono</option>
+      </select>
       <input
         className="fb-input"
         type="number"
@@ -385,16 +401,16 @@ let liveEditRuns: StyledRun[] | null = null;
 
 /** Estilo uniforme del rango [start,end) sobre los runs (caret colapsado →
  *  el carácter anterior, la convención de todo editor). */
-function styleAtRange(runs: StyledRun[], start: number, end: number): { bold: boolean; italic: boolean } | null {
+function styleAtRange(runs: StyledRun[], start: number, end: number): { bold: boolean; italic: boolean; underline: boolean } | null {
   if (end <= start) { start = Math.max(0, start - 1); end = start + 1; }
-  let pos = 0, any = false, bold = true, italic = true;
+  let pos = 0, any = false, bold = true, italic = true, underline = true;
   for (const r of runs) {
     const a = Math.max(start, pos);
     const b = Math.min(end, pos + r.text.length);
-    if (b > a) { any = true; bold = bold && r.bold; italic = italic && r.italic; }
+    if (b > a) { any = true; bold = bold && r.bold; italic = italic && r.italic; underline = underline && !!r.underline; }
     pos += r.text.length;
   }
-  return any ? { bold, italic } : null;
+  return any ? { bold, italic, underline } : null;
 }
 
 /** Renumera los bloques NUMERADOS contiguos ("1. 3. 3." → "1. 2. 3."): acá el
@@ -447,6 +463,7 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       const st: string[] = [];
       if (r.bold) st.push('text-shadow:0.02em 0 0 currentColor,-0.02em 0 0 currentColor');
       if (r.italic) st.push('font-style:italic');
+      if (r.underline) st.push('text-decoration:underline');
       if (r.color) st.push(`color:${r.color}`);
       return `<span${st.length ? ` style="${st.join(';')}"` : ''}>${escHtml(r.text)}</span>`;
     }).join('') || '&#8203;';
@@ -500,10 +517,11 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
     const ratio = (s.edit?.fontSize ?? s.seg.fontSize) / s.seg.fontSize;
     let acc = 0;
     runs = runs.map(r => {
-      const piece = { ...r, dx: round1(acc) };
       const w = (t: string) => measureWidth(t, measureFontFor(s.seg, r, ratio));
       const nl = r.text.lastIndexOf('\n');
-      acc = nl >= 0 ? w(r.text.slice(nl + 1)) : acc + w(r.text);
+      const own = nl >= 0 ? w(r.text.slice(nl + 1)) : w(r.text);
+      const piece = { ...r, dx: round1(acc), w: round1(own) };
+      acc = nl >= 0 ? own : acc + own;
       return piece;
     });
     // Viñeta colgante aplicada EN VIVO: consolidar el corrimiento de x.
@@ -645,20 +663,20 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
         ta.blur();
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && (e.key === 'b' || e.key === 'i')) {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'b' || e.key === 'i' || e.key === 'u')) {
         e.preventDefault();
         const { selectionStart, selectionEnd } = ta;
         const [from, to] = selectionStart === selectionEnd
           ? wordRangeAt(ta.value, selectionStart)
           : [selectionStart, selectionEnd];
-        s.runs = toggleStyleRange(s.runs, from, to, e.key === 'b' ? 'bold' : 'italic');
+        s.runs = toggleStyleRange(s.runs, from, to, e.key === 'b' ? 'bold' : e.key === 'i' ? 'italic' : 'underline');
         refresh();
       }
     };
     const onStyle = (ev: Event) => {
       const s = sessionRef.current;
       if (!s) return;
-      const detail = (ev as CustomEvent<{ key?: 'bold' | 'italic' | 'color' | 'list'; color?: string }>).detail;
+      const detail = (ev as CustomEvent<{ key?: 'bold' | 'italic' | 'underline' | 'color' | 'list'; color?: string }>).detail;
       const selectionStart = ta.selectionStart;
       const selectionEnd = ta.selectionEnd;
       // Caret colapsado: aplicar a la PALABRA bajo el caret (consistente con
@@ -666,7 +684,7 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
       const [from, to] = selectionStart === selectionEnd
         ? wordRangeAt(ta.value, selectionStart)
         : [selectionStart, selectionEnd];
-      if (detail?.key === 'bold' || detail?.key === 'italic') {
+      if (detail?.key === 'bold' || detail?.key === 'italic' || detail?.key === 'underline') {
         s.runs = toggleStyleRange(s.runs, from, to, detail.key);
         refresh();
       } else if (detail?.key === 'color' && detail.color) {
@@ -682,21 +700,30 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
         const before = ta.selectionStart;
         const marker = `${String.fromCharCode(0x2022)}${LIST_GAP}`;
         const stripRe = /^(\s*)(?:[•·▪‣*-]|\d{1,3}[.)]|[a-zA-Z][.)])(\s*)/;
-        const lines = ta.value.split('\n');
+        // SOLO las líneas alcanzadas por la SELECCIÓN (expandida a límites de
+        // línea) — no todo el nodo. Sin selección: la línea del caret.
+        const selA = ta.selectionStart;
+        const selB = ta.selectionEnd;
+        const blockStart = ta.value.lastIndexOf('\n', selA - 1) + 1;
+        let blockEnd = ta.value.indexOf('\n', selB);
+        if (blockEnd < 0) blockEnd = ta.value.length;
+        const head = ta.value.slice(0, blockStart);
+        const tail = ta.value.slice(blockEnd);
+        const lines = ta.value.slice(blockStart, blockEnd).split('\n');
         const content = (l: string) => l.trim() !== '';
         const removing = lines.filter(content).length > 0 && lines.filter(content).every(l => hasListMarker(l));
-        const firstHad = hasListMarker(lines[0] ?? '');
+        const firstHad = hasListMarker(ta.value.split('\n')[0] ?? '');
         const out = lines.map(l => {
           if (removing) return l.replace(stripRe, '');
           return !content(l) || hasListMarker(l) ? l : marker + l;
         });
-        ta.value = out.join('\n');
+        ta.value = head + out.join('\n') + tail;
         // caret: best-effort, corrido por el delta del marcador.
         const delta = removing ? -marker.length : marker.length;
         const pos = Math.max(0, Math.min(ta.value.length, before + delta));
         ta.setSelectionRange(pos, pos);
-        // ancla colgante según la 1.ª línea.
-        const firstHas = hasListMarker(out[0] ?? '');
+        // ancla colgante según la 1.ª línea del NODO.
+        const firstHas = hasListMarker(ta.value.split('\n')[0] ?? '');
         if (firstHad !== firstHas) {
           const mw = measureWidth(marker, s.fontCss) + (marker.match(/ /g) ?? []).length * s.ws + marker.length * s.ls;
           const dir = firstHas ? -1 : 1;

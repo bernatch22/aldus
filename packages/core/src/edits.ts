@@ -60,7 +60,7 @@ export function originalStyledRuns(seg: SegmentNode): StyledRun[] {
 export function styledRunsEqual(a: StyledRun[], b: StyledRun[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
-    if (a[i].text !== b[i].text || a[i].bold !== b[i].bold || a[i].italic !== b[i].italic || a[i].color !== b[i].color) return false;
+    if (a[i].text !== b[i].text || a[i].bold !== b[i].bold || a[i].italic !== b[i].italic || a[i].color !== b[i].color || !!a[i].underline !== !!b[i].underline) return false;
   }
   return true;
 }
@@ -185,7 +185,7 @@ function splitAt(runs: StyledRun[], start: number, end: number): Array<{ run: St
   return pieces;
 }
 
-const sameStyle = (a: StyledRun, b: StyledRun) => a.bold === b.bold && a.italic === b.italic && a.color === b.color;
+const sameStyle = (a: StyledRun, b: StyledRun) => a.bold === b.bold && a.italic === b.italic && a.color === b.color && !!a.underline === !!b.underline;
 
 function mergeAdjacent(pieces: StyledRun[], firstDx: number): StyledRun[] {
   const out: StyledRun[] = [];
@@ -202,7 +202,7 @@ export function toggleStyleRange(
   runs: StyledRun[],
   start: number,
   end: number,
-  key: 'bold' | 'italic',
+  key: 'bold' | 'italic' | 'underline',
 ): StyledRun[] {
   if (end <= start) return runs;
   const pieces = splitAt(runs, start, end);

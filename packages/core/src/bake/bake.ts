@@ -329,6 +329,8 @@ interface FallbackDraw {
   italic: boolean;
   /** Color del texto (0..1). Ausente = negro. */
   color?: { r: number; g: number; b: number };
+  /** Subrayado: se dibuja como línea bajo el texto. */
+  underline?: boolean;
 }
 
 /** Widgets AcroForm: viven en /Annots, no en el content stream — mover/escalar
@@ -604,6 +606,20 @@ export async function bakeSegmentEdits(
           : null;
         if (inlineBlock) {
           inlineBlocks.push(inlineBlock);
+          // SUBRAYADO: el PDF no lo tiene como atributo — se dibuja la línea
+          // (rect fino) bajo el tramo, al final del stream (CTM identidad →
+          // coords absolutas). Ancho medido por el editor (sr.w).
+          if (sr.underline && sr.w) {
+            const size = edit.fontSize ?? edit.original.fontSize;
+            const c = sr.color
+              ? hexToRgbObj(sr.color)
+              : edit.color
+                ? hexToRgbObj(edit.color)
+                : rawFillToRgb((ops.find(o => o.fontName === fontName) ?? firstOp)?.fillColorRaw) ?? { r: 0, g: 0, b: 0 };
+            appendBlocks.push(
+              `q ${fmt(c.r)} ${fmt(c.g)} ${fmt(c.b)} rg ${fmt(x)} ${fmt(lineBase - size * 0.11)} ${fmt(sr.w * ratio)} ${fmt(size * 0.055)} re f Q`,
+            );
+          }
         } else {
           if (!/^\s+$/.test(sr.text)) {
             // Preservar el COLOR original (del op) salvo override explícito —
@@ -624,6 +640,7 @@ export async function bakeSegmentEdits(
               bold: sr.bold,
               italic: sr.italic,
               color: color ?? undefined,
+              underline: sr.underline,
             });
           }
           substituted++;
@@ -655,8 +672,14 @@ export async function bakeSegmentEdits(
       }
       const page = pages[d.page - 1];
       const color = d.color ? rgb(d.color.r, d.color.g, d.color.b) : rgb(0, 0, 0);
+      const drawUnderline = () => {
+        if (!d.underline || !font) return;
+        const w = font.widthOfTextAtSize(d.text, d.size);
+        page.drawRectangle({ x: d.x, y: d.y - d.size * 0.11, width: w, height: d.size * 0.055, color });
+      };
       try {
         page.drawText(d.text, { x: d.x, y: d.y, size: d.size, font, color });
+        drawUnderline();
       } catch {
         // Caracteres fuera de WinAnsi: filtrarlos e informar (nunca romper el PDF).
         const clean = [...d.text].filter(c => c.charCodeAt(0) <= 0xff).join('');

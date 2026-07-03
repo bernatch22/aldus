@@ -110,7 +110,8 @@ export function styledSpanStyle(seg: SegmentNode, sr: { bold: boolean; italic: b
   const style = exact ? (synthItalic ? 'font-style:italic;' : '') : `font-style:${sr.italic ? 'italic' : 'normal'};`;
   const colorVal = sr.color ?? base.color;
   const color = colorVal ? `color:${colorVal};` : '';
-  return `font-family:${fam};font-size:${(base.fontSize * sizeRatio * scale).toFixed(2)}px;${color}${weight}${style}`;
+  const deco = (sr as { underline?: boolean }).underline ? 'text-decoration:underline;' : '';
+  return `font-family:${fam};font-size:${(base.fontSize * sizeRatio * scale).toFixed(2)}px;${color}${weight}${style}${deco}`;
 }
 
 /** Font shorthand para MEDIR un tramo (en pt: tamaño original × ratio). */

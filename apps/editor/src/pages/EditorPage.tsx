@@ -141,17 +141,17 @@ export function EditorPage() {
     });
   }, [graph, id]);
 
-  // ── ÁREA de texto por segmento (pt): el grip AMPLÍA el área tipeable de la
-  //    línea (no escala la letra) — espacio para escribir sin salto. Solo
-  //    afordance del editor (el PDF no tiene "cajas"); persiste por documento. ──
-  const [areaWidths, setAreaWidths] = useState<Map<string, number>>(() => {
-    try { return new Map(Object.entries(JSON.parse(localStorage.getItem(`aldus-areas-${id}`) || '{}') as Record<string, number>)); }
+  // ── ÁREA de texto por segmento (pt): el grip AMPLÍA el área tipeable (ancho
+  //    Y alto — el PDF no tiene "cajas"; es afordance del editor). Persiste por
+  //    documento. {w?,h?} en pt. ──
+  const [areaWidths, setAreaWidths] = useState<Map<string, { w?: number; h?: number }>>(() => {
+    try { return new Map(Object.entries(JSON.parse(localStorage.getItem(`aldus-areas-${id}`) || '{}') as Record<string, { w?: number; h?: number }>)); }
     catch { return new Map(); }
   });
-  const onAreaWidth = useCallback((segId: string, w: number | null) => {
+  const onAreaWidth = useCallback((segId: string, area: { w?: number; h?: number } | null) => {
     setAreaWidths(prev => {
       const next = new Map(prev);
-      if (w == null) next.delete(segId); else next.set(segId, w);
+      if (area == null || (area.w == null && area.h == null)) next.delete(segId); else next.set(segId, area);
       localStorage.setItem(`aldus-areas-${id}`, JSON.stringify(Object.fromEntries(next)));
       return next;
     });
@@ -221,11 +221,21 @@ export function EditorPage() {
   // ── INSERTAR: paleta → modo colocación → click en la página crea el nodo. ──
   const [placing, setPlacing] = useState<Placing>(null);
   const imageFileRef = useRef<HTMLInputElement>(null);
+  // Texto insertado desde la paleta: se le da un ÁREA por defecto generosa
+  // (ancho + alto) para que no nazca "cojo" — se aplica cuando el segmento
+  // nuevo aparece en el grafo (match por posición).
+  const pendingTextAreaRef = useRef<{ x: number; y: number; area: { w: number; h: number } } | null>(null);
   const onPlace = useCallback((x: number, y: number) => {
     if (!placing) return;
     const p = placing;
     setPlacing(null);
     setError('');
+    // Un tamaño mínimo cómodo para el texto nuevo (más grande que el default de
+    // página si éste es chico) — evita el nodo diminuto.
+    const size = p.kind === 'text' ? Math.max(pageTextStyle.size, 13) : pageTextStyle.size;
+    if (p.kind === 'text') {
+      pendingTextAreaRef.current = { x: r1(x), y: r1(y), area: { w: 240, h: Math.round(size * 1.2 * 2) } };
+    }
     const run = p.kind === 'field'
       ? api.createField(id, { type: p.type, page: pageNum, x: r1(x), y: r1(y - FIELD_DEFAULT_SIZE[p.type].height) })
       : p.kind === 'image'
@@ -233,11 +243,11 @@ export function EditorPage() {
         : api.docOp(id, 'addText', {
             page: pageNum, x: r1(x), y: r1(y),
             text: 'Texto nuevo',
-            size: pageTextStyle.size, bucket: pageTextStyle.bucket,
+            size, bucket: pageTextStyle.bucket,
           });
     run
       .then(() => { setDocVersion(v => v + 1); setNotice('Creado — doble click para editar'); })
-      .catch(e => setError(e instanceof Error ? e.message : 'No se pudo crear'));
+      .catch(e => { pendingTextAreaRef.current = null; setError(e instanceof Error ? e.message : 'No se pudo crear'); });
   }, [placing, id, pageNum, pageTextStyle]);
 
   // Enter en una línea → crea el texto de la línea de abajo (el editor sigue
@@ -405,7 +415,18 @@ export function EditorPage() {
       dropPendingRef.current = false;
       setLift(prev => { void prev?.doc.destroy(); return null; });
     }
-  }, []);
+    // Texto recién insertado: aplicarle el área por defecto (match por posición
+    // — el server coloca el baseline cerca del click).
+    const pend = pendingTextAreaRef.current;
+    if (pend) {
+      const seg = g.segments.find(s => Math.abs(s.x - pend.x) < 12 && Math.abs(s.baseline - pend.y) < 20 && s.text === 'Texto nuevo');
+      if (seg) {
+        pendingTextAreaRef.current = null;
+        onAreaWidth(seg.id, pend.area);
+        setSelectedId(seg.id);
+      }
+    }
+  }, [onAreaWidth]);
 
   const onEdit = useCallback((edit: SegmentEdit | { segmentId: string; revert: true }) => {
     pushHistory();

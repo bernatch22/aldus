@@ -128,8 +128,8 @@ interface Props {
       el drop produjo una edición (false = no-op → restaurar el canvas). */
   onDragging: (segId: string, active: boolean, committed?: boolean) => void;
   /** Ancho de ÁREA tipeable por segmento (pt) — el grip la amplía. */
-  areaWidths: Map<string, number>;
-  onAreaWidth: (segId: string, w: number | null) => void;
+  areaWidths: Map<string, { w?: number; h?: number }>;
+  onAreaWidth: (segId: string, area: { w?: number; h?: number } | null) => void;
   /** Hay un editor de texto abierto (se usa para saltear el lift). */
   onEditingChange: (active: boolean) => void;
 }
@@ -805,7 +805,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
       edit,
       scale,
       pageHeight: graph.height,
-      minWidthCss: (areaWidths.get(seg.id) ?? 0) * scale,
+      minWidthCss: (areaWidths.get(seg.id)?.w ?? 0) * scale,
       onPatch: patch => {
         const merged = mergeSegmentEdit(seg, editsRef.current.get(seg.id) ?? null, patch);
         onEdit(merged ?? { segmentId: seg.id, revert: true });
@@ -882,8 +882,8 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           edit={edits.get(seg.id) ?? null}
           isLocked={locked.has(seg.id)}
           onDragging={(active, committed) => onDragging(seg.id, active, committed)}
-          areaWidth={areaWidths.get(seg.id) ?? null}
-          onAreaWidth={w => onAreaWidth(seg.id, w)}
+          area={areaWidths.get(seg.id) ?? null}
+          onArea={a => onAreaWidth(seg.id, a)}
           onSelect={() => selectNode(seg.id)}
           onStartEdit={() => { selectNode(seg.id); openSegEditor(seg); }}
           onPatch={patch => {
@@ -1212,8 +1212,8 @@ interface SegmentBoxProps {
   isLocked: boolean;
   onDragging: (active: boolean, committed?: boolean) => void;
   /** Ancho de área tipeable (pt) fijado por el grip, o null (= ancho natural). */
-  areaWidth: number | null;
-  onAreaWidth: (w: number | null) => void;
+  area: { w?: number; h?: number } | null;
+  onArea: (a: { w?: number; h?: number } | null) => void;
   onSelect: () => void;
   onStartEdit: () => void;
   onPatch: (patch: SegmentPatch) => void;
@@ -1224,14 +1224,14 @@ interface SegmentBoxProps {
   onHighlightColor: (c: string) => void;
 }
 
-function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, isLocked, onDragging, areaWidth, onAreaWidth, onSelect, onStartEdit, onPatch, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: SegmentBoxProps) {
+function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, isLocked, onDragging, area, onArea, onSelect, onStartEdit, onPatch, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: SegmentBoxProps) {
   const eff = effectiveGeometry(seg, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
   const dragStart = useRef<{ px: number; py: number; moved: boolean } | null>(null);
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
-  const gripStart = useRef<number | null>(null);
-  // Ancho de área en vivo mientras se arrastra el grip (px CSS).
-  const [gripW, setGripW] = useState<number | null>(null);
+  const gripStart = useRef<{ px: number; py: number } | null>(null);
+  // Área en vivo (px CSS) mientras se arrastra el grip: ancho Y alto.
+  const [gripSize, setGripSize] = useState<{ w: number; h: number } | null>(null);
 
   // La EDICIÓN vive en el TextEditLayer (singleton imperativo, arriba) — este
   // box solo la solicita (onStartEdit) y se cubre con el layer mientras dura.
@@ -1262,8 +1262,13 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
   // del bake); una sola línea usa el alto natural del segmento.
   const nLines = (edit?.text ?? seg.text).split('\n').length;
   const lineHpx = eff.fontSize * 1.2 * scale;
-  const boxHeight = nLines > 1 ? nLines * lineHpx : rect.height;
+  const contentH = nLines > 1 ? nLines * lineHpx : rect.height;
   const boxLineH = nLines > 1 ? lineHpx : rect.height;
+  // Área tipeable (afordance): el grip la amplía ancho Y ALTO más allá del
+  // contenido. En vivo = gripSize; persistido = area {w,h} (pt).
+  const areaWpx = Math.max(rect.width, area?.w != null ? area.w * scale : 0);
+  const areaHpx = Math.max(contentH, area?.h != null ? area.h * scale : 0);
+  const boxHeight = gripSize?.h ?? areaHpx;
 
   return (
     <>
@@ -1275,9 +1280,9 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
         style={{
           left: rect.left,
           top: rect.top,
-          // El ÁREA tipeable: el grip la amplía más allá del ancho natural del
-          // texto (espacio para escribir en la línea sin que "salte").
-          minWidth: gripW ?? Math.max(rect.width, areaWidth != null ? areaWidth * scale : 0),
+          // El ÁREA tipeable: el grip la amplía más allá del contenido (ancho
+          // y alto — espacio para escribir sin que "salte").
+          minWidth: gripSize?.w ?? areaWpx,
           height: boxHeight,
           lineHeight: `${boxLineH}px`,
           transform: drag ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
@@ -1349,30 +1354,36 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
         {!editing && !isLocked && (
           <div
             className="seg-grip"
-            title="Ampliar el área de texto (la letra no cambia; el tamaño se ajusta en la barra)"
+            title="Ampliar el área de texto (ancho y alto; la letra no cambia)"
             onPointerDown={e => {
               e.preventDefault();
               e.stopPropagation();
               e.currentTarget.setPointerCapture(e.pointerId);
-              gripStart.current = e.clientX;
+              gripStart.current = { px: e.clientX, py: e.clientY };
             }}
             onPointerMove={e => {
-              if (gripStart.current == null) return;
+              if (!gripStart.current) return;
               e.stopPropagation();
-              const from = Math.max(rect.width, areaWidth != null ? areaWidth * scale : 0);
-              setGripW(Math.max(rect.width, from + e.clientX - gripStart.current));
+              setGripSize({
+                w: Math.max(rect.width, areaWpx + e.clientX - gripStart.current.px),
+                h: Math.max(contentH, areaHpx + e.clientY - gripStart.current.py),
+              });
             }}
             onPointerUp={e => {
               e.stopPropagation();
               const start = gripStart.current;
               gripStart.current = null;
-              setGripW(null);
-              if (start == null) return;
-              const from = Math.max(rect.width, areaWidth != null ? areaWidth * scale : 0);
-              const w = Math.max(rect.width, from + e.clientX - start);
+              setGripSize(null);
+              if (!start) return;
+              const w = Math.max(rect.width, areaWpx + e.clientX - start.px);
+              const h = Math.max(contentH, areaHpx + e.clientY - start.py);
               const wPt = round1(w / scale);
-              // Volver al ancho natural (o menos) limpia el área extendida.
-              onAreaWidth(wPt <= round1(eff.width) + 1 ? null : wPt);
+              const hPt = round1(h / scale);
+              // Volver al tamaño natural (o menos) limpia esa dimensión.
+              onArea({
+                w: wPt <= round1(eff.width) + 1 ? undefined : wPt,
+                h: hPt <= round1(contentH / scale) + 1 ? undefined : hPt,
+              });
             }}
             onClick={e => e.stopPropagation()}
             onDoubleClick={e => e.stopPropagation()}

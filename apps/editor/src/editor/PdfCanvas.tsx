@@ -42,8 +42,8 @@ interface Props {
   /** Segmento en arrastre (si coincide con el lift, se blitea su buffer). */
   draggingId: string | null;
   /** Ancho de ÁREA tipeable por segmento (pt) — el grip la amplía. */
-  areaWidths: Map<string, number>;
-  onAreaWidth: (segId: string, w: number | null) => void;
+  areaWidths: Map<string, { w?: number; h?: number }>;
+  onAreaWidth: (segId: string, area: { w?: number; h?: number } | null) => void;
   /** Segmento a abrir en edición apenas exista (ítem de lista recién creado). */
   onEditingChange: (active: boolean) => void;
 }

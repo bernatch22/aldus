@@ -1262,13 +1262,23 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
   // Eliminada: el preview local ya la quitó del render (Ctrl+Z la restaura).
   if (eff.removed) return null;
 
-  // SOLO durante el drag: píxeles reales viajando + máscara del origen. Una
-  // imagen casi full-page NO puede enmascararse (taparía el texto) → ahí el
-  // ghost es solo un marco punteado (sin píxeles = sin duplicado); al soltar,
-  // el preview local renderiza la verdad.
-  const ghost = drag != null;
+  // MOVE PENDIENTE: hay una edición de posición que el canvas AÚN no horneó
+  // (el img extraído sigue en la posición vieja). Sin esto, al soltar la
+  // imagen desaparecía (ghost off + canvas viejo) hasta el re-bake — "se
+  // pierde". Mantenemos los píxeles del ghost sobre el destino en ese lapso.
+  const movePending = !!edit && (
+    (edit.x != null && edit.x !== round1(img.x)) ||
+    (edit.y != null && edit.y !== round1(img.y)) ||
+    (edit.width != null && edit.width !== round1(img.width)) ||
+    (edit.height != null && edit.height !== round1(img.height))
+  );
+  // SOLO durante el drag O el move pendiente: píxeles reales viajando + máscara
+  // del origen. Una imagen casi full-page NO puede enmascararse (taparía el
+  // texto) → ahí el ghost es solo un marco punteado.
+  const ghost = drag != null || movePending;
   const coverage = (img.width * img.height) / (pageWidth * pageHeight);
   const canMask = coverage < 0.8;
+  console.log('[aldus:img]', img.id, 'drag=', drag != null, 'movePending=', movePending, 'ghost=', ghost, 'canMask=', canMask, 'eff=', Math.round(eff.x), Math.round(eff.y), 'img=', Math.round(img.x), Math.round(img.y), 'editX=', edit?.x ?? '-', 'hasSnap=', !!snapshot);
   const ghostPixels = ghost && canMask && snapshot && orig.width > 0 && orig.height > 0
     ? {
         backgroundImage: `url(${snapshot.url})`,
@@ -1298,6 +1308,9 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
           width: gripDelta ? rect.width + gripDelta.dx : rect.width,
           height: gripDelta ? rect.height + gripDelta.dy : rect.height,
           transform: drag ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
+          // Al mover/moverse: AL FRENTE de todo el overlay (no se pierde detrás
+          // de otros nodos ni del canvas).
+          zIndex: ghost ? 36 : undefined,
           ...ghostPixels,
         }}
         title={`Imagen · ${Math.round(eff.width)}×${Math.round(eff.height)} pt`}

@@ -368,8 +368,10 @@ interface EditSession {
   edit: SegmentEdit | null;
   scale: number;
   pageHeight: number;
-  /** min-width extra (px CSS) — el área tipeable ampliada por el grip. */
+  /** min-width / min-height (px CSS) — el área tipeable ampliada por el grip.
+   *  El alto hace que el textarea calce con el mask del box. */
   minWidthCss: number;
+  minHeightCss: number;
   onPatch: (patch: SegmentPatch) => void;
 }
 
@@ -492,7 +494,8 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
     }
     const width = `${Math.max(s.minW, Math.ceil(maxW) + 8)}px`;
     const lineH = lines.length > 1 ? s.lineHN : s.lineH1;
-    const height = `${Math.ceil(lines.length * lineH)}px`;
+    // El alto calza con el mask del box: al menos el área (minHeightCss).
+    const height = `${Math.ceil(Math.max(lines.length * lineH, s.minHeightCss))}px`;
     for (const el of [ta, backdropRef.current, hostRef.current]) {
       if (!el) continue;
       // El HOST también: sus hijos son absolute (sin esto su fondo blanco no
@@ -806,6 +809,7 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
       scale,
       pageHeight: graph.height,
       minWidthCss: (areaWidths.get(seg.id)?.w ?? 0) * scale,
+      minHeightCss: (areaWidths.get(seg.id)?.h ?? 0) * scale,
       onPatch: patch => {
         const merged = mergeSegmentEdit(seg, editsRef.current.get(seg.id) ?? null, patch);
         onEdit(merged ?? { segmentId: seg.id, revert: true });

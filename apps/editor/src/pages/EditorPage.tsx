@@ -232,7 +232,7 @@ export function EditorPage() {
     setError('');
     // Un tamaño mínimo cómodo para el texto nuevo (más grande que el default de
     // página si éste es chico) — evita el nodo diminuto.
-    const size = p.kind === 'text' ? Math.max(pageTextStyle.size, 13) : pageTextStyle.size;
+    const size = p.kind === 'text' ? 12 : pageTextStyle.size;
     if (p.kind === 'text') {
       pendingTextAreaRef.current = { x: r1(x), y: r1(y), area: { w: 240, h: Math.round(size * 1.2 * 2) } };
     }

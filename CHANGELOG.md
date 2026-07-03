@@ -4,6 +4,18 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### fix(editor): mover imagen — sin "pedazo" pegado; ghost solo durante el arrastre
+El ghost recorta la región de la imagen del snapshot de la página, que incluye el FONDO
+que tenía detrás (otra imagen, p. ej. la de fondo full-page). Al mostrar ese recorte en el
+destino —sobre una parte distinta del fondo— el rectángulo con los píxeles viejos no
+coincide y se ve como "otro pedazo de imagen quedado arriba". El snapshot no permite
+separar la imagen de su fondo, así que el ghost persistente post-drop era irreparable.
+Solución: el ghost (con su halo) va **solo durante el arrastre activo** (ahí es un preview
+esperado, siguiendo el cursor); al soltar NO se muestra ghost ni velo — el canvas re-hornea
+y es la única fuente de verdad. Se elimina el estado `movePending` (y su tolerancia). Log de
+debug (`[aldus:img]`, `[aldus:canvas]`) removido tras diagnosticar. Archivos:
+`NodeOverlay.tsx` (ghost = drag activo), `PdfCanvas.tsx` (logs fuera).
+
 ### fix(editor+core): color EXACTO del fantasma — del content stream, no muestreado
 Alternativa definitiva al muestreo de píxeles (siempre aproximado). El BAKE ya matchea
 cada segmento con sus ops del content stream (matchOps por geometría) y esos ops llevan

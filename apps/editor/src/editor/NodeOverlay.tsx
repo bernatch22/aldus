@@ -1266,30 +1266,15 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
   // Eliminada: el preview local ya la quitó del render (Ctrl+Z la restaura).
   if (eff.removed) return null;
 
-  // MOVE PENDIENTE: hay una edición de posición que el canvas AÚN no horneó
-  // (el img extraído sigue en la posición vieja). Sin esto, al soltar la
-  // imagen desaparecía (ghost off + canvas viejo) hasta el re-bake — "se
-  // pierde". Mantenemos los píxeles del ghost sobre el destino en ese lapso.
-  // TOLERANCIA, no igualdad exacta: el bake apunta a x, pero pdf.js re-extrae
-  // con diferencia sub-pixel (436.0 vs 436.1) → con `!==` movePending quedaba
-  // PEGADO en true, el ghost seguía vivo, recortaba la posición vieja (ya
-  // vacía en el snapshot nuevo) = BLANCO, y tapaba la imagen real → "se perdía".
-  const movePending = !!edit && (
-    (edit.x != null && Math.abs(edit.x - img.x) > 0.7) ||
-    (edit.y != null && Math.abs(edit.y - img.y) > 0.7) ||
-    (edit.width != null && Math.abs(edit.width - img.width) > 0.7) ||
-    (edit.height != null && Math.abs(edit.height - img.height) > 0.7)
-  );
-  // SOLO durante el drag O el move pendiente: píxeles reales viajando + máscara
-  // del origen. Una imagen casi full-page NO puede enmascararse (taparía el
-  // texto) → ahí el ghost es solo un marco punteado.
-  const ghost = drag != null || movePending;
+  // Ghost SOLO durante el arrastre ACTIVO (preview siguiendo el cursor). Al
+  // soltar NO se muestra ghost: el canvas re-hornea y es la fuente de verdad.
+  // Recortar del snapshot arrastra el FONDO detrás de la imagen (otra imagen),
+  // que en el destino se ve como un "pedazo" pegado → por eso no persiste.
+  const ghost = drag != null;
   const coverage = (img.width * img.height) / (pageWidth * pageHeight);
   const canMask = coverage < 0.8;
-  // El ghost recorta del snapshot CONGELADO (imagen en su posición original),
-  // con su rect original congelado — nada de leer el snapshot vivo (que ya se
-  // movió) ni el orig actual (que puede haber cambiado). Fallback al vivo si
-  // no hay congelado (primer frame del drag).
+  // El ghost recorta del snapshot CONGELADO al arrancar el drag (imagen en su
+  // lugar), con su rect original.
   const fs = dragSnap.current;
   const gSnap = fs?.snap ?? snapshot;
   const gL = fs?.origLeft ?? orig.left, gT = fs?.origTop ?? orig.top, gW = fs?.origW ?? orig.width, gH = fs?.origH ?? orig.height;
@@ -1300,13 +1285,9 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
         backgroundPosition: `${(-gL * rect.width) / gW}px ${(-gT * rect.height) / gH}px`,
       }
     : undefined;
+  // Velo del origen SOLO mientras se arrastra (tapa la imagen vieja mientras el
+  // ghost viaja). Al soltar se va: el canvas re-horneado muestra la verdad.
   const maskOriginal = ghost && canMask;
-  console.log('[aldus:img]', img.id, 'drag=', drag != null, 'mp=', movePending, 'ghost=', ghost, 'frozen=', !!fs,
-    'imgPDF=', Math.round(img.x), Math.round(img.y),
-    'editPDF=', edit?.x != null ? Math.round(edit.x) : '-', edit?.y != null ? Math.round(edit.y) : '-',
-    'effPDF=', Math.round(eff.x), Math.round(eff.y),
-    'rect=', Math.round(rect.left), Math.round(rect.top),
-    'gOrig=', Math.round(gL), Math.round(gT), 'snapLiveW=', snapshot?.width, 'gSnapW=', gSnap?.width);
   return (
     <>
       {maskOriginal && (
@@ -1344,7 +1325,6 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
           dragStart.current = { px: e.clientX, py: e.clientY, moved: false };
           // Congelar el snapshot + rect original AHORA (imagen en su lugar).
           if (snapshot) dragSnap.current = { snap: snapshot, origLeft: orig.left, origTop: orig.top, origW: orig.width, origH: orig.height };
-          console.log('[aldus:img] POINTERDOWN congelo snap', snapshot ? `${snapshot.width}x${snapshot.height}` : 'null', 'orig=', Math.round(orig.left), Math.round(orig.top));
         }}
         onPointerMove={e => {
           const start = dragStart.current;

@@ -1278,7 +1278,6 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
   const ghost = drag != null || movePending;
   const coverage = (img.width * img.height) / (pageWidth * pageHeight);
   const canMask = coverage < 0.8;
-  console.log('[aldus:img]', img.id, 'drag=', drag != null, 'movePending=', movePending, 'ghost=', ghost, 'canMask=', canMask, 'eff=', Math.round(eff.x), Math.round(eff.y), 'img=', Math.round(img.x), Math.round(img.y), 'editX=', edit?.x ?? '-', 'hasSnap=', !!snapshot);
   const ghostPixels = ghost && canMask && snapshot && orig.width > 0 && orig.height > 0
     ? {
         backgroundImage: `url(${snapshot.url})`,
@@ -1287,6 +1286,7 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
       }
     : undefined;
   const maskOriginal = ghost && canMask;
+  if (ghost) console.log('[aldus:img]', img.id, 'drag=', drag != null, 'movePending=', movePending, 'ghostPixels=', ghostPixels ? 'SÍ' : 'NO(veil vacío)', 'canMask=', canMask, 'snap=', snapshot ? `${snapshot.width}x${snapshot.height}` : 'null', 'orig=', Math.round(orig.left), Math.round(orig.top), Math.round(orig.width), 'rect=', Math.round(rect.left), Math.round(rect.top), 'bgPos=', ghostPixels?.backgroundPosition, 'bgSize=', ghostPixels?.backgroundSize);
   return (
     <>
       {maskOriginal && (

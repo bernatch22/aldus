@@ -122,11 +122,15 @@ textarea.seg-textarea {
 
 /* Imágenes */
 .img-box { position: absolute; cursor: pointer; outline: 1px solid transparent; outline-offset: 1px; border-radius: 2px; }
-.img-box:hover { outline-color: color-mix(in srgb, var(--accent) 55%, transparent); background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.img-box:hover { outline-color: color-mix(in srgb, var(--accent) 55%, transparent); background-color: color-mix(in srgb, var(--accent) 5%, transparent); }
+/* Durante el drag/ghost, NUNCA pintar un background-color que tape la imagen. */
+.img-box.ghost:hover { background-color: transparent; }
 .img-box.selected { outline-color: var(--accent); cursor: move; }
 .img-box.edited { outline-color: transparent; }
 .img-box.edited.selected { outline-color: var(--accent); }
-.img-box.ghost { outline: 2px dashed var(--edited); background: color-mix(in srgb, var(--edited) 6%, transparent); }
+/* El ghost lleva la IMAGEN recortada como background-image inline — nada de
+   `background` shorthand acá (resetearía la imagen). Solo el marco. */
+.img-box.ghost { outline: 2px dashed var(--edited); background-repeat: no-repeat; }
 .ghost-label { position: absolute; top: -18px; left: 0; font-size: 10px; color: var(--edited); white-space: nowrap; }
 .img-removed { position: absolute; outline: 2px dashed var(--danger); background: color-mix(in srgb, var(--danger) 7%, transparent); cursor: pointer; }
 .img-removed.selected { outline-color: var(--accent); }

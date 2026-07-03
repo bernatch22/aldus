@@ -1258,6 +1258,10 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
   const gripStart = useRef<{ px: number; py: number } | null>(null);
   const [gripDelta, setGripDelta] = useState<{ dx: number; dy: number } | null>(null);
+  // Snapshot CONGELADO al arrancar el gesto (con la imagen en su posición
+  // ORIGINAL) + su rect original. El ghost recorta de ACÁ, no del snapshot
+  // vivo que muta cuando el re-bake aterriza → cero fragmentos.
+  const dragSnap = useRef<{ snap: NonNullable<typeof snapshot>; origLeft: number; origTop: number; origW: number; origH: number } | null>(null);
 
   // Eliminada: el preview local ya la quitó del render (Ctrl+Z la restaura).
   if (eff.removed) return null;
@@ -1282,14 +1286,27 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
   const ghost = drag != null || movePending;
   const coverage = (img.width * img.height) / (pageWidth * pageHeight);
   const canMask = coverage < 0.8;
-  const ghostPixels = ghost && canMask && snapshot && orig.width > 0 && orig.height > 0
+  // El ghost recorta del snapshot CONGELADO (imagen en su posición original),
+  // con su rect original congelado — nada de leer el snapshot vivo (que ya se
+  // movió) ni el orig actual (que puede haber cambiado). Fallback al vivo si
+  // no hay congelado (primer frame del drag).
+  const fs = dragSnap.current;
+  const gSnap = fs?.snap ?? snapshot;
+  const gL = fs?.origLeft ?? orig.left, gT = fs?.origTop ?? orig.top, gW = fs?.origW ?? orig.width, gH = fs?.origH ?? orig.height;
+  const ghostPixels = ghost && canMask && gSnap && gW > 0 && gH > 0
     ? {
-        backgroundImage: `url(${snapshot.url})`,
-        backgroundSize: `${(snapshot.width * rect.width) / orig.width}px ${(snapshot.height * rect.height) / orig.height}px`,
-        backgroundPosition: `${(-orig.left * rect.width) / orig.width}px ${(-orig.top * rect.height) / orig.height}px`,
+        backgroundImage: `url(${gSnap.url})`,
+        backgroundSize: `${(gSnap.width * rect.width) / gW}px ${(gSnap.height * rect.height) / gH}px`,
+        backgroundPosition: `${(-gL * rect.width) / gW}px ${(-gT * rect.height) / gH}px`,
       }
     : undefined;
   const maskOriginal = ghost && canMask;
+  console.log('[aldus:img]', img.id, 'drag=', drag != null, 'mp=', movePending, 'ghost=', ghost, 'frozen=', !!fs,
+    'imgPDF=', Math.round(img.x), Math.round(img.y),
+    'editPDF=', edit?.x != null ? Math.round(edit.x) : '-', edit?.y != null ? Math.round(edit.y) : '-',
+    'effPDF=', Math.round(eff.x), Math.round(eff.y),
+    'rect=', Math.round(rect.left), Math.round(rect.top),
+    'gOrig=', Math.round(gL), Math.round(gT), 'snapLiveW=', snapshot?.width, 'gSnapW=', gSnap?.width);
   return (
     <>
       {maskOriginal && (
@@ -1325,6 +1342,9 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
           e.stopPropagation();
           e.currentTarget.setPointerCapture(e.pointerId);
           dragStart.current = { px: e.clientX, py: e.clientY, moved: false };
+          // Congelar el snapshot + rect original AHORA (imagen en su lugar).
+          if (snapshot) dragSnap.current = { snap: snapshot, origLeft: orig.left, origTop: orig.top, origW: orig.width, origH: orig.height };
+          console.log('[aldus:img] POINTERDOWN congelo snap', snapshot ? `${snapshot.width}x${snapshot.height}` : 'null', 'orig=', Math.round(orig.left), Math.round(orig.top));
         }}
         onPointerMove={e => {
           const start = dragStart.current;

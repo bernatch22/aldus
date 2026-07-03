@@ -123,12 +123,14 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
       const h = Math.floor(back.height / dpr);
       mainBackRef.current = back;
       blit(back);
+      console.log('[aldus:canvas] BLIT done');
       liftShownRef.current = false; // el preview manda: el lift quedó atrás
       liftHoldRef.current = false;  // el re-bake aterrizó: se suelta el lift
       setSize({ w, h });
       const page = await pdf.getPage(pageNum);
       const g = await extractPageGraph(page as unknown as PdfJsPage);
       if (cancelled) return;
+      console.log('[aldus:canvas] GRAPH set, imgs=', g.images.map(i => `${Math.round(i.x)},${Math.round(i.y)}`).join(' | '));
       // Las fuentes embebidas, bajo nombres ESTABLES (sobreviven al destroy
       // del documento — los fantasmas dependen de esto).
       try { registerPageFonts(page as unknown as { commonObjs: { get(id: string): unknown } }, g); } catch { /* best-effort */ }
@@ -142,6 +144,7 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
       onGraph(g);
       try {
         setSnapshot({ url: back.toDataURL('image/jpeg', 0.7), width: w, height: h });
+        console.log('[aldus:canvas] SNAPSHOT set', w, 'x', h);
       } catch {
         setSnapshot(null);
       }

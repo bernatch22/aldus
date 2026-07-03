@@ -576,10 +576,12 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
         lineHN: (s.edit?.fontSize ?? s.seg.fontSize) * 1.2 * s.scale,
         align: s.edit?.align ?? 'left',
       };
-      // FIT de ancho: solo con el texto ORIGINAL intacto (con texto editado el
-      // ancho efectivo ya no describe el contenido). El delta target−medido va
-      // a los espacios (los gaps reales del PDF están ahí) o por carácter.
-      if (seedText === s.seg.text) {
+      // FIT de ancho: solo con el texto ORIGINAL intacto y de UNA línea (con
+      // texto editado el ancho efectivo ya no describe el contenido; con '\n'
+      // measureWidth mide TODAS las líneas juntas → un letter-spacing negativo
+      // brutal que colapsaba el bloque multilínea encima de sí mismo). El delta
+      // target−medido va a los espacios (los gaps reales del PDF) o por carácter.
+      if (seedText === s.seg.text && !seedText.includes('\n')) {
         const measured = measureWidth(value, live.fontCss);
         const spaces = (value.match(/ /g) ?? []).length;
         const delta = rect.width - measured;

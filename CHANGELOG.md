@@ -4,6 +4,16 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### fix(editor): el lift SOSTIENE el original oculto hasta el re-bake (fin del "duplicado" sobre imágenes)
+Revert de dos parches propios que empeoraban las cosas: el **debounce** (prolongaba el
+duplicado post-drop) y la **máscara blanca de drag** (fea sobre imágenes). El mecanismo
+limpio sobre imágenes es el LIFT (la página re-horneada SIN el segmento). Ahora el lift:
+- se BLITEA en cuanto está listo si el drag arrancó O hay un drop pendiente (`liftHoldRef`),
+  no solo durante el gesto — un drag rápido (lift aún horneándose) ya no deja el original
+  visible bajo el movido;
+- SOSTIENE la página extirpada desde el arranque del drag, a través del drop, hasta que el
+  re-bake aterriza (que libera el hold y blitea el preview definitivo).
+
 ### perf(editor): preview mucho más fluido — sin re-muestreo de color, debounce, willReadFrequently + máscara de drag
 El re-bake local (pdf-lib + pdf.js + extracción) corría COMPLETO en cada edición y era el
 cuello de botella (lag + "duplicado" durante el arrastre en PDFs pesados). Sin cambiar la

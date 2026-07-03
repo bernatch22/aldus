@@ -98,6 +98,10 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
   const liftShownRef = useRef(false);
   const draggingRef = useRef<string | null>(null);
   draggingRef.current = draggingId;
+  // "Sostener el lift": desde que arranca el drag hasta que el re-bake aterriza
+  // (incluye el post-drop). Sin esto, un drag rápido (lift aún no listo) dejaba
+  // el original visible bajo el movido hasta el re-bake.
+  const liftHoldRef = useRef(false);
   const sampleColorsRef = useRef(sampleColors);
   sampleColorsRef.current = sampleColors;
 
@@ -126,6 +130,7 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
       mainBackRef.current = back;
       blit(back);
       liftShownRef.current = false; // el preview manda: el lift quedó atrás
+      liftHoldRef.current = false;  // el re-bake aterrizó: se suelta el lift
       setSize({ w, h });
       try {
         setSnapshot({ url: back.toDataURL('image/jpeg', 0.7), width: w, height: h });
@@ -160,13 +165,17 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
       liftBackRef.current = null;
       return;
     }
+    // Un lift NUEVO para un segmento que NO se está arrastrando = select fresco
+    // → no sostener (no ocultar ese segmento por un hold viejo).
+    if (draggingRef.current !== lift.segId) liftHoldRef.current = false;
     let cancelled = false;
     (async () => {
       const back = await renderToBackBuffer(lift.doc, pageNum, scale, liftTaskRef);
       if (cancelled || !back) return;
       liftBackRef.current = { segId: lift.segId, canvas: back };
-      // ¿El drag ya arrancó mientras renderizábamos? Blitear ya mismo.
-      if (draggingRef.current === lift.segId) {
+      // El drag ya arrancó (o el drop está pendiente): blitear ya mismo para
+      // tapar el original hasta que el re-bake aterrice.
+      if (draggingRef.current === lift.segId || liftHoldRef.current) {
         blit(back);
         liftShownRef.current = true;
       }
@@ -177,9 +186,11 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
     };
   }, [lift, pageNum, scale]);
 
-  // Arrancó el arrastre → blit instantáneo del lift (si ya está listo).
+  // Arrancó el arrastre → sostener el lift y blitear instantáneo (si ya está
+  // listo). El hold sigue tras el drop hasta que el re-bake aterrice.
   useEffect(() => {
     if (!draggingId) return;
+    liftHoldRef.current = true;
     const lb = liftBackRef.current;
     if (lb && lb.segId === draggingId && !liftShownRef.current) {
       blit(lb.canvas);

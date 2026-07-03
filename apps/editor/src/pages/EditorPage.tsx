@@ -344,11 +344,10 @@ export function EditorPage() {
   useEffect(() => {
     if (!baseBytes) return;
     let cancelled = false;
-    // DEBOUNCE: el re-bake local (pdf-lib + pdf.js) es CARO. Sin edición se
-    // corre ya (carga inicial); con ediciones se agrupa (150ms) para que un
-    // arrastre/tipeo rápido no dispare N bakes encolados = lag. El overlay
-    // (fantasmas + lift) ya da feedback INSTANTÁNEO; el bake solo refina.
-    const run = async () => {
+    // El re-bake corre YA (sin debounce): un solo drop/commit necesita
+    // extirpar el original cuanto antes (debouncearlo prolongaba el
+    // "duplicado" sobre imágenes). El lift cubre el gesto; el bake refina.
+    (async () => {
       const bytes = pending ? await bakePending() : baseBytes;
       if (cancelled) return;
       // pdf.js TRANSFIERE el buffer al worker → siempre una copia.
@@ -357,9 +356,8 @@ export function EditorPage() {
       const doc = await getDocument({ data: bytes.slice(), fontExtraProperties: true }).promise;
       if (cancelled) { void doc.destroy(); return; }
       setPdf(prev => { void prev?.destroy(); return doc; });
-    };
-    const t = pending ? setTimeout(() => { run().catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'No se pudo generar el preview'); }); }, 150) : (run().catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'No se pudo generar el preview'); }), null);
-    return () => { cancelled = true; if (t) clearTimeout(t); };
+    })().catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'No se pudo generar el preview'); });
+    return () => { cancelled = true; };
   }, [baseBytes, bakePending, pending, edits, imageEdits, widgetEdits, pendingHighlights]);
 
   // ── PREPARAR EL LIFT al seleccionar un texto (todavía presente en el canvas):

@@ -250,7 +250,18 @@ function FloatingBar({ seg, edit, rect, pageWidth, onPatch, onDocOp, onRequestLi
       return;
     }
     const next = toggleListMarker(styled);
-    if (next !== styled) onPatch({ runs: next, text: styledText(next) });
+    if (next !== styled) {
+      // VIÑETA COLGANTE (Word/Acrobat): el CONTENIDO no se mueve — la viñeta
+      // cuelga a la izquierda (x se corre el ancho del marcador) y el texto
+      // queda alineado con el resto del documento.
+      const before = styledText(styled);
+      const after = styledText(next);
+      const adding = after.length > before.length;
+      const markerText = adding ? after.slice(0, after.length - before.length) : before.slice(0, before.length - after.length);
+      const mw = measureWidth(markerText, `${seg.fontSize}px ${family(dominantRun(seg))}`);
+      const nx = round1(Math.max(4, eff.x + (adding ? -mw : mw)));
+      onPatch({ runs: next, text: after, x: nx === round1(seg.x) ? null : nx });
+    }
   };
 
   return (
@@ -350,6 +361,9 @@ interface LiveSession extends EditSession {
    *  va a los espacios (word-spacing) o se reparte por carácter. */
   ws: number;
   ls: number;
+  /** Ancla x (pt) al abrir + corrimiento acumulado por viñeta colgante. */
+  anchorX: number;
+  xShiftPt: number;
 }
 
 export interface TextEditLayerHandle {
@@ -400,6 +414,10 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
     const width = `${Math.max(s.minW, Math.ceil(w) + 8)}px`;
     ta.style.width = width;
     if (backdropRef.current) backdropRef.current.style.width = width;
+    // El HOST también: sus hijos son absolute (no lo dimensionan) y sin ancho
+    // su fondo blanco no cubre nada — se veía el canvas + backdrop + box
+    // superpuestos ("el grafo impreso muchas veces").
+    if (hostRef.current) hostRef.current.style.width = width;
   }, []);
 
   // Un cambio de contenido o estilo: re-dibujar el backdrop + re-ajustar ancho.
@@ -411,9 +429,12 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
     if (!s || !ta) return;
     const text = ta.value.replace(/\s+$/, '');
     const runs = applyTextDiff(s.runs, text);
+    // Viñeta colgante aplicada EN VIVO: consolidar el corrimiento de x.
+    const nx = round1(Math.max(4, s.anchorX + s.xShiftPt));
     s.onPatch({
       text,
       runs: styledRunsEqual(runs, originalStyledRuns(s.seg)) ? null : runs,
+      ...(s.xShiftPt !== 0 ? { x: nx === round1(s.seg.x) ? null : nx } : {}),
     });
   }, []);
 
@@ -440,6 +461,8 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
         minW: Math.max(rect.width, s.minWidthCss),
         ws: 0,
         ls: 0,
+        anchorX: eff.x,
+        xShiftPt: 0,
       };
       // FIT de ancho: solo con el texto ORIGINAL intacto (con texto editado el
       // ancho efectivo ya no describe el contenido). El delta target−medido va
@@ -558,16 +581,25 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
         s.runs = setStyleRange(s.runs, from, to, { color: detail.color });
         refresh();
       } else if (detail?.key === 'list') {
-        // Toggle de viñeta en vivo: manipulación de string plano — trivial.
+        // Toggle de viñeta en vivo, COLGANTE: el contenido no se mueve — el
+        // host se corre el ancho del marcador y el corrimiento se consolida
+        // en x al commit (igual que el camino de modelo).
+        const host = hostRef.current;
         const m = /^(\s*)(?:[•·▪‣*-]|\d{1,3}[.)]|[a-zA-Z][.)])(\s*)/.exec(ta.value);
         const before = ta.selectionStart;
         if (m) {
+          const mw = measureWidth(m[0], s.fontCss) + (m[0].match(/ /g) ?? []).length * s.ws + m[0].length * s.ls;
           ta.value = ta.value.slice(m[0].length);
           ta.setSelectionRange(Math.max(0, before - m[0].length), Math.max(0, before - m[0].length));
+          s.xShiftPt += mw / s.scale;
+          if (host) host.style.left = `${parseFloat(host.style.left) + mw}px`;
         } else {
           const marker = `${String.fromCharCode(0x2022)}${LIST_GAP}`;
+          const mw = measureWidth(marker, s.fontCss) + (marker.match(/ /g) ?? []).length * s.ws + marker.length * s.ls;
           ta.value = marker + ta.value;
           ta.setSelectionRange(before + marker.length, before + marker.length);
+          s.xShiftPt -= mw / s.scale;
+          if (host) host.style.left = `${parseFloat(host.style.left) - mw}px`;
         }
         syncRuns();
       }

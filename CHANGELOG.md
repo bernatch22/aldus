@@ -4,6 +4,17 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### fix(editor): host del editor colapsado (texto "impreso muchas veces") + viñetas COLGANTES
+- **El editor se veía superpuesto** ("el grafo impreso muchas veces"): al pasar backdrop
+  y textarea a `position:absolute`, el host quedó sin ancho intrínseco → su fondo blanco
+  no cubría nada y se veían canvas + backdrop + box a la vez. `fit()` ahora también
+  dimensiona el host; el textarea con z-index sobre el backdrop (caret visible).
+- **Viñetas colgantes (con alineación)**: togglear la lista ya NO corre el texto — el
+  CONTENIDO queda anclado donde estaba y la viñeta cuelga a la izquierda (x se corre el
+  ancho del marcador, medido con la fuente real). Igual en el camino de modelo (barra
+  con editor cerrado) y en vivo (el host del layer se corre y el corrimiento se
+  consolida en x al commit). Los ítems quedan alineados con el resto del documento.
+
 ### fix(editor): bold/italic/color VISIBLES en el editor — backdrop estilado detrás del textarea
 El textarea es texto plano y no podía mostrar formato: aplicar bold "no hacía nada"
 (sí se committeaba al modelo, pero sin feedback). Técnica de backdrop (la de los textarea

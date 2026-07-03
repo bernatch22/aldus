@@ -1447,6 +1447,11 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
   const areaWpx = Math.max(rect.width, area?.w != null ? area.w * scale : 0);
   const areaHpx = Math.max(contentH, area?.h != null ? area.h * scale : 0);
   const boxHeight = gripSize?.h ?? areaHpx;
+  // ¿La edición MUEVE el segmento? El box está en la posición NUEVA — su fondo
+  // NO debe ser blanco (taparía el destino con un flash). Solo un edit EN EL
+  // LUGAR (texto/estilo, misma posición) usa el fondo opaco para tapar lo viejo
+  // hasta el extirpado; el original de un movido lo oculta el lift.
+  const moved = !!edit && (edit.x != null || edit.baseline != null);
 
   return (
     <>
@@ -1454,7 +1459,7 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
         <FloatingBar seg={seg} edit={edit} rect={rect} pageWidth={pageWidth} frameWpt={areaWpx / scale} onPatch={onPatch} onDocOp={onDocOp} onRequestLink={onRequestLink} highlightColor={highlightColor} onHighlightColor={onHighlightColor} />
       )}
       <div
-        className={`seg-box${selected ? ' selected' : ''}${masked ? ' masked' : ''}${edit ? ' edited' : ''}${editing ? ' editing' : ''}${isLocked ? ' locked' : ''}${edit && onCanvas ? ' on-canvas' : ''}`}
+        className={`seg-box${selected ? ' selected' : ''}${masked ? ' masked' : ''}${edit ? ' edited' : ''}${editing ? ' editing' : ''}${isLocked ? ' locked' : ''}${edit && onCanvas && !moved ? ' on-canvas' : ''}`}
         style={{
           left: rect.left,
           top: rect.top,

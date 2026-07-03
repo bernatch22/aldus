@@ -193,6 +193,10 @@ function extractImages(fnArray: number[], argsArray: unknown[][], page: number, 
       const ys = [f, b + f, d + f, b + d + f];
       const minX = Math.min(...xs);
       const minY = Math.min(...ys);
+      // objId: paintImageXObject/Repeat pasan [objId, w, h] (string en args[0]);
+      // máscaras / inline images llevan el data object directo → sin objId.
+      const arg0 = (argsArray[i] as unknown[])[0];
+      const objId = (fn === OP_PAINT_IMAGE || fn === OP_PAINT_IMAGE_REPEAT) && typeof arg0 === 'string' ? arg0 : undefined;
       images.push({
         id: `p${page}-img${images.length}`,
         kind: 'image',
@@ -202,6 +206,7 @@ function extractImages(fnArray: number[], argsArray: unknown[][], page: number, 
         width: Math.max(...xs) - minX,
         height: Math.max(...ys) - minY,
         rotated: Math.abs(b) > 0.01 || Math.abs(c) > 0.01,
+        objId,
       });
     }
   }

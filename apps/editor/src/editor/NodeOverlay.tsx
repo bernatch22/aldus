@@ -114,6 +114,8 @@ interface Props {
   onPlace: (x: number, y: number) => void;
   /** Snapshot de la página renderizada (para previews de imágenes movidas). */
   snapshot: { url: string; width: number; height: number } | null;
+  /** imageId → dataURL de píxeles limpios (transparencia real) para el ghost. */
+  imagePixels: Map<string, string>;
   /** Operación de documento instantánea (highlight, addLink…). */
   onDocOp: (action: string, params: Record<string, unknown>) => void;
   /** Abre el modal de link para un rect. */
@@ -809,7 +811,7 @@ const TextEditLayer = forwardRef<TextEditLayerHandle, { onClosed: () => void }>(
   );
 });
 
-export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, areaWidths, onAreaWidth, onEditingChange }: Props) {
+export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, imagePixels, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, areaWidths, onAreaWidth, onEditingChange }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => { onEditingChange(editingId != null); }, [editingId, onEditingChange]);
   // Cambio de página con editor abierto: cerrarlo (con commit) via blur.
@@ -965,11 +967,13 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           edit={imageEdits.get(img.id) ?? null}
           isLocked={locked.has(img.id)}
           snapshot={snapshot}
+          cleanPixels={imagePixels.get(img.id) ?? null}
           onSelect={() => selectNode(img.id)}
           onPatch={patch => {
             const merged = mergeImageEdit(img, imageEdits.get(img.id) ?? null, patch);
             onImageEdit(merged ?? { imageId: img.id, revert: true });
           }}
+          onDragging={onDragging}
         />
       ))}
       {allSegments.map(seg => (
@@ -1240,17 +1244,22 @@ interface ImageBoxProps {
   edit: ImageEdit | null;
   isLocked: boolean;
   snapshot: { url: string; width: number; height: number } | null;
+  /** dataURL de los píxeles reales de la imagen (transparencia real). Si existe,
+   *  el ghost lo usa directo (sin halo); si no, cae al crop del snapshot. */
+  cleanPixels: string | null;
   groupMode?: boolean;
   onSelect: () => void;
   onPatch: (patch: ImagePatch) => void;
+  /** Arranque/fin del arrastre (dispara/sostiene el lift, como el texto). */
+  onDragging: (id: string, active: boolean, committed?: boolean) => void;
 }
 
 /** Una imagen del grafo: seleccionar, arrastrar (mover), grip (escalar),
  *  eliminar (desde el panel). Preview de mover/escalar: el box del destino
- *  muestra los PÍXELES reales (crop del snapshot de la página); el original
- *  queda visible hasta Aplicar (ahí se muda de verdad). Eliminada: velo rojo
- *  translúcido — nunca una máscara opaca que taparía el texto de arriba. */
-function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked, snapshot, groupMode, onSelect, onPatch }: ImageBoxProps) {
+ *  muestra los PÍXELES reales de la imagen (con transparencia, vía cleanPixels);
+ *  el original en el canvas se tapa con un velo mientras se arrastra, y al
+ *  aterrizar el re-bake lo muda de verdad. Eliminada: velo rojo translúcido. */
+function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked, snapshot, cleanPixels, groupMode, onSelect, onPatch, onDragging }: ImageBoxProps) {
   const eff = effectiveImageRect(img, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
   const orig = pdfRectToCss({ x: img.x, y: img.y, width: img.width, height: img.height }, pageHeight, scale);
@@ -1266,33 +1275,40 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
   // Eliminada: el preview local ya la quitó del render (Ctrl+Z la restaura).
   if (eff.removed) return null;
 
-  // Ghost SOLO durante el arrastre ACTIVO (preview siguiendo el cursor). Al
-  // soltar NO se muestra ghost: el canvas re-hornea y es la fuente de verdad.
-  // Recortar del snapshot arrastra el FONDO detrás de la imagen (otra imagen),
-  // que en el destino se ve como un "pedazo" pegado → por eso no persiste.
-  const ghost = drag != null;
-  const coverage = (img.width * img.height) / (pageWidth * pageHeight);
-  const canMask = coverage < 0.8;
-  // El ghost recorta del snapshot CONGELADO al arrancar el drag (imagen en su
-  // lugar), con su rect original.
+  // MOVE PENDIENTE: hay una edición de posición que el canvas AÚN no re-horneó.
+  // El LIFT (página sin esta imagen) sigue en pantalla, así que el ghost cubre
+  // el DESTINO hasta que el re-bake aterrice. Con píxeles limpios no hay halo,
+  // así que persistir el ghost en ese lapso es seamless. Tolerancia (no `!==`):
+  // pdf.js re-extrae con diferencia sub-pixel.
+  const movePending = !!edit && !edit.remove && (
+    (edit.x != null && Math.abs(edit.x - img.x) > 0.7) ||
+    (edit.y != null && Math.abs(edit.y - img.y) > 0.7) ||
+    (edit.width != null && Math.abs(edit.width - img.width) > 0.7) ||
+    (edit.height != null && Math.abs(edit.height - img.height) > 0.7)
+  );
+  const ghost = drag != null || movePending;
+  // Píxeles del ghost: PREFERIMOS los reales de la imagen (`cleanPixels`, con
+  // transparencia exacta → sin halo). Solo si no están (máscara / inline image /
+  // aún no resuelta) caemos al crop del snapshot CONGELADO — trae el fondo, pero
+  // es lo único disponible para esos casos.
   const fs = dragSnap.current;
   const gSnap = fs?.snap ?? snapshot;
   const gL = fs?.origLeft ?? orig.left, gT = fs?.origTop ?? orig.top, gW = fs?.origW ?? orig.width, gH = fs?.origH ?? orig.height;
-  const ghostPixels = ghost && canMask && gSnap && gW > 0 && gH > 0
-    ? {
-        backgroundImage: `url(${gSnap.url})`,
-        backgroundSize: `${(gSnap.width * rect.width) / gW}px ${(gSnap.height * rect.height) / gH}px`,
-        backgroundPosition: `${(-gL * rect.width) / gW}px ${(-gT * rect.height) / gH}px`,
-      }
-    : undefined;
-  // Velo del origen SOLO mientras se arrastra (tapa la imagen vieja mientras el
-  // ghost viaja). Al soltar se va: el canvas re-horneado muestra la verdad.
-  const maskOriginal = ghost && canMask;
+  const ghostPixels = !ghost
+    ? undefined
+    : cleanPixels
+      ? { backgroundImage: `url(${cleanPixels})`, backgroundSize: '100% 100%' as const }
+      : gSnap && gW > 0 && gH > 0
+        ? {
+            backgroundImage: `url(${gSnap.url})`,
+            backgroundSize: `${(gSnap.width * rect.width) / gW}px ${(gSnap.height * rect.height) / gH}px`,
+            backgroundPosition: `${(-gL * rect.width) / gW}px ${(-gT * rect.height) / gH}px`,
+          }
+        : undefined;
+  // El velo blanco del original ya NO se usa: el LIFT (re-bake sin la imagen)
+  // muestra lo que hay detrás mientras se arrastra — sin rectángulo blanco.
   return (
     <>
-      {maskOriginal && (
-        <div className="seg-mask" style={{ left: orig.left, top: orig.top, width: orig.width, height: orig.height }} />
-      )}
       {selected && !isLocked && !groupMode && (
         <ObjectBar
           rect={rect} pageWidth={pageWidth} width={eff.width}
@@ -1331,7 +1347,12 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
           if (!start) return;
           const dx = e.clientX - start.px;
           const dy = e.clientY - start.py;
-          if (Math.abs(dx) + Math.abs(dy) > 3) start.moved = true;
+          if (!start.moved && Math.abs(dx) + Math.abs(dy) > 3) {
+            start.moved = true;
+            // El gesto arrancó: PdfCanvas blitea el lift (página sin esta imagen)
+            // — el original se esfuma al "levantarlo", sin velo blanco.
+            onDragging(img.id, true);
+          }
           if (start.moved) setDrag({ dx, dy });
         }}
         onPointerUp={e => {
@@ -1341,10 +1362,21 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
           if (!start?.moved) return;
           const nx = round1(clampX(eff.x + (e.clientX - start.px) / scale, eff.width, pageWidth));
           const ny = round1(clampY(eff.y - (e.clientY - start.py) / scale, eff.height, pageHeight));
+          const noop = nx === round1(eff.x) && ny === round1(eff.y);
+          if (noop) { onDragging(img.id, false, false); return; }
           onPatch({
             x: nx === round1(img.x) ? null : nx,
             y: ny === round1(img.y) ? null : ny,
           });
+          // Commit + fin del arrastre en el mismo lote: el lift se sostiene hasta
+          // que el preview re-horneado (imagen en su nuevo lugar) aterrice.
+          onDragging(img.id, false, true);
+        }}
+        onPointerCancel={() => {
+          const start = dragStart.current;
+          dragStart.current = null;
+          setDrag(null);
+          if (start?.moved) onDragging(img.id, false, false);
         }}
       >
         {!isLocked && !groupMode && (

@@ -104,6 +104,11 @@ export interface ImageNode {
   height: number;
   /** La matriz tiene rotación/skew — el bake v1 la deja intacta (warning). */
   rotated: boolean;
+  /** objId del XObject en `page.objs` (solo paintImageXObject/Repeat). El editor
+   *  lo usa para sacar los PÍXELES reales de la imagen (con transparencia) y
+   *  pintar un ghost limpio al arrastrar — sin el fondo que trae un crop del
+   *  snapshot de la página. Ausente en máscaras / inline images. */
+  objId?: string;
 }
 
 /** Una edición pendiente sobre una imagen: mover/escalar/eliminar/reordenar. */

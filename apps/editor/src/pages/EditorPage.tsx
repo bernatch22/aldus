@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { getDocument, type PDFDocumentProxy } from 'pdfjs-dist';
 import {
-  effectiveGeometry, FIELD_DEFAULT_SIZE, mergeSegmentEdit, segmentOriginal,
-  type ImageEdit, type PageGraph, type SegmentEdit, type SegmentNode, type WidgetEdit, type WidgetKind,
+  effectiveGeometry, FIELD_DEFAULT_SIZE, mergeImageEdit, mergeSegmentEdit, segmentOriginal,
+  type ImageEdit, type ImageNode, type PageGraph, type SegmentEdit, type SegmentNode, type WidgetEdit, type WidgetKind,
 } from '@aldus/core';
 import {
   MousePointer2, Pilcrow, TextCursorInput, SquareCheck, CircleDot,
@@ -13,6 +13,7 @@ import {
 import { api } from '../lib/api';
 import { PdfCanvas } from '../editor/PdfCanvas';
 import { clearColorCache } from '../editor/sampleColor';
+import { clearImagePixelCache } from '../editor/imagePixels';
 import { Inspector } from '../editor/Inspector';
 import type { AddTextRequest } from '../editor/NodeOverlay';
 import { Button, IconButton, ToolButton, Toast, cx } from '../ui/primitives';
@@ -58,7 +59,7 @@ const NAV_GROUPS: Array<{ label: string; tools: NavTool[] }> = [
 
 export function EditorPage() {
   const { id = '' } = useParams();
-  useEffect(() => clearColorCache(), [id]); // colores cacheados por documento
+  useEffect(() => { clearColorCache(); clearImagePixelCache(); }, [id]); // caches por documento
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [docVersion, setDocVersion] = useState(0);
   const [pageNum, setPageNum] = useState(1);
@@ -319,7 +320,7 @@ export function EditorPage() {
   // EXTIRPADO — el overlay lo dibuja como fantasma) + imágenes + campos +
   // highlights. `extraRemoval` extirpa además un segmento SIN edición (el
   // lift del que está por arrastrarse).
-  const bakePending = useCallback(async (extraRemoval?: SegmentNode): Promise<Uint8Array> => {
+  const bakePending = useCallback(async (extraRemoval?: SegmentNode, extraImageRemoval?: ImageNode): Promise<Uint8Array> => {
     if (!baseBytes) throw new Error('documento no cargado');
     const { bakeSegmentEdits, addHighlight } = await import('@aldus/core/bake');
     const textRemovals: SegmentEdit[] = [...edits.values()].map(e => ({
@@ -328,7 +329,15 @@ export function EditorPage() {
     if (extraRemoval && !edits.has(extraRemoval.id)) {
       textRemovals.push({ segmentId: extraRemoval.id, page: extraRemoval.page, text: extraRemoval.text, remove: true, original: segmentOriginal(extraRemoval) });
     }
-    const r = await bakeSegmentEdits(baseBytes.slice(), textRemovals, [...imageEdits.values()], [...widgetEdits.values()]);
+    // LIFT de imagen: hornear la página SIN esa imagen (removida), para que al
+    // arrastrarla el canvas muestre lo que hay detrás (no un velo blanco).
+    // Reemplaza cualquier edición previa de esa imagen por un remove.
+    let imgEditList = [...imageEdits.values()];
+    if (extraImageRemoval) {
+      const rm = mergeImageEdit(extraImageRemoval, null, { remove: true });
+      if (rm) imgEditList = [...imgEditList.filter(e => e.imageId !== extraImageRemoval.id), rm];
+    }
+    const r = await bakeSegmentEdits(baseBytes.slice(), textRemovals, imgEditList, [...widgetEdits.values()]);
     // Color EXACTO del content stream → sobreescribe el muestreado en el cache
     // de fantasmas (el fantasma se ve idéntico al original, sin aproximación).
     for (const [segId, hex] of Object.entries(r.colors)) {
@@ -375,24 +384,28 @@ export function EditorPage() {
     if (editingActive) return; // con editor abierto no hay drags — lift innecesario
     const sid = selectedId;
     const seg = sid && !edits.has(sid) ? graphRef.current?.segments.find(s => s.id === sid) : null;
-    if (!seg || !baseBytes) {
+    // El lift también aplica a IMÁGENES: hornear la página sin la imagen
+    // seleccionada, para que al arrastrarla se vea lo de atrás (no un velo).
+    const imgNode = sid && !seg ? graphRef.current?.images.find(im => im.id === sid) : null;
+    if ((!seg && !imgNode) || !baseBytes) {
       // Nada que preparar. Ojo: tras un drop consumado el lift NO se descarta
       // acá (el canvas muestra sus píxeles) — lo descarta handleGraph cuando
       // el preview re-horneado aterriza.
       if (!dropPendingRef.current) setLift(prev => { void prev?.doc.destroy(); return null; });
       return;
     }
+    const liftId = seg ? seg.id : imgNode!.id;
     let cancelled = false;
     (async () => {
-      const bytes = await bakePending(seg);
+      const bytes = seg ? await bakePending(seg) : await bakePending(undefined, imgNode!);
       if (cancelled) return;
       const doc = await getDocument({ data: bytes.slice(), fontExtraProperties: true }).promise;
       if (cancelled) { void doc.destroy(); return; }
-      setLift(prev => { void prev?.doc.destroy(); return { segId: seg.id, doc }; });
+      setLift(prev => { void prev?.doc.destroy(); return { segId: liftId, doc }; });
     })().catch(() => { /* sin lift: el drag cae al camino lento (blit al aterrizar) */ });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, baseBytes, bakePending, edits, pendingHighlights, editingActive]);
+  }, [selectedId, baseBytes, bakePending, edits, imageEdits, pendingHighlights, editingActive]);
 
   // Cache del NODO original de cada segmento editado: el preview extirpa sus
   // ops (desaparece del grafo extraído), así que el overlay lo dibuja como

@@ -11,6 +11,7 @@ import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
 import { extractPageGraph, type ImageEdit, type PageGraph, type PdfJsPage, type SegmentEdit, type SegmentNode, type WidgetEdit } from '@aldus/core';
 import { NodeOverlay, type AddTextRequest, type EditAction, type ImageEditAction, type WidgetEditAction } from './NodeOverlay';
 import { sampleRunColors } from './sampleColor';
+import { extractImagePixels } from './imagePixels';
 import { registerPageFonts } from './fontRegistry';
 
 interface Props {
@@ -83,6 +84,8 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
   // Snapshot de la página renderizada: los previews de imágenes movidas lo usan
   // como fuente de píxeles (crop por background-position).
   const [snapshot, setSnapshot] = useState<{ url: string; width: number; height: number } | null>(null);
+  // Píxeles REALES de cada imagen (con transparencia), para un ghost sin halo.
+  const [imagePixels, setImagePixels] = useState<Map<string, string>>(new Map());
 
   // DOUBLE BUFFER + LIFT (así lo hace el annotation editor de pdf.js: el canvas
   // no se toca durante un gesto). `mainBack` = último render del preview;
@@ -134,6 +137,8 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
       try { registerPageFonts(page as unknown as { commonObjs: { get(id: string): unknown } }, g); } catch { /* best-effort */ }
       // Color de cada run: cache primero (barato), muestreo solo lo que falta.
       try { sampleRunColors(g, back, scale); } catch { /* best-effort */ }
+      // Píxeles limpios de las imágenes (para el ghost de arrastre sin fondo).
+      try { setImagePixels(extractImagePixels(page as unknown as { objs: { has(o: string): boolean; get(o: string): unknown } }, g.images)); } catch { /* best-effort */ }
       // ORDEN: el GRAFO (que define movePending del ghost de imagen) se
       // actualiza JUNTO/ANTES que el snapshot. Si el snapshot se actualizaba
       // primero, había un frame con snapshot NUEVO (imagen ya movida) + grafo
@@ -216,6 +221,7 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
           placing={placing}
           onPlace={onPlace}
           snapshot={snapshot}
+          imagePixels={imagePixels}
           onDocOp={onDocOp}
           onRequestLink={onRequestLink}
           onAddText={onAddText}

@@ -86,6 +86,25 @@ textarea.seg-textarea {
   backdrop-filter: blur(1.5px);
 }
 
+/* Selección múltiple: marquee + caja de grupo. */
+.marquee {
+  position: absolute; z-index: 35; pointer-events: none;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.group-box {
+  position: absolute; z-index: 34; cursor: move;
+  border: 1.5px dashed var(--accent); border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.group-tag {
+  position: absolute; top: -22px; left: 0; display: flex; align-items: center; gap: 4px;
+  font-size: 11px; color: #fff; background: var(--accent);
+  padding: 1px 4px 1px 6px; border-radius: 4px; white-space: nowrap;
+}
+.group-tag button { display: grid; place-items: center; background: transparent; color: #fff; opacity: .85; padding: 1px; }
+.group-tag button:hover { opacity: 1; }
+
 /* Handle de resize compartido: SIEMPRE presente (no hace falta seleccionar
    primero) — se revela con el hover del nodo o con la selección. */
 .seg-grip {

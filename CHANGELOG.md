@@ -4,6 +4,20 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-03
 
+### feat(editor): grip 2D del texto + insert con área generosa + SELECCIÓN MÚLTIPLE (marquee + grupo movible)
+- **Grip 2D**: el handle del área de texto ahora estira ANCHO y ALTO (antes solo ancho).
+  `areaWidths` pasa a `{w?,h?}` por segmento (persistido). Volver al tamaño natural en
+  cualquier dimensión la limpia.
+- **Texto insertado menos "cojo"**: desde la paleta nace con área por defecto (240pt de
+  ancho, ~2 líneas de alto) y tamaño mínimo 13pt — aplicada al aparecer en el grafo
+  (match por posición).
+- **Selección múltiple**: arrastrar sobre el fondo dibuja un marquee que selecciona todos
+  los nodos que toca (segmentos/imágenes/campos, salteando bloqueados). 2+ = una CAJA DE
+  GRUPO punteada que se arrastra para mover TODO junto (un patch de posición por nodo) y
+  tiene botón de eliminar-todos; click sin arrastrar la deselecciona. Estado local a
+  NodeOverlay (ids estables entre re-bakes); en modo grupo los boxes solo muestran
+  highlight (barras/grips los maneja la caja de grupo).
+
 ### fix(core+editor): un bloque multilínea SIGUE siendo UN grafo después de guardar
 Al aplicar, el bake escribe cada línea como ops separados y la re-extracción los partía
 en un grafo por línea — el bloque se desintegraba. Ahora:

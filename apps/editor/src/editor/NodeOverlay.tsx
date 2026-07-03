@@ -836,7 +836,51 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
       console.log('[aldus:forceblur] cierro editor de', editingId, 'por selección de', nodeId ?? '(nada)');
       activeEditingBox()?.blur();
     }
+    if (multiSel.size) setMultiSel(new Set());
     onSelect(nodeId);
+  };
+
+  // ── MULTI-SELECCIÓN (marquee sobre el fondo → grupo movible) ──
+  const [multiSel, setMultiSel] = useState<Set<string>>(new Set());
+  useEffect(() => setMultiSel(new Set()), [graph.page]);
+  const [marquee, setMarquee] = useState<{ l: number; t: number; w: number; h: number } | null>(null);
+  const marqueeStart = useRef<{ x: number; y: number; hostL: number; hostT: number } | null>(null);
+
+  // Rect CSS de CUALQUIER nodo por id (segmento/imagen/campo), con su edición.
+  const nodeCssRect = (nid: string): { left: number; top: number; width: number; height: number } | null => {
+    const s = allSegments.find(x => x.id === nid);
+    if (s) { const e = effectiveGeometry(s, edits.get(s.id) ?? null); return pdfRectToCss({ x: e.x, y: e.y, width: e.width, height: e.height }, graph.height, scale); }
+    const im = graph.images.find(x => x.id === nid);
+    if (im) { const e = effectiveImageRect(im, imageEdits.get(im.id) ?? null); return pdfRectToCss({ x: e.x, y: e.y, width: e.width, height: e.height }, graph.height, scale); }
+    const w = graph.widgets.find(x => x.id === nid);
+    if (w) { const e = effectiveWidgetRect(w, widgetEdits.get(w.id) ?? null); return pdfRectToCss({ x: e.x, y: e.y, width: e.width, height: e.height }, graph.height, scale); }
+    return null;
+  };
+
+  // Mover TODO el grupo (delta CSS): a cada nodo su patch de posición. CSS
+  // hacia abajo = y del PDF baja (baseline/y decrecen).
+  const moveGroup = (dxCss: number, dyCss: number) => {
+    const dxPt = round1(dxCss / scale);
+    const dyPt = round1(-dyCss / scale);
+    for (const nid of multiSel) {
+      const s = allSegments.find(x => x.id === nid);
+      if (s) { const e = effectiveGeometry(s, edits.get(s.id) ?? null); const m = mergeSegmentEdit(s, edits.get(s.id) ?? null, { x: round1(e.x + dxPt), baseline: round1(e.baseline + dyPt) }); onEdit(m ?? { segmentId: s.id, revert: true }); continue; }
+      const im = graph.images.find(x => x.id === nid);
+      if (im) { const e = effectiveImageRect(im, imageEdits.get(im.id) ?? null); const m = mergeImageEdit(im, imageEdits.get(im.id) ?? null, { x: round1(e.x + dxPt), y: round1(e.y + dyPt) }); onImageEdit(m ?? { imageId: im.id, revert: true }); continue; }
+      const w = graph.widgets.find(x => x.id === nid);
+      if (w) { const e = effectiveWidgetRect(w, widgetEdits.get(w.id) ?? null); const m = mergeWidgetEdit(w, widgetEdits.get(w.id) ?? null, { x: round1(e.x + dxPt), y: round1(e.y + dyPt) }); onWidgetEdit(m ?? { widgetId: w.id, revert: true }); }
+    }
+  };
+
+  const groupBBox = () => {
+    let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+    for (const nid of multiSel) {
+      const cr = nodeCssRect(nid);
+      if (!cr) continue;
+      l = Math.min(l, cr.left); t = Math.min(t, cr.top);
+      r = Math.max(r, cr.left + cr.width); b = Math.max(b, cr.top + cr.height);
+    }
+    return l === Infinity ? null : { left: l, top: t, width: r - l, height: b - t };
   };
 
   return (
@@ -847,19 +891,53 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           const r = e.currentTarget.getBoundingClientRect();
           const p = cssPointToPdf(e.clientX - r.left, e.clientY - r.top, graph.height, scale);
           onPlace(p.x, p.y);
-          return;
         }
-        selectNode(null);
+      }}
+      onPointerDown={e => {
+        // Solo en el FONDO (los nodos hacen stopPropagation): arranca marquee.
+        if (placing || e.button !== 0 || e.target !== e.currentTarget) return;
+        const host = e.currentTarget.getBoundingClientRect();
+        marqueeStart.current = { x: e.clientX - host.left, y: e.clientY - host.top, hostL: host.left, hostT: host.top };
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }}
+      onPointerMove={e => {
+        const st = marqueeStart.current;
+        if (!st) return;
+        const x = e.clientX - st.hostL, y = e.clientY - st.hostT;
+        setMarquee({ l: Math.min(st.x, x), t: Math.min(st.y, y), w: Math.abs(x - st.x), h: Math.abs(y - st.y) });
+      }}
+      onPointerUp={e => {
+        const st = marqueeStart.current;
+        marqueeStart.current = null;
+        if (!st) return;
+        const x = e.clientX - st.hostL, y = e.clientY - st.hostT;
+        const dragged = Math.abs(x - st.x) + Math.abs(y - st.y) > 4;
+        setMarquee(null);
+        if (!dragged) { selectNode(null); return; } // click vacío = deseleccionar
+        const box = { l: Math.min(st.x, x), t: Math.min(st.y, y), r: Math.max(st.x, x), b: Math.max(st.y, y) };
+        const hit = new Set<string>();
+        const test = (nid: string) => {
+          if (locked.has(nid)) return;
+          const cr = nodeCssRect(nid);
+          if (cr && cr.left < box.r && cr.left + cr.width > box.l && cr.top < box.b && cr.top + cr.height > box.t) hit.add(nid);
+        };
+        allSegments.forEach(s => test(s.id));
+        graph.images.forEach(im => test(im.id));
+        graph.widgets.forEach(w => test(w.id));
+        setMultiSel(hit);
+        // 1 nodo = selección normal (con su barra); 2+ = grupo (sin primario).
+        onSelect(hit.size === 1 ? [...hit][0] : null);
       }}
     >
       {graph.images.map(img => (
         <ImageBox
           key={img.id}
+          groupMode={multiSel.size > 1}
           img={img}
           pageWidth={graph.width}
           pageHeight={graph.height}
           scale={scale}
-          selected={selectedId === img.id}
+          selected={selectedId === img.id || multiSel.has(img.id)}
           edit={imageEdits.get(img.id) ?? null}
           isLocked={locked.has(img.id)}
           snapshot={snapshot}
@@ -873,11 +951,12 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
       {allSegments.map(seg => (
         <SegmentBox
           key={seg.id}
+          groupMode={multiSel.size > 1}
           seg={seg}
           pageWidth={graph.width}
           pageHeight={graph.height}
           scale={scale}
-          selected={selectedId === seg.id}
+          selected={selectedId === seg.id || multiSel.has(seg.id)}
           editing={editingId === seg.id}
           edit={edits.get(seg.id) ?? null}
           isLocked={locked.has(seg.id)}
@@ -903,11 +982,12 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
       {graph.widgets.map(w => (
         <WidgetBox
           key={w.id}
+          groupMode={multiSel.size > 1}
           widget={w}
           pageWidth={graph.width}
           pageHeight={graph.height}
           scale={scale}
-          selected={selectedId === w.id}
+          selected={selectedId === w.id || multiSel.has(w.id)}
           edit={widgetEdits.get(w.id) ?? null}
           isLocked={locked.has(w.id)}
           snapshot={snapshot}
@@ -918,9 +998,73 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           }}
         />
       ))}
+      {/* Marquee de selección múltiple (mientras se arrastra en el fondo). */}
+      {marquee && (
+        <div className="marquee" style={{ left: marquee.l, top: marquee.t, width: marquee.w, height: marquee.h }} />
+      )}
+      {/* Caja de GRUPO (2+ seleccionados): arrastrar mueve todos; borra todos. */}
+      {multiSel.size > 1 && <GroupBox bbox={groupBBox()} count={multiSel.size} onMove={moveGroup} onDelete={() => {
+        for (const nid of multiSel) {
+          const s = allSegments.find(x => x.id === nid);
+          if (s) { const m = mergeSegmentEdit(s, edits.get(s.id) ?? null, { remove: true }); if (m) onEdit(m); continue; }
+          const im = graph.images.find(x => x.id === nid);
+          if (im) { const m = mergeImageEdit(im, imageEdits.get(im.id) ?? null, { remove: true }); if (m) onImageEdit(m); continue; }
+          const w = graph.widgets.find(x => x.id === nid);
+          if (w) { const m = mergeWidgetEdit(w, widgetEdits.get(w.id) ?? null, { remove: true }); if (m) onWidgetEdit(m); }
+        }
+        setMultiSel(new Set());
+      }} onClear={() => { setMultiSel(new Set()); onSelect(null); }} />}
       {/* EL editor de texto: singleton imperativo, SIEMPRE montado — inmune al
           churn de grafos/previews (ver TextEditLayer arriba). */}
       <TextEditLayer ref={layerRef} onClosed={onLayerClosed} />
+    </div>
+  );
+}
+
+/** Caja que envuelve una selección múltiple: arrastrar la mueve entera. */
+function GroupBox({ bbox, count, onMove, onDelete, onClear }: {
+  bbox: { left: number; top: number; width: number; height: number } | null;
+  count: number;
+  onMove: (dxCss: number, dyCss: number) => void;
+  onDelete: () => void;
+  onClear: () => void;
+}) {
+  const start = useRef<{ px: number; py: number; moved: boolean } | null>(null);
+  const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
+  if (!bbox) return null;
+  const PAD = 4;
+  return (
+    <div
+      className="group-box"
+      style={{ left: bbox.left - PAD, top: bbox.top - PAD, width: bbox.width + PAD * 2, height: bbox.height + PAD * 2, transform: drag ? `translate(${drag.dx}px,${drag.dy}px)` : undefined }}
+      onClick={e => e.stopPropagation()}
+      onPointerDown={e => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        start.current = { px: e.clientX, py: e.clientY, moved: false };
+      }}
+      onPointerMove={e => {
+        const s = start.current;
+        if (!s) return;
+        const dx = e.clientX - s.px, dy = e.clientY - s.py;
+        if (Math.abs(dx) + Math.abs(dy) > 3) s.moved = true;
+        if (s.moved) setDrag({ dx, dy });
+      }}
+      onPointerUp={e => {
+        const s = start.current;
+        start.current = null;
+        setDrag(null);
+        if (!s) return;
+        if (s.moved) onMove(e.clientX - s.px, e.clientY - s.py);
+        else onClear(); // click sin arrastrar = deseleccionar el grupo
+      }}
+    >
+      <div className="group-tag" onPointerDown={e => e.stopPropagation()}>
+        {count} seleccionados
+        <button title="Eliminar todos" onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onDelete(); }}><Trash2 size={12} /></button>
+      </div>
     </div>
   );
 }
@@ -934,6 +1078,7 @@ interface WidgetBoxProps {
   edit: WidgetEdit | null;
   isLocked: boolean;
   snapshot: { url: string; width: number; height: number } | null;
+  groupMode?: boolean;
   onSelect: () => void;
   onPatch: (patch: WidgetPatch) => void;
 }
@@ -945,7 +1090,7 @@ const WIDGET_LABEL: Record<WidgetNode['widgetType'], string> = {
 
 /** Un campo de formulario: seleccionar, arrastrar (mover), grip (escalar).
  *  La edición se aplica al instante (reescritura del /Rect de la anotación). */
-function WidgetBox({ widget, pageWidth, pageHeight, scale, selected, edit, isLocked, snapshot, onSelect, onPatch }: WidgetBoxProps) {
+function WidgetBox({ widget, pageWidth, pageHeight, scale, selected, edit, isLocked, snapshot, groupMode, onSelect, onPatch }: WidgetBoxProps) {
   const eff = effectiveWidgetRect(widget, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
   const orig = pdfRectToCss({ x: widget.x, y: widget.y, width: widget.width, height: widget.height }, pageHeight, scale);
@@ -974,7 +1119,7 @@ function WidgetBox({ widget, pageWidth, pageHeight, scale, selected, edit, isLoc
       {showPixels && (
         <div className="seg-mask" style={{ left: orig.left, top: orig.top, width: orig.width, height: orig.height }} />
       )}
-      {selected && !isLocked && (
+      {selected && !isLocked && !groupMode && (
         <ObjectBar
           rect={rect} pageWidth={pageWidth} width={eff.width}
           onAlign={x => onPatch({ x: round1(clampX(x, eff.width, pageWidth)) })}
@@ -1023,7 +1168,7 @@ function WidgetBox({ widget, pageWidth, pageHeight, scale, selected, edit, isLoc
       }}
     >
       {selected && <span className="widget-label">{WIDGET_LABEL[widget.widgetType]} · {widget.fieldName}</span>}
-      {!isLocked && (
+      {!isLocked && !groupMode && (
         <div
           className="seg-grip"
           title="Arrastrar para redimensionar el campo"
@@ -1071,6 +1216,7 @@ interface ImageBoxProps {
   edit: ImageEdit | null;
   isLocked: boolean;
   snapshot: { url: string; width: number; height: number } | null;
+  groupMode?: boolean;
   onSelect: () => void;
   onPatch: (patch: ImagePatch) => void;
 }
@@ -1080,7 +1226,7 @@ interface ImageBoxProps {
  *  muestra los PÍXELES reales (crop del snapshot de la página); el original
  *  queda visible hasta Aplicar (ahí se muda de verdad). Eliminada: velo rojo
  *  translúcido — nunca una máscara opaca que taparía el texto de arriba. */
-function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked, snapshot, onSelect, onPatch }: ImageBoxProps) {
+function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked, snapshot, groupMode, onSelect, onPatch }: ImageBoxProps) {
   const eff = effectiveImageRect(img, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
   const orig = pdfRectToCss({ x: img.x, y: img.y, width: img.width, height: img.height }, pageHeight, scale);
@@ -1112,7 +1258,7 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
       {maskOriginal && (
         <div className="seg-mask" style={{ left: orig.left, top: orig.top, width: orig.width, height: orig.height }} />
       )}
-      {selected && !isLocked && (
+      {selected && !isLocked && !groupMode && (
         <ObjectBar
           rect={rect} pageWidth={pageWidth} width={eff.width}
           onAlign={x => onPatch({ x: round1(clampX(x, eff.width, pageWidth)) })}
@@ -1161,7 +1307,7 @@ function ImageBox({ img, pageWidth, pageHeight, scale, selected, edit, isLocked,
           });
         }}
       >
-        {!isLocked && (
+        {!isLocked && !groupMode && (
           <div
             className="seg-grip"
             title="Arrastrar para escalar la imagen"
@@ -1214,6 +1360,9 @@ interface SegmentBoxProps {
   /** Ancho de área tipeable (pt) fijado por el grip, o null (= ancho natural). */
   area: { w?: number; h?: number } | null;
   onArea: (a: { w?: number; h?: number } | null) => void;
+  /** Selección múltiple activa: el box solo muestra highlight (la barra y el
+   *  grip los maneja la caja de grupo). */
+  groupMode?: boolean;
   onSelect: () => void;
   onStartEdit: () => void;
   onPatch: (patch: SegmentPatch) => void;
@@ -1224,7 +1373,7 @@ interface SegmentBoxProps {
   onHighlightColor: (c: string) => void;
 }
 
-function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, isLocked, onDragging, area, onArea, onSelect, onStartEdit, onPatch, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: SegmentBoxProps) {
+function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, isLocked, onDragging, area, onArea, groupMode, onSelect, onStartEdit, onPatch, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor }: SegmentBoxProps) {
   const eff = effectiveGeometry(seg, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
   const dragStart = useRef<{ px: number; py: number; moved: boolean } | null>(null);
@@ -1272,7 +1421,7 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
 
   return (
     <>
-      {selected && !isLocked && (
+      {selected && !isLocked && !groupMode && (
         <FloatingBar seg={seg} edit={edit} rect={rect} pageWidth={pageWidth} onPatch={onPatch} onDocOp={onDocOp} onRequestLink={onRequestLink} highlightColor={highlightColor} onHighlightColor={onHighlightColor} />
       )}
       <div
@@ -1351,7 +1500,7 @@ function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit
             dangerouslySetInnerHTML={{ __html: html }}
           />
         )}
-        {!editing && !isLocked && (
+        {!editing && !isLocked && !groupMode && (
           <div
             className="seg-grip"
             title="Ampliar el área de texto (ancho y alto; la letra no cambia)"

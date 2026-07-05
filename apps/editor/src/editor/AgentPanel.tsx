@@ -11,6 +11,7 @@ import { Sparkles, Send, X } from 'lucide-react';
 import type { ImageEdit, SegmentEdit } from '@aldus/core';
 import { api } from '../lib/api';
 import { cx } from '../ui/primitives';
+import { StreamingMarkdown, MD_STYLES } from './Markdown';
 
 const TOOL_LABEL: Record<string, string> = {
   edit_text: 'editando texto', move_text: 'moviendo texto', set_text_color: 'coloreando texto',
@@ -82,6 +83,7 @@ export function AgentPanel({ docId, edits, imageEdits, onApply, onClose }: Props
 
   return (
     <aside className="flex w-[340px] shrink-0 flex-col border-l border-neutral-200 bg-white">
+      <style>{MD_STYLES}</style>
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-3">
         <Sparkles size={16} className="text-blue-600" />
         <span className="text-[13px] font-semibold text-neutral-900">Aldus AI</span>
@@ -112,8 +114,8 @@ export function AgentPanel({ docId, edits, imageEdits, onApply, onClose }: Props
         {messages.map((m, i) => (
           <div key={i} className={cx('flex', m.role === 'user' ? 'justify-end' : 'justify-start')}>
             <div className={cx(
-              'max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-[12.5px] leading-relaxed',
-              m.role === 'user' ? 'bg-blue-600 text-white' : m.error ? 'bg-red-50 text-red-700' : 'bg-neutral-100 text-neutral-800',
+              'max-w-[85%] rounded-2xl px-3 py-2 text-[12.5px] leading-relaxed',
+              m.role === 'user' ? 'whitespace-pre-wrap bg-blue-600 text-white' : m.error ? 'bg-red-50 text-red-700' : 'bg-neutral-100 text-neutral-800',
             )}>
               {/* Tools ejecutándose (chips) */}
               {m.role === 'assistant' && m.tools && m.tools.length > 0 && (
@@ -123,11 +125,11 @@ export function AgentPanel({ docId, edits, imageEdits, onApply, onClose }: Props
                   ))}
                 </div>
               )}
-              {m.text}
-              {/* Cursor mientras streamea / "Pensando…" antes del primer token */}
-              {m.streaming && (m.text
-                ? <span className="ml-0.5 inline-block animate-pulse">▍</span>
-                : (!m.tools || m.tools.length === 0) && <span className="text-neutral-400">Pensando…</span>)}
+              {m.role === 'assistant'
+                ? (m.streaming && !m.text && (!m.tools || m.tools.length === 0)
+                    ? <span className="text-neutral-400">Pensando…</span>
+                    : <StreamingMarkdown text={m.text} active={!!m.streaming} />)
+                : m.text}
               {m.role === 'assistant' && !m.error && !m.streaming && typeof m.edits === 'number' && m.edits > 0 && (
                 <div className="mt-1.5 text-[11px] font-medium text-blue-600">✎ {m.edits} edición(es) activa(s) — revisá y guardá</div>
               )}

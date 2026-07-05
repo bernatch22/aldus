@@ -4,6 +4,16 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-04
 
+### feat(editor): markdown + reveal por rAF en el panel de IA (portado de signwax)
+El texto del agente ahora se rendea como **markdown** (headings, bold/italic, code inline y
+fenced, links, listas, tablas GFM) y se revela con una animación de **requestAnimationFrame**
+(tipeo suave a ritmo parejo sin importar cómo caen los chunks de red, + caret parpadeante).
+Portado del `components/Markdown.tsx` de signwax (renderer sin dependencias, a elementos React
+— nada de dangerouslySetInnerHTML, el texto del modelo no inyecta HTML), adaptado a la paleta
+de Aldus (`--ink`/`--line`/`--muted`). El `AgentPanel` usa `<StreamingMarkdown text active>`
+para los mensajes del asistente (con `active` = streaming) e inyecta `MD_STYLES`. Archivos:
+`apps/editor/src/editor/Markdown.tsx` (nuevo), `AgentPanel.tsx`.
+
 ### feat(agent+server+editor): STREAMING del agente (texto token a token + tools en vivo)
 Sin streaming el panel se quedaba mudo 20-40s en "Pensando" y parecía colgado. Ahora todo el
 pipeline streamea: `runTurn` corre con `includePartialMessages: true` del Agent SDK y emite

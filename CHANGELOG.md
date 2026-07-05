@@ -4,6 +4,23 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-04
 
+### feat(agent): CLI `aldus` + agente LLM con el grafo del PDF embebido en el prompt
+Nuevo `@aldus/agent`: un agente (Claude Agent SDK + Sonnet, auth por suscripción) que tiene
+el **contenido completo del PDF embebido en su system prompt** (el grafo de `@aldus/core`,
+todas las páginas) y con eso responde preguntas o hace cambios. Diseño: NO hay tool de
+lectura (el documento entero ya va en el prompt, el agente ancla a los `id` reales); las
+tools son solo mutaciones (`edit_text`, `move_text`, `set_text_color`, `set_text_size`,
+`delete_text`, `move_image`, `delete_image`) que acumulan `SegmentEdit`/`ImageEdit` con las
+MISMAS funciones de merge del editor UI y se hornean con `@aldus/core/bake` al guardar
+(front-on-save para imágenes movidas, como el editor). Corre con `tsx` (como el server),
+`canUseTool` como único gate de permisos (auto-aprueba las tools de Aldus, niega el resto).
+CLI: `aldus <pdf> -p "<prompt>" [-o out.pdf]` (one-shot) o `aldus <pdf>` (chat multi-turno
+vía `resume`). Verificado end-to-end contra un PDF real (leer contenido, `edit_text`,
+`move_image` → bake → re-extracción confirma el cambio). Archivos: `packages/agent/src/`
+(`graph.ts`, `serialize.ts`, `session.ts`, `tools.ts`, `agent.ts`, `cli.ts`),
+`bin/aldus.mjs`, `README.md`. Límite conocido: docs muy grandes se acercan al límite de
+contexto (embebemos todo el grafo) — paginación selectiva queda como próximo paso.
+
 ### fix(editor): imagen movida no desaparece al GUARDAR (front-on-save)
 Contraparte del fix in-place: el editor mantiene la imagen movida visible con un sticker al
 frente (overlay), pero el bake la reubica EN SU LUGAR (para no romper la identidad durante la

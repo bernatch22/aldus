@@ -87,9 +87,18 @@ importers:
 
   packages/agent:
     dependencies:
+      '@aldus/core':
+        specifier: workspace:*
+        version: link:../core
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.3.198
         version: 0.3.198(@anthropic-ai/sdk@0.109.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)
+      pdfjs-dist:
+        specifier: ^4.10.38
+        version: 4.10.38
+      tsx:
+        specifier: ^4.19.2
+        version: 4.22.4
       zod:
         specifier: ^4.0.0
         version: 4.4.3

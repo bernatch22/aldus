@@ -2,12 +2,19 @@
   "name": "@aldus/agent",
   "version": "0.0.1",
   "type": "module",
-  "description": "El agente Aldus: Claude Agent SDK + Sonnet, tools sobre el grafo del PDF.",
+  "description": "El agente Aldus: Claude Agent SDK + Sonnet, con el grafo del PDF embebido en el prompt. CLI para preguntar contenido o editar.",
+  "bin": {
+    "aldus": "./bin/aldus.mjs"
+  },
   "scripts": {
+    "aldus": "tsx src/cli.ts",
     "spike": "node src/spike.mjs"
   },
   "dependencies": {
+    "@aldus/core": "workspace:*",
     "@anthropic-ai/claude-agent-sdk": "^0.3.198",
+    "pdfjs-dist": "^4.10.38",
+    "tsx": "^4.19.2",
     "zod": "^4.0.0"
   }
 }

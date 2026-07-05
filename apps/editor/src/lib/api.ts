@@ -9,6 +9,11 @@ export interface DocMeta {
   uploadedAt: string;
 }
 
+/** Evento en vivo de un turno del agente (streaming NDJSON). */
+export type AgentEvent =
+  | { type: 'text'; delta: string }
+  | { type: 'tool'; name: string };
+
 async function ok<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => null) as { error?: string } | null;
@@ -64,21 +69,50 @@ export const api = {
     return fetch(`/api/documents/${id}/images`, { method: 'POST', body: fd }).then(r => ok<{ ok: boolean }>(r));
   },
 
-  /** Corre un turno del agente LLM sobre el documento. Devuelve su respuesta y el
-   *  SET COMPLETO de ediciones (las pendientes enviadas + las que agregó) para que
-   *  el editor reemplace su estado. `resume` continúa la conversación (chat). */
-  agent: (
+  /** Corre un turno del agente LLM STREAMEADO (NDJSON). `onEvent` recibe los
+   *  deltas de texto y las tool calls en vivo; la promesa resuelve con el
+   *  resultado final: el SET COMPLETO de ediciones (las pendientes enviadas + las
+   *  que agregó) para que el editor reemplace su estado. `resume` continúa el chat. */
+  agentStream: async (
     id: string,
     prompt: string,
     edits: SegmentEdit[] = [],
     imageEdits: ImageEdit[] = [],
-    resume?: string,
-  ): Promise<{ text: string; sessionId?: string; toolCalls: number; edits: SegmentEdit[]; imageEdits: ImageEdit[] }> =>
-    fetch(`/api/documents/${id}/agent`, {
+    resume: string | undefined,
+    onEvent: (ev: AgentEvent) => void,
+  ): Promise<{ sessionId?: string; toolCalls: number; edits: SegmentEdit[]; imageEdits: ImageEdit[] }> => {
+    const res = await fetch(`/api/documents/${id}/agent`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ prompt, edits, imageEdits, resume }),
-    }).then(r => ok<{ text: string; sessionId?: string; toolCalls: number; edits: SegmentEdit[]; imageEdits: ImageEdit[] }>(r)),
+    });
+    if (!res.ok || !res.body) {
+      const body = await res.json().catch(() => null) as { error?: string } | null;
+      throw new Error(body?.error || `${res.status} ${res.statusText}`);
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    let final: { sessionId?: string; toolCalls: number; edits: SegmentEdit[]; imageEdits: ImageEdit[] } | undefined;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        let ev: AgentEvent & { error?: string; sessionId?: string; toolCalls?: number; edits?: SegmentEdit[]; imageEdits?: ImageEdit[] };
+        try { ev = JSON.parse(line); } catch { continue; }
+        if (ev.type === 'done') final = { sessionId: ev.sessionId, toolCalls: ev.toolCalls ?? 0, edits: ev.edits ?? [], imageEdits: ev.imageEdits ?? [] };
+        else if (ev.type === 'error') throw new Error(ev.error || 'El agente falló.');
+        else onEvent(ev);
+      }
+    }
+    if (!final) throw new Error('El agente no devolvió un resultado.');
+    return final;
+  },
 
   /** Aplica las ediciones AL PDF (bake del content stream + /Annots) y lo persiste. */
   bake: (

@@ -135,16 +135,30 @@ app.post('/api/documents/:id/agent', async (req, res) => {
   const edits = Array.isArray(req.body?.edits) ? req.body.edits : [];
   const imageEdits = Array.isArray(req.body?.imageEdits) ? req.body.imageEdits : [];
   const resume = typeof req.body?.resume === 'string' ? req.body.resume : undefined;
+  const t0 = Date.now();
+  console.log(`[agent] ← id=${id.slice(0, 8)} prompt=${JSON.stringify(prompt.slice(0, 60))} seed=${edits.length}+${imageEdits.length} resume=${resume ? 'sí' : 'no'}`);
+
+  // STREAMING NDJSON: una línea JSON por evento. El panel muestra la respuesta
+  // escribiéndose + las tools ejecutándose en vez de esperar mudo 20-40s.
+  res.setHeader('content-type', 'application/x-ndjson; charset=utf-8');
+  res.setHeader('cache-control', 'no-cache, no-transform');
+  res.setHeader('x-accel-buffering', 'no');
+  const write = (obj: unknown) => res.write(JSON.stringify(obj) + '\n');
+
   try {
     const doc = await loadDoc(pdfPath(id));
+    console.log(`[agent]   grafo cargado (${doc.pages.length} pág, ${Date.now() - t0}ms) — corriendo LLM…`);
     const session = new EditSession(doc);
     session.seed(edits, imageEdits);
-    const { text, sessionId, toolCalls } = await runTurn({ doc, session, prompt, resume });
+    const { sessionId, toolCalls } = await runTurn({ doc, session, prompt, resume, onEvent: write });
     const out = session.getEdits();
-    res.json({ text, sessionId, toolCalls, edits: out.edits, imageEdits: out.imageEdits });
+    console.log(`[agent] → OK ${Date.now() - t0}ms · toolCalls=${toolCalls} · edits=${out.edits.length}+${out.imageEdits.length}`);
+    write({ type: 'done', sessionId, toolCalls, edits: out.edits, imageEdits: out.imageEdits });
   } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : 'El agente falló.' });
+    console.error(`[agent] ✗ ${Date.now() - t0}ms:`, err instanceof Error ? err.message : err);
+    write({ type: 'error', error: err instanceof Error ? err.message : 'El agente falló.' });
   }
+  res.end();
 });
 
 // Crear un campo de formulario nuevo (texto/checkbox/radio/select/lista/botón/firma).

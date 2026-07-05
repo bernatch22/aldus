@@ -1,9 +1,10 @@
 /**
  * AgentPanel — el chat de Aldus AI dentro del editor. Manda el prompt al server
- * (que corre el agente LLM con el grafo del documento embebido), recibe la
- * respuesta + el SET COMPLETO de ediciones, y las aplica al estado del editor
- * vía `onApply` — el mismo pipeline preview/guardar que una edición manual.
- * Multi-turno con `sessionId` (resume).
+ * (que corre el agente LLM con el grafo del documento embebido) y STREAMEA la
+ * respuesta token a token + las tools ejecutándose en vivo (NDJSON). Al terminar,
+ * aplica el SET COMPLETO de ediciones al estado del editor vía `onApply` — el
+ * mismo pipeline preview/guardar que una edición manual. Multi-turno con
+ * `sessionId` (resume).
  */
 import { useEffect, useRef, useState } from 'react';
 import { Sparkles, Send, X } from 'lucide-react';
@@ -11,11 +12,19 @@ import type { ImageEdit, SegmentEdit } from '@aldus/core';
 import { api } from '../lib/api';
 import { cx } from '../ui/primitives';
 
+const TOOL_LABEL: Record<string, string> = {
+  edit_text: 'editando texto', move_text: 'moviendo texto', set_text_color: 'coloreando texto',
+  set_text_size: 'cambiando tamaño', delete_text: 'eliminando texto',
+  move_image: 'moviendo imagen', delete_image: 'eliminando imagen',
+};
+const toolLabel = (name: string) => TOOL_LABEL[name.replace('mcp__aldus__', '')] ?? name;
+
 interface Msg {
   role: 'user' | 'assistant';
   text: string;
   error?: boolean;
-  /** Cantidad de ediciones activas tras el turno (para el chip). */
+  streaming?: boolean;
+  tools?: string[];
   edits?: number;
 }
 
@@ -29,8 +38,8 @@ interface Props {
 
 const SUGGESTIONS = [
   'Resumí de qué trata el documento',
-  'Corregí las faltas de ortografía del título',
   'Poné el título en mayúsculas',
+  'Corregí las faltas de ortografía del título',
 ];
 
 export function AgentPanel({ docId, edits, imageEdits, onApply, onClose }: Props) {
@@ -42,21 +51,30 @@ export function AgentPanel({ docId, edits, imageEdits, onApply, onClose }: Props
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messages, busy]);
+  }, [messages]);
 
   async function send(text: string) {
     const prompt = text.trim();
     if (!prompt || busy) return;
-    setMessages(m => [...m, { role: 'user', text: prompt }]);
+    setMessages(m => [...m, { role: 'user', text: prompt }, { role: 'assistant', text: '', streaming: true, tools: [] }]);
     setInput('');
     setBusy(true);
+    const patchLast = (fn: (msg: Msg) => Msg) =>
+      setMessages(m => { const c = [...m]; c[c.length - 1] = fn(c[c.length - 1]); return c; });
     try {
-      const res = await api.agent(docId, prompt, [...edits.values()], [...imageEdits.values()], sessionId.current);
+      const res = await api.agentStream(
+        docId, prompt, [...edits.values()], [...imageEdits.values()], sessionId.current,
+        ev => {
+          if (ev.type === 'text') patchLast(msg => ({ ...msg, text: msg.text + ev.delta }));
+          else if (ev.type === 'tool') patchLast(msg => ({ ...msg, tools: [...(msg.tools ?? []), ev.name] }));
+        },
+      );
       sessionId.current = res.sessionId ?? sessionId.current;
       onApply(res.edits, res.imageEdits);
-      setMessages(m => [...m, { role: 'assistant', text: res.text || '(sin respuesta)', edits: res.edits.length + res.imageEdits.length }]);
+      patchLast(msg => ({ ...msg, streaming: false, text: msg.text || '(listo)', edits: res.edits.length + res.imageEdits.length }));
     } catch (e) {
-      setMessages(m => [...m, { role: 'assistant', text: e instanceof Error ? e.message : 'Falló el agente.', error: true }]);
+      const err = e instanceof Error ? e.message : 'Falló el agente.';
+      patchLast(msg => ({ ...msg, streaming: false, error: true, text: (msg.text ? `${msg.text}\n\n` : '') + `⚠️ ${err}` }));
     } finally {
       setBusy(false);
     }
@@ -97,18 +115,25 @@ export function AgentPanel({ docId, edits, imageEdits, onApply, onClose }: Props
               'max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-[12.5px] leading-relaxed',
               m.role === 'user' ? 'bg-blue-600 text-white' : m.error ? 'bg-red-50 text-red-700' : 'bg-neutral-100 text-neutral-800',
             )}>
+              {/* Tools ejecutándose (chips) */}
+              {m.role === 'assistant' && m.tools && m.tools.length > 0 && (
+                <div className="mb-1.5 flex flex-wrap gap-1">
+                  {m.tools.map((t, j) => (
+                    <span key={j} className="rounded-full bg-blue-100 px-2 py-0.5 text-[10.5px] font-medium text-blue-700">✎ {toolLabel(t)}</span>
+                  ))}
+                </div>
+              )}
               {m.text}
-              {m.role === 'assistant' && !m.error && typeof m.edits === 'number' && m.edits > 0 && (
+              {/* Cursor mientras streamea / "Pensando…" antes del primer token */}
+              {m.streaming && (m.text
+                ? <span className="ml-0.5 inline-block animate-pulse">▍</span>
+                : (!m.tools || m.tools.length === 0) && <span className="text-neutral-400">Pensando…</span>)}
+              {m.role === 'assistant' && !m.error && !m.streaming && typeof m.edits === 'number' && m.edits > 0 && (
                 <div className="mt-1.5 text-[11px] font-medium text-blue-600">✎ {m.edits} edición(es) activa(s) — revisá y guardá</div>
               )}
             </div>
           </div>
         ))}
-        {busy && (
-          <div className="flex justify-start">
-            <div className="rounded-2xl bg-neutral-100 px-3 py-2 text-[12.5px] text-neutral-400">Pensando…</div>
-          </div>
-        )}
       </div>
 
       <div className="shrink-0 border-t border-neutral-200 p-2.5">

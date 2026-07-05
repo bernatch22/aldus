@@ -17,7 +17,19 @@ import { stdin as input, stdout as output } from 'node:process';
 import path from 'node:path';
 import { loadDoc } from './graph.js';
 import { EditSession } from './session.js';
-import { runTurn } from './agent.js';
+import { runTurn, type AgentEvent } from './agent.js';
+
+/** Etiqueta amigable de una tool (mcp__aldus__edit_text → "editar texto"). */
+const TOOL_LABEL: Record<string, string> = {
+  edit_text: 'editando texto', move_text: 'moviendo texto', set_text_color: 'coloreando texto',
+  set_text_size: 'cambiando tamaño', delete_text: 'eliminando texto',
+  move_image: 'moviendo imagen', delete_image: 'eliminando imagen',
+};
+/** Streamea los eventos del turno a stdout (texto token a token + tools). */
+function streamToStdout(ev: AgentEvent): void {
+  if (ev.type === 'text') process.stdout.write(ev.delta);
+  else if (ev.type === 'tool') process.stdout.write(`\n  · ${TOOL_LABEL[ev.name.replace('mcp__aldus__', '')] ?? ev.name}…\n`);
+}
 
 function usage(): never {
   console.error(`aldus — agente sobre el grafo de un PDF
@@ -63,8 +75,8 @@ async function main(): Promise<void> {
 
   // ── one-shot ──
   if (values.prompt) {
-    const { text, toolCalls } = await runTurn({ doc, session, prompt: values.prompt });
-    console.log(text);
+    const { toolCalls } = await runTurn({ doc, session, prompt: values.prompt, onEvent: streamToStdout });
+    process.stdout.write('\n');
     if (session.count > 0) {
       const out = values.out || defaultOut(file);
       await save(session, out);
@@ -90,10 +102,12 @@ async function main(): Promise<void> {
         await save(session, arg || outPath);
         continue;
       }
-      const { text, sessionId } = await runTurn({ doc, session, prompt: line, resume });
+      process.stdout.write('\n');
+      const { sessionId } = await runTurn({ doc, session, prompt: line, resume, onEvent: streamToStdout });
       resume = sessionId ?? resume;
-      console.log(`\n${text}\n`);
-      if (session.count > 0) console.log(`  · ${session.count} edición(es) pendiente(s) — /save para hornear\n`);
+      process.stdout.write('\n');
+      if (session.count > 0) console.log(`  · ${session.count} edición(es) pendiente(s) — /save para hornear`);
+      process.stdout.write('\n');
     }
     if (session.count > 0) {
       const ans = (await rl.question(`Tenés ${session.count} edición(es) sin guardar. ¿Guardar en ${outPath}? [s/N] `)).trim().toLowerCase();

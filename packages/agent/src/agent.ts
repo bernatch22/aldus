@@ -46,13 +46,19 @@ export interface TurnResult {
   toolCalls: number;
 }
 
-/** Corre un turno. `resume` continúa la conversación previa (chat). */
+/** Eventos en vivo de un turno (para streamear al panel). */
+export type AgentEvent =
+  | { type: 'text'; delta: string }        // token(s) de texto del asistente
+  | { type: 'tool'; name: string };        // arrancó una tool de edición
+
+/** Corre un turno STREAMEADO. `resume` continúa la conversación previa (chat).
+ *  `onEvent` recibe los deltas de texto y las tool calls a medida que ocurren. */
 export async function runTurn(opts: {
   doc: DocGraph;
   session: EditSession;
   prompt: string;
   resume?: string;
-  onText?: (chunk: string) => void;
+  onEvent?: (ev: AgentEvent) => void;
 }): Promise<TurnResult> {
   const server = buildToolServer(opts.session);
   let text = '';
@@ -65,6 +71,9 @@ export async function runTurn(opts: {
       model: MODEL,
       systemPrompt: systemPrompt(opts.doc),
       mcpServers: { aldus: server },
+      // Deltas token a token → el panel muestra la respuesta escribiéndose y las
+      // tools ejecutándose, en vez de quedarse mudo 20-40s en "Pensando".
+      includePartialMessages: true,
       // En headless no hay prompt de permisos interactivo: `canUseTool` es el
       // ÚNICO gate — auto-aprueba las tools de Aldus y niega cualquier otra (sin
       // `allowedTools`, que las auto-aprobaría antes y shadowearía este callback).
@@ -76,14 +85,25 @@ export async function runTurn(opts: {
       ...(opts.resume ? { resume: opts.resume } : {}),
     },
   })) {
-    if (message.type === 'assistant') {
-      for (const block of message.message.content) {
-        if (block.type === 'text') { text += block.text; opts.onText?.(block.text); }
-        else if (block.type === 'tool_use') toolCalls++;
+    if (message.type === 'stream_event') {
+      // Evento raw de Anthropic: deltas de texto y comienzo de tool_use.
+      const ev = message.event as { type: string; delta?: { type?: string; text?: string }; content_block?: { type?: string; name?: string } };
+      if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta' && ev.delta.text) {
+        text += ev.delta.text;
+        opts.onEvent?.({ type: 'text', delta: ev.delta.text });
+      } else if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
+        const name = ev.content_block.name ?? 'tool';
+        // Solo las tools de edición de Aldus cuentan/se muestran; las internas del
+        // SDK (p. ej. ToolSearch, que canUseTool deniega) no son ruido para el UI.
+        if (name.startsWith('mcp__aldus__')) {
+          toolCalls++;
+          opts.onEvent?.({ type: 'tool', name });
+        }
       }
     } else if (message.type === 'result') {
       sessionId = message.session_id;
-      if (message.subtype === 'success') text = message.result;
+      // No pisamos `text` con message.result: el acumulado de deltas ya trae la
+      // narrativa completa (texto intermedio entre tools incluido).
     }
   }
   return { text, sessionId, toolCalls };

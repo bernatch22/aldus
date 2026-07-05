@@ -4,6 +4,20 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-04
 
+### feat(agent+server+editor): STREAMING del agente (texto token a token + tools en vivo)
+Sin streaming el panel se quedaba mudo 20-40s en "Pensando" y parecía colgado. Ahora todo el
+pipeline streamea: `runTurn` corre con `includePartialMessages: true` del Agent SDK y emite
+`AgentEvent`s (`{type:'text',delta}` por token, `{type:'tool',name}` al arrancar una edición —
+filtrado a las tools `mcp__aldus__*`, las internas del SDK como ToolSearch no ensucian el UI).
+El endpoint `/agent` pasó de JSON a **NDJSON en streaming** (una línea por evento + un `done`
+final con las ediciones + `sessionId`; `error` si falla). El cliente `api.agentStream` lee el
+body como stream, parsea líneas y llama `onEvent` en vivo. El `AgentPanel` muestra la respuesta
+escribiéndose (cursor ▍), chips de las tools ejecutándose, y aplica las ediciones al soltar el
+`done`. El CLI también streamea a stdout. Verificado: los eventos llegan incrementalmente
+(~2-13s) en vez de todos juntos al final. Archivos: `packages/agent/src/{agent,cli}.ts`,
+`apps/server/src/index.ts` (NDJSON), `apps/editor/src/lib/api.ts` (`agentStream` + `AgentEvent`),
+`apps/editor/src/editor/AgentPanel.tsx`.
+
 ### feat(editor+server): editar vía LLM desde la UI — panel de chat "Aldus AI"
 Integración del agente en el editor: botón **"AI"** en el header abre un panel de chat a la
 derecha donde pedís cambios (o preguntás) en lenguaje natural. Arquitectura: el agente corre

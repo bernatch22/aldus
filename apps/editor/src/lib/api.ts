@@ -64,6 +64,22 @@ export const api = {
     return fetch(`/api/documents/${id}/images`, { method: 'POST', body: fd }).then(r => ok<{ ok: boolean }>(r));
   },
 
+  /** Corre un turno del agente LLM sobre el documento. Devuelve su respuesta y el
+   *  SET COMPLETO de ediciones (las pendientes enviadas + las que agregó) para que
+   *  el editor reemplace su estado. `resume` continúa la conversación (chat). */
+  agent: (
+    id: string,
+    prompt: string,
+    edits: SegmentEdit[] = [],
+    imageEdits: ImageEdit[] = [],
+    resume?: string,
+  ): Promise<{ text: string; sessionId?: string; toolCalls: number; edits: SegmentEdit[]; imageEdits: ImageEdit[] }> =>
+    fetch(`/api/documents/${id}/agent`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt, edits, imageEdits, resume }),
+    }).then(r => ok<{ text: string; sessionId?: string; toolCalls: number; edits: SegmentEdit[]; imageEdits: ImageEdit[] }>(r)),
+
   /** Aplica las ediciones AL PDF (bake del content stream + /Annots) y lo persiste. */
   bake: (
     id: string,

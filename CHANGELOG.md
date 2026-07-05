@@ -4,6 +4,23 @@ El más reciente arriba; fecha `YYYY-MM-DD`.
 
 ## 2026-07-04
 
+### feat(editor+server): editar vía LLM desde la UI — panel de chat "Aldus AI"
+Integración del agente en el editor: botón **"AI"** en el header abre un panel de chat a la
+derecha donde pedís cambios (o preguntás) en lenguaje natural. Arquitectura: el agente corre
+en el **server** (nuevo `POST /api/documents/:id/agent`, reusa `@aldus/agent` — carga el grafo
+del PDF, lo embebe en el prompt, corre el turno) y NO hornea: devuelve el `text` + el SET
+COMPLETO de ediciones. El panel las **aplica al estado del editor** (`applyAgentEdits` →
+reemplaza `edits`/`imageEdits`), así fluyen por el MISMO pipeline preview→Aplicar que una
+edición manual, y son deshacibles con Ctrl+Z. Multi-turno: el panel manda las ediciones
+pendientes como seed + el `sessionId` (resume) → el agente continúa desde el estado actual.
+Verificado end-to-end contra el server real: edición simple, seed + segunda edición (vuelven
+las dos), resume. Auth por suscripción → el server corre SIN `ANTHROPIC_API_KEY`. Archivos:
+`apps/server/src/index.ts` (+dep `@aldus/agent`), `apps/editor/src/lib/api.ts` (`api.agent`),
+`apps/editor/src/editor/AgentPanel.tsx` (nuevo), `pages/EditorPage.tsx` (botón + panel +
+`applyAgentEdits`), `packages/agent/src/{index,session}.ts` (`seed`/`getEdits` + exports).
+Límite conocido: el agente ve el grafo del PDF GUARDADO (las posiciones de ediciones manuales
+pendientes no se reflejan en lo que "ve", aunque se mergean bien) — refinamiento futuro.
+
 ### feat(agent): CLI `aldus` + agente LLM con el grafo del PDF embebido en el prompt
 Nuevo `@aldus/agent`: un agente (Claude Agent SDK + Sonnet, auth por suscripción) que tiene
 el **contenido completo del PDF embebido en su system prompt** (el grafo de `@aldus/core`,

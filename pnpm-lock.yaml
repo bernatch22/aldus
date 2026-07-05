@@ -59,6 +59,9 @@ importers:
 
   apps/server:
     dependencies:
+      '@aldus/agent':
+        specifier: workspace:*
+        version: link:../../packages/agent
       '@aldus/core':
         specifier: workspace:*
         version: link:../../packages/core

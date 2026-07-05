@@ -8,13 +8,14 @@ import {
 import {
   MousePointer2, Pilcrow, TextCursorInput, SquareCheck, CircleDot,
   SquareChevronDown, Signature, ImagePlus, Droplets, PanelTop,
-  ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Check, Undo2, Redo2, type LucideIcon,
+  ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Check, Undo2, Redo2, Sparkles, type LucideIcon,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { PdfCanvas } from '../editor/PdfCanvas';
 import { clearColorCache } from '../editor/sampleColor';
 import { clearImagePixelCache } from '../editor/imagePixels';
 import { Inspector } from '../editor/Inspector';
+import { AgentPanel } from '../editor/AgentPanel';
 import type { AddTextRequest } from '../editor/NodeOverlay';
 import { Button, IconButton, ToolButton, Toast, cx } from '../ui/primitives';
 import { WatermarkDialog, HeaderFooterDialog, LinkDialog } from '../ui/dialogs';
@@ -72,6 +73,7 @@ export function EditorPage() {
   const [edits, setEdits] = useState<Map<string, SegmentEdit>>(new Map());
   const [imageEdits, setImageEdits] = useState<Map<string, ImageEdit>>(new Map());
   const [widgetEdits, setWidgetEdits] = useState<Map<string, WidgetEdit>>(new Map());
+  const [aiOpen, setAiOpen] = useState(false);
   const [pendingHighlights, setPendingHighlights] = useState<PendingHighlight[]>([]);
   // LIFT (patrón del annotation editor de pdf.js: el canvas NO se toca durante
   // el gesto). Al SELECCIONAR un texto se prepara en background la página SIN
@@ -489,6 +491,22 @@ export function EditorPage() {
     });
   }, [pushHistory]);
 
+  // El AGENTE devuelve el SET COMPLETO de ediciones (texto + imagen): reemplazan
+  // el estado (una sola vez, deshacible con Ctrl+Z). Cacheamos el nodo original
+  // de cada segmento editado para que el overlay lo dibuje como fantasma (el
+  // preview lo extirpa), igual que una edición manual.
+  const applyAgentEdits = useCallback((segEdits: SegmentEdit[], imgEdits: ImageEdit[]) => {
+    pushHistory();
+    for (const e of segEdits) {
+      if (!segCache.current.has(e.segmentId)) {
+        const s = graphRef.current?.segments.find(x => x.id === e.segmentId);
+        if (s) segCache.current.set(e.segmentId, s);
+      }
+    }
+    setEdits(new Map(segEdits.map(e => [e.segmentId, e])));
+    setImageEdits(new Map(imgEdits.map(e => [e.imageId, e])));
+  }, [pushHistory]);
+
   // Convertir un segmento/rect en link: abre el modal (no más window.prompt).
   const requestLink = useCallback((target: { page: number; x: number; y: number; width: number; height: number }) => {
     setDialog({ kind: 'link', target });
@@ -651,6 +669,15 @@ export function EditorPage() {
           </span>
         )}
 
+        <button
+          onClick={() => setAiOpen(o => !o)}
+          title="Aldus AI — preguntá o pedí cambios"
+          className={cx('flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[13px] font-medium transition-colors',
+            aiOpen ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-neutral-200 text-neutral-600 hover:bg-neutral-50')}
+        >
+          <Sparkles size={15} /> AI
+        </button>
+
         <Button variant="primary" disabled={baking || totalEdits === 0} onClick={() => void bake()}>
           <Check size={15} strokeWidth={2.5} />
           {baking ? 'Aplicando…' : `Aplicar${totalEdits ? ` (${totalEdits})` : ''}`}
@@ -715,6 +742,17 @@ export function EditorPage() {
           locked={locked} onToggleLock={toggleLock}
           onDocOp={docOp} onRequestLink={requestLink}
         />
+
+        {/* ── Panel del agente (derecha, toggleable) ── */}
+        {aiOpen && (
+          <AgentPanel
+            docId={id}
+            edits={edits}
+            imageEdits={imageEdits}
+            onApply={applyAgentEdits}
+            onClose={() => setAiOpen(false)}
+          />
+        )}
       </div>
 
       {/* ── Modales ── */}

@@ -3,6 +3,9 @@
   "version": "0.0.1",
   "type": "module",
   "description": "El agente Aldus: Claude Agent SDK + Sonnet, con el grafo del PDF embebido en el prompt. CLI para preguntar contenido o editar.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "bin": {
     "aldus": "./bin/aldus.mjs"
   },

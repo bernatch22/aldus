@@ -76,6 +76,19 @@ export class EditSession {
     return `✓ Imagen ${id} eliminada`;
   }
 
+  /** Precarga ediciones ya existentes (p. ej. las pendientes del editor UI), para
+   *  que el agente CONTINÚE desde el estado actual en vez de empezar de cero. */
+  seed(edits: SegmentEdit[] = [], imageEdits: ImageEdit[] = []): void {
+    for (const e of edits) this.edits.set(e.segmentId, e);
+    for (const e of imageEdits) this.imageEdits.set(e.imageId, e);
+  }
+
+  /** Ediciones acumuladas (para devolverlas al editor y que las aplique a su
+   *  estado — mismo pipeline preview/guardar que una edición manual). */
+  getEdits(): { edits: SegmentEdit[]; imageEdits: ImageEdit[] } {
+    return { edits: [...this.edits.values()], imageEdits: [...this.imageEdits.values()] };
+  }
+
   /** Cantidad de ediciones pendientes. */
   get count(): number { return this.edits.size + this.imageEdits.size; }
 

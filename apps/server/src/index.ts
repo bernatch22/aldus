@@ -30,6 +30,7 @@ import {
   removeLink,
   setFieldOptions,
 } from '@aldus/core/bake';
+import { loadDoc, EditSession, runTurn } from '@aldus/agent';
 
 const PORT = Number(process.env.ALDUS_PORT || 4100);
 const DATA_DIR = process.env.ALDUS_DATA || path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
@@ -119,6 +120,30 @@ app.post('/api/documents/:id/bake', async (req, res) => {
     res.json({ ok: true, applied, warnings });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'No se pudo aplicar el bake.' });
+  }
+});
+
+// El AGENTE: corre un turno del LLM con el grafo del documento embebido en el
+// prompt. NO hornea — devuelve las ediciones acumuladas para que el editor las
+// aplique a su estado (mismo pipeline preview/guardar que una edición manual).
+// Auth por suscripción de Claude Code: el server debe correr SIN ANTHROPIC_API_KEY.
+app.post('/api/documents/:id/agent', async (req, res) => {
+  const { id } = req.params;
+  if (!ID_RE.test(id) || !existsSync(pdfPath(id))) return res.status(404).json({ error: 'No existe.' });
+  const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : '';
+  if (!prompt) return res.status(400).json({ error: 'Body esperado: { prompt } (+ edits, imageEdits, resume opcionales).' });
+  const edits = Array.isArray(req.body?.edits) ? req.body.edits : [];
+  const imageEdits = Array.isArray(req.body?.imageEdits) ? req.body.imageEdits : [];
+  const resume = typeof req.body?.resume === 'string' ? req.body.resume : undefined;
+  try {
+    const doc = await loadDoc(pdfPath(id));
+    const session = new EditSession(doc);
+    session.seed(edits, imageEdits);
+    const { text, sessionId, toolCalls } = await runTurn({ doc, session, prompt, resume });
+    const out = session.getEdits();
+    res.json({ text, sessionId, toolCalls, edits: out.edits, imageEdits: out.imageEdits });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'El agente falló.' });
   }
 });
 

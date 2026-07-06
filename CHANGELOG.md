@@ -2,6 +2,27 @@
 
 El más reciente arriba; fecha `YYYY-MM-DD`.
 
+## 2026-07-06
+
+### chore: `bin/start` — arranca todo con la SUSCRIPCIÓN (no la API key)
+El Agent SDK usa la suscripción de Claude Code cuando NO hay `ANTHROPIC_API_KEY`. Nuevo
+`bin/start` (y `pnpm start`) que hace `unset ANTHROPIC_API_KEY` y levanta el stack completo
+(`pnpm dev` → server :4100 + editor :5190) — así el agente nunca factura por API. El launcher
+del CLI (`bin/aldus.mjs`) también deshace la key para el proceso hijo (override con
+`ALDUS_USE_API_KEY=1`). Archivos: `bin/start` (nuevo), `package.json` (script `start`),
+`packages/agent/bin/aldus.mjs`.
+
+### test(agent): tests de integración REAL del pipeline (+ turno con LLM opt-in)
+Suite en `packages/agent/test/pipeline.test.ts`, sin mocks: arma un PDF real con pdf-lib →
+extrae el grafo (pdf.js legacy + `@aldus/core`) → serializa → `EditSession` → `bake` →
+re-extrae y verifica. 6 tests determinísticos (grafo, serialización con ids, `editText`
+round-trip, `moveImage` a la posición nueva, id inexistente no rompe, `seed`+`getEdits`
+multi-turno) + 1 test **con LLM real** opt-in (`ALDUS_LLM_TEST=1` + suscripción) que corre un
+turno del agente y verifica que editó. Todos verdes (LLM ~12s). Refactor de apoyo:
+`graphFromBytes()` (grafo desde bytes, sin disco) y `EditSession.bake()` (devuelve bytes;
+`save()` lo usa). `pnpm --filter @aldus/agent test`. Archivos: `test/pipeline.test.ts` (nuevo),
+`src/graph.ts`, `src/session.ts`, `package.json` (vitest + pdf-lib).
+
 ## 2026-07-04
 
 ### feat(editor): markdown + reveal por rAF en el panel de IA (portado de signwax)

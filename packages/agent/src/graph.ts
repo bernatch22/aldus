@@ -15,9 +15,8 @@ export interface DocGraph {
   pages: PageGraph[];
 }
 
-/** Lee un PDF del disco y extrae el grafo de cada página. */
-export async function loadDoc(path: string): Promise<DocGraph> {
-  const bytes = new Uint8Array(await readFile(path));
+/** Extrae el grafo de cada página desde los BYTES de un PDF (sin tocar disco). */
+export async function graphFromBytes(bytes: Uint8Array, path = '(memoria)'): Promise<DocGraph> {
   // pdf.js transfiere el ArrayBuffer al parsear → le pasamos una copia y
   // conservamos `bytes` para hornear después.
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
@@ -29,4 +28,9 @@ export async function loadDoc(path: string): Promise<DocGraph> {
   }
   await doc.destroy();
   return { path, bytes, pages };
+}
+
+/** Lee un PDF del disco y extrae su grafo. */
+export async function loadDoc(path: string): Promise<DocGraph> {
+  return graphFromBytes(new Uint8Array(await readFile(path)), path);
 }

@@ -100,18 +100,21 @@ export class EditSession {
     return parts.join(' · ') || '(sin ediciones)';
   }
 
-  /** Hornea las ediciones sobre el PDF original y lo escribe a `outPath`. */
-  async save(outPath: string): Promise<{ applied: string[]; warnings: string[] }> {
-    // AL GUARDAR: las imágenes movidas/escaladas van AL FRENTE (como el editor),
+  /** Hornea las ediciones sobre el PDF original y devuelve los BYTES nuevos. */
+  async bake(): Promise<{ pdf: Uint8Array; applied: string[]; warnings: string[] }> {
+    // AL HORNEAR: las imágenes movidas/escaladas van AL FRENTE (como el editor),
     // si no podrían quedar tapadas por contenido posterior. El bake reubica EN SU
     // LUGAR, así que sin esto "se mueven y desaparecen".
     const imgs = [...this.imageEdits.values()].map(e =>
       !e.remove && !e.zOrder && (e.x != null || e.y != null || e.width != null || e.height != null)
         ? { ...e, zOrder: 'front' as const }
         : e);
-    const { pdf, applied, warnings } = await bakeSegmentEdits(
-      this.doc.bytes.slice(), [...this.edits.values()], imgs, [],
-    );
+    return bakeSegmentEdits(this.doc.bytes.slice(), [...this.edits.values()], imgs, []);
+  }
+
+  /** Hornea y escribe el PDF a `outPath`. */
+  async save(outPath: string): Promise<{ applied: string[]; warnings: string[] }> {
+    const { pdf, applied, warnings } = await this.bake();
     await writeFile(outPath, pdf);
     return { applied, warnings };
   }

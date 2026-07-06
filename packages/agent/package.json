@@ -11,7 +11,8 @@
   },
   "scripts": {
     "aldus": "tsx src/cli.ts",
-    "spike": "node src/spike.mjs"
+    "spike": "node src/spike.mjs",
+    "test": "vitest run"
   },
   "dependencies": {
     "@aldus/core": "workspace:*",
@@ -19,5 +20,10 @@
     "pdfjs-dist": "^4.10.38",
     "tsx": "^4.19.2",
     "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "pdf-lib": "^1.17.1",
+    "vitest": "^2.1.8"
   }
 }

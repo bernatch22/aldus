@@ -4,6 +4,7 @@
   "version": "0.0.1",
   "description": "Pixel-perfect PDF graph editing agent — core engine, React editor UI, Claude Agent SDK agent.",
   "scripts": {
+    "start": "bin/start",
     "dev": "pnpm -r --parallel dev",
     "build": "pnpm -r build",
     "test": "pnpm -r test"

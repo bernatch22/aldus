@@ -16,7 +16,8 @@ host:
 
 remoteDir: ~/aldus-app-svc
 
-build: ":"   # el build (editor + bundle) se corre a mano antes — ver arriba.
+# build reproducible: editor con base /aldus/ (nativo, servido en /aldus) + bundle.
+build: cd ../.. && VITE_BASE=/aldus/ pnpm --filter @aldus/editor build && node deploy/aldus-app/build.mjs
 
 exclude:
   - .env

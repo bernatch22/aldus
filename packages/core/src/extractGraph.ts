@@ -97,6 +97,8 @@ interface RawAnnotation {
   url?: string;
   unsafeUrl?: string;
   options?: Array<{ exportValue?: string; displayValue?: string }>;
+  /** Valor actual del campo (/V) — pdf.js lo entrega como string o string[]. */
+  fieldValue?: string | string[];
   /** /C de la anotación (0..1 en pdf.js) — color del resaltado. */
   color?: Uint8ClampedArray | number[];
 }
@@ -170,6 +172,14 @@ function extractWidgets(annots: unknown[], page: number, x0: number, y0: number)
       options: (kind === 'select' || kind === 'list') && Array.isArray(raw.options)
         ? raw.options.map(o => o.displayValue || o.exportValue || '').filter(Boolean)
         : undefined,
+      // Valor actual (/V). pdf.js entrega '' para vacío y 'Off' para un
+      // checkbox/radio sin marcar → los normalizamos a "ausente".
+      value: (() => {
+        const v = raw.fieldValue;
+        if (Array.isArray(v)) return v.length ? v : undefined;
+        if (typeof v === 'string' && v && v !== 'Off') return v;
+        return undefined;
+      })(),
       x: Math.min(ax, bx) - x0,
       y: Math.min(ay, by) - y0,
       width: Math.abs(bx - ax),

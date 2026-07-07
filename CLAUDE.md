@@ -27,10 +27,13 @@ packages/core    @aldus/core    modelo + extracción + BAKE (subpath ./bake trae
                                 text (STRATEGIES A/B/C), images, widgets, fallback,
                                 report (BakeReport), pageContent, createNodes, toUnicode
 packages/agent   @aldus/agent   agente Claude Agent SDK + CLI `aldus` (config.ts =
-                                knobs env; cli.ts one-shot/chat; tools.ts = PARIDAD
-                                con la UI: texto/imagen/highlight/link/insertar/
-                                watermark/header-footer/campos; session.ts hornea
-                                ediciones + una cola de creaciones post-bake)
+                                knobs env; cli.ts one-shot/chat + --fields/--fill
+                                (formularios determinístico, sin LLM); tools.ts =
+                                PARIDAD con la UI: texto/imagen/highlight/link/
+                                insertar/watermark/header-footer/campos/fill_field;
+                                session.ts hornea ediciones + cola de creaciones +
+                                fills post-bake). Formularios en core: bake/forms.ts
+                                (readFormFields/setFieldValues) + WidgetNode.value
 apps/editor      @aldus/editor  Vite+React+Tailwind v4+lucide (:5190, proxy /api→4100)
   src/pages/editor/             hooks de EditorPage: usePendingEdits+useHistory (Memento),
                                 useLocalPreview, useLift, useLocks, useAreaWidths,

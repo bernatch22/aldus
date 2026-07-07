@@ -18,6 +18,9 @@ el PDF con el mismo bake que el editor).
   - Links: `add_link` (sobre un id de texto → URL), `delete_link`.
   - Crear: `add_text`, `insert_image` (desde una ruta local), `add_watermark`,
     `add_header_footer`, `add_form_field`. Campos existentes: `move_field`, `delete_field`.
+  - **Formularios**: cada campo se serializa con su VALOR actual (`= "…"` o
+    `(vacío)`) → el agente "extrae"/lee el form respondiendo, y **completa** con
+    `fill_field(fieldName, valor)`.
 - Dos clases de cambio (igual que el editor): **ediciones** de nodos existentes
   (Maps de `*Edit` con las MISMAS funciones de merge que la UI) y **creaciones** de
   nodos nuevos (una cola aplicada DESPUÉS del bake, cada una vía `createNodes`). El
@@ -44,6 +47,20 @@ aldus documento.pdf "Cambiá el título por 'BORRADOR'" -o documento-editado.pdf
 # Chat interactivo (multi-turno; /save [ruta] · /edits · /exit)
 aldus documento.pdf
 ```
+
+### Formularios (determinístico, sin LLM)
+
+```bash
+aldus formulario.pdf --fields                                 # volcar campos + valores (JSON)
+aldus formulario.pdf --fill '{"nombre":"Ana","acepta":"true"}' --open
+aldus formulario.pdf --fill datos.json -o completado.pdf      # desde un archivo
+```
+
+`--fields`/`--fill` NO usan el LLM: mapeo exacto por nombre de campo. También como
+**API programática** (`@aldus/core/bake`): `readFormFields(bytes)` → `FormField[]`
+(con el valor actual) y `setFieldValues(bytes, { campo: valor })` → `{ pdf, applied,
+warnings }` (valida opciones de select/radio y respeta read-only). El agente por
+lenguaje natural usa la misma `setFieldValues` por debajo.
 
 Tras `pnpm install`, el binario `aldus` queda linkeado en `node_modules/.bin`
 (o corré `pnpm --filter @aldus/agent aldus …`).

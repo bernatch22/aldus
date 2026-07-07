@@ -15,7 +15,9 @@ import { parseArgs } from 'node:util';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { spawn } from 'node:child_process';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { readFormFields, setFieldValues } from '@aldus/core/bake';
 import { loadDoc } from './graph.js';
 import { EditSession } from './session.js';
 import { runTurn, type AgentEvent } from './agent.js';
@@ -28,7 +30,7 @@ const TOOL_LABEL: Record<string, string> = {
   highlight_text: 'resaltando', set_highlight_color: 'recoloreando resaltado', delete_highlight: 'quitando resaltado',
   add_link: 'agregando link', delete_link: 'quitando link',
   add_text: 'agregando texto', insert_image: 'insertando imagen', add_watermark: 'marca de agua',
-  add_header_footer: 'encabezado/pie', add_form_field: 'creando campo', move_field: 'moviendo campo', delete_field: 'quitando campo',
+  add_header_footer: 'encabezado/pie', add_form_field: 'creando campo', fill_field: 'completando campo', move_field: 'moviendo campo', delete_field: 'quitando campo',
 };
 
 /** Abre un archivo con el visor por defecto del SO (mac/linux/win). */
@@ -45,15 +47,20 @@ function streamToStdout(ev: AgentEvent): void {
 function usage(): never {
   console.error(`aldus — agente sobre el grafo de un PDF
 
-  aldus <archivo.pdf> "<prompt>" [-o salida.pdf] [--open]   one-shot
+  aldus <archivo.pdf> "<prompt>" [-o salida.pdf] [--open]   one-shot (agente LLM)
   aldus <archivo.pdf> -p "<prompt>"                         (equivalente, con flag)
   aldus <archivo.pdf>                                       chat interactivo
+  aldus <archivo.pdf> --fields                              volcar campos+valores (JSON)
+  aldus <archivo.pdf> --fill datos.json [-o out.pdf]        completar el form (sin LLM)
 
 Ejemplos:
   aldus contrato.pdf "Describí el contenido"
   aldus contrato.pdf "Resaltá los montos y poné el título en mayúsculas" --open
+  aldus formulario.pdf --fields
+  aldus formulario.pdf --fill '{"nombre":"Juan","acepta":"true"}' --open
 
   --open   abre el PDF resultante (o el original si no hubo cambios).
+  --fields / --fill   formularios de forma DETERMINÍSTICA (no usan el LLM).
 Chat: preguntá o pedí cambios; /save [ruta] guarda, /edits lista, /exit sale.
 Auth: suscripción de Claude Code (corré sin ANTHROPIC_API_KEY).`);
   process.exit(1);
@@ -79,6 +86,8 @@ async function main(): Promise<void> {
       prompt: { type: 'string', short: 'p' },
       out: { type: 'string', short: 'o' },
       open: { type: 'boolean' },
+      fields: { type: 'boolean' },
+      fill: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -86,6 +95,27 @@ async function main(): Promise<void> {
   if (!file || values.help) usage();
   // El prompt puede ir POSICIONAL (aldus x.pdf "…") o con -p; el flag gana.
   const prompt = values.prompt ?? positionals[1];
+
+  // ── FORMULARIOS: rutas DETERMINÍSTICAS (sin LLM) ──
+  // --fields: volcar los campos + valores como JSON.
+  if (values.fields) {
+    const fields = await readFormFields(new Uint8Array(await readFile(file)));
+    process.stdout.write(JSON.stringify(fields, null, 2) + '\n');
+    return;
+  }
+  // --fill <datos.json | JSON inline>: completar campos por nombre y guardar.
+  if (values.fill) {
+    const raw = values.fill.trim().startsWith('{') ? values.fill : await readFile(values.fill, 'utf8');
+    const data = JSON.parse(raw) as Record<string, string | boolean | string[]>;
+    const out = values.out || defaultOut(file);
+    const { pdf, applied, warnings } = await setFieldValues(new Uint8Array(await readFile(file)), data);
+    await writeFile(out, pdf);
+    console.log(`💾 ${out} — ${applied.length} campo(s) completado(s)${warnings.length ? `, ${warnings.length} aviso(s)` : ''}`);
+    for (const a of applied) console.log(`   ✓ ${a}`);
+    for (const w of warnings) console.log(`   ⚠️ ${w}`);
+    if (values.open) openFile(out);
+    return;
+  }
 
   process.stdout.write(`📄 Cargando ${file} …\n`);
   const doc = await loadDoc(file);

@@ -150,6 +150,9 @@ export interface WidgetNode {
   readOnly: boolean;
   /** Opciones actuales (solo select/lista). */
   options?: string[];
+  /** Valor ACTUAL del campo (/V): texto (text/select/firma), 'On'/estado
+   *  (checkbox/radio) o lista de seleccionados (list múltiple). Ausente = vacío. */
+  value?: string | string[];
   /** Rect en puntos PDF, origen abajo-izquierda. */
   x: number;
   y: number;

@@ -35,9 +35,11 @@ export function serializeDoc(doc: DocGraph): string {
     }
 
     if (p.widgets.length) {
-      out.push('### Campos de formulario  (id "nombre" tipo @(x,y) ancho×alto)');
+      out.push('### Campos de formulario  (id "nombre" tipo [valor] @(x,y) ancho×alto)');
       for (const w of p.widgets) {
-        out.push(`- ${w.id} ${JSON.stringify(w.fieldName)} ${w.widgetType} @(${r(w.x)},${r(w.y)}) ${r(w.width)}×${r(w.height)}`);
+        const val = w.value != null ? ` = ${JSON.stringify(Array.isArray(w.value) ? w.value.join(', ') : w.value)}` : ' (vacío)';
+        const opts = w.options?.length ? ` opciones:[${w.options.join(', ')}]` : '';
+        out.push(`- ${w.id} ${JSON.stringify(w.fieldName)} ${w.widgetType}${val}${opts} @(${r(w.x)},${r(w.y)}) ${r(w.width)}×${r(w.height)}${w.readOnly ? ' read-only' : ''}`);
       }
     }
 

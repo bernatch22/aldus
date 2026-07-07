@@ -16,3 +16,5 @@ export { parseToUnicode } from './toUnicode.js';
 export type { ReverseEncoder } from './toUnicode.js';
 export { addFormField, insertImage, addText, addWatermark, addHeaderFooter, addHighlight, addLink, removeLink, setFieldOptions, addRadioOption, FIELD_DEFAULT_SIZE } from './createNodes.js';
 export type { NewFieldSpec, NewImageSpec, NewTextSpec } from './createNodes.js';
+export { readFormFields, setFieldValues } from './forms.js';
+export type { FormField } from './forms.js';

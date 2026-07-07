@@ -17,7 +17,7 @@ export const TOOL_NAMES = [
   'highlight_text', 'set_highlight_color', 'delete_highlight',
   'add_link', 'delete_link',
   'add_text', 'insert_image', 'add_watermark', 'add_header_footer',
-  'add_form_field', 'move_field', 'delete_field',
+  'add_form_field', 'fill_field', 'move_field', 'delete_field',
 ].map(n => `mcp__aldus__${n}`);
 
 const FIELD_TYPES = ['text', 'checkbox', 'radio', 'select', 'list', 'button', 'signature'] as const;
@@ -142,6 +142,15 @@ export function buildToolServer(session: EditSession) {
         width: z.number().positive().optional(), height: z.number().positive().optional(), name: z.string().optional(),
       },
       async ({ type, page, x, y, width, height, name }) => ok(session.addField(type, page, x, y, width, height, name)),
+    ),
+    tool(
+      'fill_field',
+      'COMPLETA un campo de formulario por su NOMBRE (fieldName, no el id): texto para text/select/radio; para checkbox pasá "true"/"false". Podés llamarla varias veces para completar todo el form.',
+      { name: z.string().describe('fieldName del campo'), value: z.string().describe('valor (para checkbox: "true"/"false")') },
+      async ({ name, value }) => {
+        const v = value === 'true' ? true : value === 'false' ? false : value;
+        return ok(session.fillField(name, v));
+      },
     ),
     tool(
       'move_field',

@@ -22,7 +22,7 @@ import {
   type SegmentNode, type ImageNode, type WidgetNode, type HighlightNode, type LinkNode, type WidgetKind,
 } from '@aldus/core';
 import {
-  bakeSegmentEdits, addHighlight, addLink, addText, addWatermark, addHeaderFooter, addFormField, insertImage,
+  bakeSegmentEdits, addHighlight, addLink, addText, addWatermark, addHeaderFooter, addFormField, insertImage, setFieldValues,
 } from '@aldus/core/bake';
 import type { DocGraph } from './graph.js';
 
@@ -46,6 +46,8 @@ export class EditSession {
   private highlightEdits = new Map<string, HighlightEdit>();
   private linkEdits = new Map<string, LinkEdit>();
   private creates: CreateOp[] = [];
+  /** Valores de formulario a COMPLETAR, por nombre de campo (setFieldValues). */
+  private fills = new Map<string, string | boolean | string[]>();
 
   constructor(private doc: DocGraph) {}
 
@@ -182,6 +184,15 @@ export class EditSession {
     return `✓ Campo ${fieldType} en p${page} @(${x},${y})`;
   }
 
+  /** COMPLETA un campo de formulario por su NOMBRE (no id). Valor: texto para
+   *  text/select/radio, true/false para checkbox. Determinístico (setFieldValues). */
+  fillField(fieldName: string, value: string | boolean | string[]): string {
+    const exists = this.doc.pages.some(p => p.widgets.some(w => w.fieldName === fieldName));
+    if (!exists) return `⚠️ No existe un campo llamado "${fieldName}".`;
+    this.fills.set(fieldName, value);
+    return `✓ Campo "${fieldName}" ← ${JSON.stringify(value)}`;
+  }
+
   /** Precarga ediciones ya existentes (p. ej. las pendientes del editor UI). */
   seed(edits: SegmentEdit[] = [], imageEdits: ImageEdit[] = []): void {
     for (const e of edits) this.edits.set(e.segmentId, e);
@@ -196,14 +207,14 @@ export class EditSession {
 
   /** Cantidad total de cambios pendientes. */
   get count(): number {
-    return this.edits.size + this.imageEdits.size + this.widgetEdits.size + this.highlightEdits.size + this.linkEdits.size + this.creates.length;
+    return this.edits.size + this.imageEdits.size + this.widgetEdits.size + this.highlightEdits.size + this.linkEdits.size + this.creates.length + this.fills.size;
   }
 
-  /** ¿Hay cambios que el editor NO puede reflejar con getEdits() (creaciones o
-   *  ediciones de annotations)? El server los hornea + persiste en vez de
-   *  devolverlos como seg/img edits. */
+  /** ¿Hay cambios que el editor NO puede reflejar con getEdits() (creaciones,
+   *  ediciones de annotations, o llenado de formularios)? El server los hornea +
+   *  persiste en vez de devolverlos como seg/img edits. */
   get hasBakedOps(): boolean {
-    return this.creates.length + this.widgetEdits.size + this.highlightEdits.size + this.linkEdits.size > 0;
+    return this.creates.length + this.widgetEdits.size + this.highlightEdits.size + this.linkEdits.size + this.fills.size > 0;
   }
 
   summary(): string {
@@ -214,6 +225,7 @@ export class EditSession {
     for (const e of this.highlightEdits.values()) parts.push(`${e.highlightId}: resaltado`);
     for (const e of this.linkEdits.values()) parts.push(`${e.linkId}: link`);
     for (const c of this.creates) parts.push(`+${c.kind}`);
+    for (const [name] of this.fills) parts.push(`${name}: completar`);
     return parts.join(' · ') || '(sin cambios)';
   }
 
@@ -257,6 +269,14 @@ export class EditSession {
     );
     let pdf = r.pdf;
     for (const op of this.creates) { pdf = await this.applyCreate(pdf, op); r.applied.push(`+${op.kind}`); }
+    // Completar formularios AL FINAL (sobre el PDF ya con los campos creados, por
+    // si el agente creó un campo y lo completó en el mismo turno).
+    if (this.fills.size) {
+      const res = await setFieldValues(pdf, Object.fromEntries(this.fills));
+      pdf = res.pdf;
+      r.applied.push(...res.applied.map(a => `campo ${a}`));
+      r.warnings.push(...res.warnings);
+    }
     return { pdf, applied: r.applied, warnings: r.warnings };
   }
 

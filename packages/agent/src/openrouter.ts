@@ -70,8 +70,11 @@ async function streamCompletion(
       if (!t.startsWith('data:')) continue;
       const data = t.slice(5).trim();
       if (!data || data === '[DONE]') continue;
-      let json: { choices?: Array<{ delta?: { content?: string; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> } }> };
+      let json: { error?: { message?: string }; choices?: Array<{ delta?: { content?: string; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> } }> };
       try { json = JSON.parse(data); } catch { continue; }
+      // OpenRouter puede mandar el error DENTRO del stream — silenciarlo deja
+      // una respuesta vacía imposible de diagnosticar.
+      if (json.error) throw new Error(`OpenRouter (stream): ${json.error.message || JSON.stringify(json.error)}`);
       const delta = json.choices?.[0]?.delta;
       if (!delta) continue;
       if (delta.content) { content += delta.content; onEvent?.({ type: 'text', delta: delta.content }); }

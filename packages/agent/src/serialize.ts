@@ -156,11 +156,20 @@ export function serializeDoc(doc: DocGraph, pages?: number | number[]): string {
 
     if (p.segments.length) {
       out.push('### Texto  (id @(x,baseline) ancho×alto tamaño estilo: "contenido")');
+      out.push('  (si un nodo tiene varios tramos, "tramos:" da la x y el ancho EXACTOS de cada uno — para geometría fina, p. ej. ubicar un placeholder dentro del nodo)');
       // Orden de lectura: de arriba hacia abajo, izquierda a derecha.
       const segs = [...p.segments].sort((a, b) => b.baseline - a.baseline || a.x - b.x);
       for (const s of segs) {
         const t = s.text.replace(/\n/g, '\\n');
         out.push(`- ${s.id} @(${r(s.x)},${r(s.baseline)}) ${r(s.width)}×${r(s.height)} ${r(s.fontSize)}pt ${styleOf(s)}: ${JSON.stringify(t)}`);
+        // Geometría INTRA-nodo: cada run del stream con su x/ancho reales. Sin
+        // esto el LLM no puede saber DÓNDE cae un "xxxx" dentro de la línea.
+        if (s.runs.length > 1) {
+          const tr = s.runs
+            .map(run => `@${r(run.x)} w${r(run.width)}${run.font.bold ? ' bold' : ''}${run.font.italic ? ' italic' : ''} ${JSON.stringify(run.text)}`)
+            .join(' | ');
+          out.push(`    tramos: ${tr}`);
+        }
       }
     }
 

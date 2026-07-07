@@ -14,7 +14,7 @@ import { config } from './config.js';
 import type { DocGraph } from './graph.js';
 import type { EditSession } from './session.js';
 
-export function systemPrompt(doc: DocGraph): string {
+export function systemPrompt(doc: DocGraph, page?: number): string {
   const pages = doc.pages.length;
   return [
     'Sos Aldus, un agente experto en documentos PDF. Tenés EMBEBIDO abajo el',
@@ -56,16 +56,27 @@ export function systemPrompt(doc: DocGraph): string {
     'Coordenadas: puntos PDF, origen ABAJO-IZQUIERDA, x→derecha, y→arriba. Para el',
     'texto la `y` es la baseline. El tamaño de cada página está en su encabezado.',
     'Para NO perder contenido, no coloques nada fuera de los límites de la página.',
-    'LLENAR UNA LÍNEA EN BLANCO junto a un label ("Nombre: ____"): el texto se apoya',
-    'SOBRE el renglón → usá la MISMA baseline del label de esa línea (su `y` exacto,',
-    'o +2pt). NUNCA restes: y menor = el texto cae DEBAJO de la línea. Si el hueco',
-    'está a la derecha del label, x = x del label + su ancho + ~6pt.',
+    'LLENAR UNA LÍNEA "____" YA EXISTENTE (label + renglón): el valor se apoya',
+    'ENCIMA del renglón, NO debajo. Usá la MISMA baseline del label de esa línea',
+    '(su `y` exacto, o +2pt). NUNCA restes: y menor = el texto cae DEBAJO de la',
+    'línea (mal). Si el hueco está a la derecha del label, x = x del label + su',
+    'ancho + ~6pt. El texto va SOBRE los "____", no en otro renglón.',
+    '',
+    'CONVERTIR "XXXX" (o un hueco marcado) EN UN CAMPO PARA COMPLETAR: reemplazá el',
+    'XXXX por una línea de guiones bajos "______" cuyo ANCHO coincida con lo pedido',
+    '— más caracteres = más ancho; estimá ~ (ancho_en_pt / (fontSize*0.5)) guiones.',
+    'SÉ CONSCIENTE DEL EMPUJE: si al ensanchar el hueco el texto que sigue en el',
+    'MISMO renglón se solaparía, corré ese texto a la derecha (move_text con dx =',
+    'cuánto creció el hueco) para que entre; si no hay lugar, avisá en vez de pisar.',
+    'Un "____" ya dibujado ya ES el campo: completá encima, no agregues otro.',
     '',
     'Respondé en el idioma del usuario, conciso. Si una edición es ambigua o el id',
     'no existe, decilo en vez de adivinar.',
     '',
-    `=== DOCUMENTO: ${doc.path} (${pages} ${pages === 1 ? 'página' : 'páginas'}) ===`,
-    serializeDoc(doc),
+    page != null
+      ? `=== DOCUMENTO: ${doc.path} — MOSTRANDO SOLO LA PÁGINA ${page} (la que el usuario está viendo). Trabajá sobre ESA página; si el pedido es claramente de otra, pedile que la abra. ===`
+      : `=== DOCUMENTO: ${doc.path} (${pages} ${pages === 1 ? 'página' : 'páginas'}) ===`,
+    serializeDoc(doc, page),
   ].join('\n');
 }
 
@@ -87,6 +98,8 @@ export interface TurnOpts {
   session: EditSession;
   prompt: string;
   resume?: string;
+  /** Página que el usuario está viendo → el prompt se scopea a ESA (menos ruido). */
+  page?: number;
   onEvent?: (ev: AgentEvent) => void;
 }
 
@@ -105,7 +118,7 @@ export async function runTurn(opts: TurnOpts): Promise<TurnResult> {
     prompt: opts.prompt,
     options: {
       model: config.model,
-      systemPrompt: systemPrompt(opts.doc),
+      systemPrompt: systemPrompt(opts.doc, opts.page),
       mcpServers: { aldus: server },
       // Deltas token a token → el panel muestra la respuesta escribiéndose y las
       // tools ejecutándose, en vez de quedarse mudo 20-40s en "Pensando".

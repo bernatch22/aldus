@@ -84,7 +84,7 @@ async function streamCompletion(
 export async function runTurnOpenRouter(opts: TurnOpts): Promise<TurnResult> {
   if (!config.openrouter.key) throw new Error('falta OPENROUTER_API_KEY (o un token de sesión del llm-proxy)');
   const messages: Msg[] = [
-    { role: 'system', content: systemPrompt(opts.doc) },
+    { role: 'system', content: systemPrompt(opts.doc, opts.page) },
     { role: 'user', content: opts.prompt },
   ];
   let text = '';

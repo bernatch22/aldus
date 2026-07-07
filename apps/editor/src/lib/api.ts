@@ -106,11 +106,12 @@ export const api = {
     imageEdits: ImageEdit[] = [],
     resume: string | undefined,
     onEvent: (ev: AgentEvent) => void,
+    page?: number,
   ): Promise<AgentDone> => {
     const res = await fetch(`${API}/documents/${id}/agent`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt, edits, imageEdits, resume }),
+      body: JSON.stringify({ prompt, edits, imageEdits, resume, page }),
     });
     if (!res.ok || !res.body) {
       const body = await res.json().catch(() => null) as { error?: string } | null;

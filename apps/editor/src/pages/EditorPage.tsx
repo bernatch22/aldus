@@ -377,6 +377,7 @@ export function EditorPage() {
         {aiOpen && (
           <AgentPanel
             docId={id}
+            page={pageNum}
             edits={edits}
             imageEdits={imageEdits}
             onApply={applyAgentEdits}

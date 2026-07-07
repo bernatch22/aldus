@@ -24,6 +24,7 @@ export function agentRouter(): Router {
     const edits = Array.isArray(req.body?.edits) ? req.body.edits : [];
     const imageEdits = Array.isArray(req.body?.imageEdits) ? req.body.imageEdits : [];
     const resume = typeof req.body?.resume === 'string' ? req.body.resume : undefined;
+    const page = Number.isFinite(req.body?.page) ? Number(req.body.page) : undefined;
     const t0 = Date.now();
     console.log(`[agent] ← id=${id.slice(0, 8)} prompt=${JSON.stringify(prompt.slice(0, 60))} seed=${edits.length}+${imageEdits.length} resume=${resume ? 'sí' : 'no'}`);
 
@@ -37,7 +38,7 @@ export function agentRouter(): Router {
       console.log(`[agent]   grafo cargado (${doc.pages.length} pág, ${Date.now() - t0}ms) — corriendo LLM…`);
       const session = new EditSession(doc);
       session.seed(edits, imageEdits);
-      const { sessionId, toolCalls } = await runTurn({ doc, session, prompt, resume, onEvent: write });
+      const { sessionId, toolCalls } = await runTurn({ doc, session, prompt, resume, page, onEvent: write });
       // Si el agente usó SOLO tools de texto/imagen → devolvemos los edits y el
       // editor los aplica a su estado local (preview, sin persistir). Si además
       // creó annotations/contenido (highlight, link, watermark, campo…) que el

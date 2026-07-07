@@ -135,9 +135,15 @@ function readingView(p: DocGraph['pages'][number]): string[] {
   return out;
 }
 
-export function serializeDoc(doc: DocGraph): string {
+/**
+ * Serializa el grafo para el prompt. Si `page` viene, SOLO esa página (la que el
+ * usuario está viendo) — menos tokens y foco: el agente no divaga por páginas
+ * que no ve. Los ids siguen siendo globales, así las tools resuelven igual.
+ */
+export function serializeDoc(doc: DocGraph, page?: number): string {
   const out: string[] = [];
-  for (const p of doc.pages) {
+  const pages = page != null ? doc.pages.filter(p => p.page === page) : doc.pages;
+  for (const p of pages) {
     out.push(`## Página ${p.page} — ${r(p.width)}×${r(p.height)} pt`);
 
     // Página con formulario: primero la VISTA DE LECTURA (texto + [[campos]]

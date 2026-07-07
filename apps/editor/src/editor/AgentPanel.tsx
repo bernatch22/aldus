@@ -33,6 +33,8 @@ interface Msg {
 
 interface Props {
   docId: string;
+  /** Página que el usuario está viendo → el agente solo recibe ESA página. */
+  page: number;
   edits: Map<string, SegmentEdit>;
   imageEdits: Map<string, ImageEdit>;
   onApply: (edits: SegmentEdit[], imageEdits: ImageEdit[]) => void;
@@ -48,7 +50,7 @@ const SUGGESTIONS = [
   'Corregí las faltas de ortografía del título',
 ];
 
-export function AgentPanel({ docId, edits, imageEdits, onApply, onReload, onClose }: Props) {
+export function AgentPanel({ docId, page, edits, imageEdits, onApply, onReload, onClose }: Props) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -74,6 +76,7 @@ export function AgentPanel({ docId, edits, imageEdits, onApply, onReload, onClos
           if (ev.type === 'text') patchLast(msg => ({ ...msg, text: msg.text + ev.delta }));
           else if (ev.type === 'tool') patchLast(msg => ({ ...msg, tools: [...(msg.tools ?? []), ev.name] }));
         },
+        page,
       );
       sessionId.current = res.sessionId ?? sessionId.current;
       if (res.reloaded) onReload(); else onApply(res.edits, res.imageEdits);

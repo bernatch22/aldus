@@ -135,6 +135,25 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.0)(jsdom@25.0.1)(lightningcss@1.32.0)
 
+  packages/npm:
+    dependencies:
+      '@anthropic-ai/claude-agent-sdk':
+        specifier: ^0.3.198
+        version: 0.3.198(@anthropic-ai/sdk@0.109.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)
+      pdf-lib:
+        specifier: ^1.17.1
+        version: 1.17.1
+      pdfjs-dist:
+        specifier: ^4.10.38
+        version: 4.10.38
+      zod:
+        specifier: ^4.0.0
+        version: 4.4.3
+    devDependencies:
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+
 packages:
 
   '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.198':

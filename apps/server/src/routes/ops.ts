@@ -18,15 +18,15 @@ import {
   removeLink,
   setFieldOptions,
 } from '@aldus/core/bake';
-import type { DocStore } from '../store.js';
-import { requireDoc } from '../validate.js';
+import { getStore, requireDoc } from '../validate.js';
 import { upload } from '../uploads.js';
 
-export function opsRouter(store: DocStore): Router {
+export function opsRouter(): Router {
   const router = Router();
 
-  router.post('/:id/ops', requireDoc(store), async (req, res) => {
+  router.post('/:id/ops', requireDoc(), async (req, res) => {
     const { id } = req.params;
+    const store = getStore(req);
     const { action, ...params } = req.body ?? {};
     try {
       const original = new Uint8Array(store.readPdf(id));
@@ -54,8 +54,9 @@ export function opsRouter(store: DocStore): Router {
     }
   });
 
-  router.post('/:id/fields', requireDoc(store), async (req, res) => {
+  router.post('/:id/fields', requireDoc(), async (req, res) => {
     const { id } = req.params;
+    const store = getStore(req);
     const { type, page, x, y, width, height, name } = req.body ?? {};
     if (!type || !Number.isFinite(page) || !Number.isFinite(x) || !Number.isFinite(y)) {
       return res.status(400).json({ error: 'Body esperado: { type, page, x, y, width?, height?, name? }.' });
@@ -70,8 +71,9 @@ export function opsRouter(store: DocStore): Router {
     }
   });
 
-  router.post('/:id/images', requireDoc(store), upload.single('image'), async (req, res) => {
+  router.post('/:id/images', requireDoc(), upload.single('image'), async (req, res) => {
     const { id } = req.params;
+    const store = getStore(req);
     const file = req.file;
     const page = Number(req.body?.page);
     const x = Number(req.body?.x);

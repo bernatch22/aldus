@@ -11,14 +11,14 @@
  */
 import { Router } from 'express';
 import { EditSession, loadDoc, runTurn } from '@aldus/agent';
-import type { DocStore } from '../store.js';
-import { requireDoc } from '../validate.js';
+import { getStore, requireDoc } from '../validate.js';
 
-export function agentRouter(store: DocStore): Router {
+export function agentRouter(): Router {
   const router = Router();
 
-  router.post('/:id/agent', requireDoc(store), async (req, res) => {
+  router.post('/:id/agent', requireDoc(), async (req, res) => {
     const { id } = req.params;
+    const store = getStore(req);
     const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : '';
     if (!prompt) return res.status(400).json({ error: 'Body esperado: { prompt } (+ edits, imageEdits, resume opcionales).' });
     const edits = Array.isArray(req.body?.edits) ? req.body.edits : [];

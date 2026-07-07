@@ -7,6 +7,8 @@ import 'dotenv/config';
 
 process.env.ALDUS_PROVIDER ||= 'openrouter';
 process.env.ALDUS_OPENROUTER_MODEL ||= 'anthropic/claude-sonnet-5';
+// Demo público: aislar documentos por visitante (cookie) — nadie ve lo de otro.
+process.env.ALDUS_SESSION_SCOPED ||= '1';
 process.env.ALDUS_STATIC ||= new URL('./dist/public', import.meta.url).pathname;
 delete process.env.ANTHROPIC_API_KEY;
 

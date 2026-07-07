@@ -4,14 +4,14 @@
  */
 import { Router } from 'express';
 import { addHighlight, bakeSegmentEdits } from '@aldus/core/bake';
-import type { DocStore } from '../store.js';
-import { requireDoc } from '../validate.js';
+import { getStore, requireDoc } from '../validate.js';
 
-export function bakeRouter(store: DocStore): Router {
+export function bakeRouter(): Router {
   const router = Router();
 
-  router.post('/:id/bake', requireDoc(store), async (req, res) => {
+  router.post('/:id/bake', requireDoc(), async (req, res) => {
     const { id } = req.params;
+    const store = getStore(req);
     const edits = Array.isArray(req.body?.edits) ? req.body.edits : [];
     const imageEdits = Array.isArray(req.body?.imageEdits) ? req.body.imageEdits : [];
     const widgetEdits = Array.isArray(req.body?.widgetEdits) ? req.body.widgetEdits : [];

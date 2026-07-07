@@ -36,6 +36,8 @@ postSync: npm install --omit=dev --no-audit --no-fund
 restart:
   method: pm2
   name: aldus-app
-  # start.mjs carga .env (OPENROUTER_API_KEY) + fija provider. ALDUS_DATA persiste
-  # los documentos del demo (los samples se siembran una vez — ver README).
+  # start.mjs carga .env (OPENROUTER_API_KEY) + fija provider + ALDUS_SESSION_SCOPED
+  # (privacidad: cada visitante = cookie aldus_sid → dir aislado ~ALDUS_DATA/sessions/<sid>,
+  # sembrado con copias de ~ALDUS_DATA/_samples). Uploads y ediciones NUNCA se cruzan
+  # entre visitantes. ALDUS_DATA persiste todo; poblá _samples una vez con los PDFs base.
   start: ALDUS_PORT=4110 ALDUS_DATA=/home/berna/aldus-app-svc/data node start.mjs

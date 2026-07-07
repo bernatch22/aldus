@@ -129,3 +129,36 @@ export class FileDocStore implements DocStore {
     }
   }
 }
+
+/**
+ * Per-session stores for the PUBLIC demo (privacy): every visitor (a `sid`
+ * cookie) gets an isolated FileDocStore under `<root>/sessions/<sid>`, seeded
+ * on first use with COPIES of the sample docs in `<root>/_samples`. Uploads and
+ * edits never leak between visitors. Enabled by ALDUS_SESSION_SCOPED — the
+ * standalone editor keeps its single shared store, unchanged.
+ */
+export class SessionStores {
+  private readonly cache = new Map<string, FileDocStore>();
+  constructor(private readonly root: string) {}
+
+  for(sid: string): FileDocStore {
+    const cached = this.cache.get(sid);
+    if (cached) return cached;
+    const dir = path.join(this.root, 'sessions', sid);
+    const fresh = !existsSync(dir);
+    const store = new FileDocStore(dir); // el ctor hace mkdir recursivo
+    if (fresh) this.seedSamples(dir);
+    this.cache.set(sid, store);
+    return store;
+  }
+
+  private seedSamples(dir: string): void {
+    const samples = path.join(this.root, '_samples');
+    if (!existsSync(samples)) return;
+    for (const f of readdirSync(samples)) {
+      // solo el PDF base y su meta — sin revisiones ni edits guardados
+      if (f.includes('.rev-') || f.endsWith('.edits.json')) continue;
+      copyFileSync(path.join(samples, f), path.join(dir, f));
+    }
+  }
+}

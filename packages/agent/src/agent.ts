@@ -14,7 +14,7 @@ import { config } from './config.js';
 import type { DocGraph } from './graph.js';
 import type { EditSession } from './session.js';
 
-function systemPrompt(doc: DocGraph): string {
+export function systemPrompt(doc: DocGraph): string {
   const pages = doc.pages.length;
   return [
     'Sos Aldus, un agente experto en documentos PDF. Tenés EMBEBIDO abajo el',
@@ -78,13 +78,20 @@ export type AgentEvent =
 
 /** Corre un turno STREAMEADO. `resume` continúa la conversación previa (chat).
  *  `onEvent` recibe los deltas de texto y las tool calls a medida que ocurren. */
-export async function runTurn(opts: {
+export interface TurnOpts {
   doc: DocGraph;
   session: EditSession;
   prompt: string;
   resume?: string;
   onEvent?: (ev: AgentEvent) => void;
-}): Promise<TurnResult> {
+}
+
+export async function runTurn(opts: TurnOpts): Promise<TurnResult> {
+  // OpenRouter (demo público): la suscripción no se puede exponer en un server.
+  if (config.provider === 'openrouter') {
+    const { runTurnOpenRouter } = await import('./openrouter.js');
+    return runTurnOpenRouter(opts);
+  }
   const server = buildToolServer(opts.session);
   let text = '';
   let sessionId: string | undefined;

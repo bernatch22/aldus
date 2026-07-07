@@ -1,178 +1,197 @@
 /**
- * tools.ts — las tools de MUTACIÓN que el agente puede invocar, atadas a una
- * EditSession. La LECTURA no es una tool: el documento entero ya va en el system
- * prompt. Cada tool referencia un id del grafo (o coordenadas para crear) y
- * devuelve una confirmación. Paridad con el editor humano: editar/mover/estilar/
- * borrar texto e imágenes; resaltar; linkear; insertar texto/imagen; marca de
- * agua; encabezado/pie; campos de formulario.
+ * tools.ts — las tools de MUTACIÓN del agente, como DATA (una sola fuente) para
+ * dos consumidores: el Claude Agent SDK (suscripción, MCP) y OpenRouter (API
+ * OpenAI-compatible). Cada def tiene nombre, descripción, un shape zod y un
+ * `run(session, args)` que devuelve la confirmación. La LECTURA no es una tool:
+ * el documento entero ya va en el system prompt.
  */
 import { tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import type { EditSession } from './session.js';
 
-/** Nombres calificados (mcp__<server>__<tool>) para allowedTools / permisos. */
-export const TOOL_NAMES = [
-  'edit_text', 'move_text', 'set_text_color', 'set_text_size', 'delete_text',
-  'move_image', 'delete_image',
-  'highlight_text', 'set_highlight_color', 'delete_highlight',
-  'add_link', 'delete_link',
-  'add_text', 'insert_image', 'add_watermark', 'add_header_footer',
-  'add_form_field', 'fill_field', 'fill_fields', 'move_field', 'delete_field',
-].map(n => `mcp__aldus__${n}`);
-
 const FIELD_TYPES = ['text', 'checkbox', 'radio', 'select', 'list', 'button', 'signature'] as const;
 
+/** Una tool como data: shape zod (para MCP y para JSON-Schema) + handler puro. */
+interface ToolDef {
+  name: string;
+  description: string;
+  shape: z.ZodRawShape;
+  run: (session: EditSession, args: Record<string, unknown>) => string;
+}
+
+const a = (o: Record<string, unknown>) => o; // alias legible para args tipados por uso
+
+export const TOOL_DEFS: ToolDef[] = [
+  // ── texto existente ──
+  {
+    name: 'edit_text',
+    description: 'Reemplaza el CONTENIDO de un nodo de texto (conserva su estilo). Usá el id exacto del grafo.',
+    shape: { id: z.string().describe('id del nodo de texto, p. ej. p1-y708-x72'), text: z.string().describe('texto nuevo') },
+    run: (s, { id, text }) => s.editText(id as string, text as string),
+  },
+  {
+    name: 'move_text',
+    description: 'Mueve un nodo de texto. Coordenadas en puntos PDF: x→derecha, y (baseline)→arriba, origen abajo-izquierda. Omití la coordenada que no cambia.',
+    shape: { id: z.string(), x: z.number().optional(), y: z.number().optional() },
+    run: (s, { id, x, y }) => s.moveText(id as string, x as number | undefined, y as number | undefined),
+  },
+  {
+    name: 'set_text_color',
+    description: 'Cambia el color de un nodo de texto (hex #rrggbb).',
+    shape: { id: z.string(), color: z.string().describe('#rrggbb') },
+    run: (s, { id, color }) => s.colorText(id as string, color as string),
+  },
+  {
+    name: 'set_text_size',
+    description: 'Cambia el tamaño de fuente de un nodo de texto (puntos).',
+    shape: { id: z.string(), size: z.number().positive() },
+    run: (s, { id, size }) => s.resizeText(id as string, size as number),
+  },
+  {
+    name: 'delete_text',
+    description: 'Elimina un nodo de texto del documento.',
+    shape: { id: z.string() },
+    run: (s, { id }) => s.deleteText(id as string),
+  },
+
+  // ── imagen existente ──
+  {
+    name: 'move_image',
+    description: 'Mueve y/o escala una imagen. Coordenadas/tamaño en puntos PDF (origen abajo-izquierda). Omití lo que no cambia.',
+    shape: { id: z.string(), x: z.number().optional(), y: z.number().optional(), width: z.number().positive().optional(), height: z.number().positive().optional() },
+    run: (s, { id, x, y, width, height }) => s.moveImage(id as string, a({ x, y, width, height })),
+  },
+  {
+    name: 'delete_image',
+    description: 'Elimina una imagen del documento.',
+    shape: { id: z.string() },
+    run: (s, { id }) => s.deleteImage(id as string),
+  },
+
+  // ── resaltados (/Annots) ──
+  {
+    name: 'highlight_text',
+    description: 'Resalta (marcador) un nodo de texto EXISTENTE por su id. El resaltado cubre el texto y lo sigue si lo movés. Color hex opcional (default amarillo).',
+    shape: { id: z.string().describe('id del nodo de texto a resaltar'), color: z.string().optional().describe('#rrggbb') },
+    run: (s, { id, color }) => s.highlightText(id as string, color as string | undefined),
+  },
+  {
+    name: 'set_highlight_color',
+    description: 'Cambia el color de un resaltado YA EXISTENTE (id de highlight del grafo, p. ej. p1-hl0). Hex #rrggbb.',
+    shape: { id: z.string(), color: z.string().describe('#rrggbb') },
+    run: (s, { id, color }) => s.recolorHighlight(id as string, color as string),
+  },
+  {
+    name: 'delete_highlight',
+    description: 'Elimina un resaltado existente (id de highlight del grafo).',
+    shape: { id: z.string() },
+    run: (s, { id }) => s.deleteHighlight(id as string),
+  },
+
+  // ── links (/Annots) ──
+  {
+    name: 'add_link',
+    description: 'Pone un LINK clickeable sobre un nodo de texto EXISTENTE (por su id) hacia una URL.',
+    shape: { id: z.string().describe('id del nodo de texto'), url: z.string().describe('URL destino') },
+    run: (s, { id, url }) => s.linkText(id as string, url as string),
+  },
+  {
+    name: 'delete_link',
+    description: 'Elimina un link existente (id de link del grafo, p. ej. p1-link0).',
+    shape: { id: z.string() },
+    run: (s, { id }) => s.deleteLink(id as string),
+  },
+
+  // ── creación de contenido nuevo ──
+  {
+    name: 'add_text',
+    description: 'Agrega un párrafo de texto NUEVO. (x,y) = esquina superior-izquierda en puntos PDF (origen abajo-izq). Se re-extrae como un nodo editable.',
+    shape: {
+      page: z.number().int().min(1), x: z.number(), y: z.number(), text: z.string(),
+      size: z.number().positive().optional(), bold: z.boolean().optional(), italic: z.boolean().optional(), color: z.string().optional().describe('#rrggbb'),
+    },
+    run: (s, { page, x, y, text, size, bold, italic, color }) =>
+      s.addTextNode(a({ page, x, y, text, size, bold, italic, color }) as Parameters<EditSession['addTextNode']>[0]),
+  },
+  {
+    name: 'insert_image',
+    description: 'Inserta una imagen (PNG/JPEG) desde una RUTA de archivo local. (x,y) = esquina superior-izquierda en puntos PDF.',
+    shape: { page: z.number().int().min(1), x: z.number(), y: z.number(), path: z.string().describe('ruta a un .png/.jpg local'), maxWidth: z.number().positive().optional() },
+    run: (s, { page, x, y, path, maxWidth }) => s.insertImageFile(page as number, x as number, y as number, path as string, maxWidth as number | undefined),
+  },
+  {
+    name: 'add_watermark',
+    description: 'Marca de agua de texto diagonal en TODAS las páginas.',
+    shape: { text: z.string(), color: z.string().optional().describe('#rrggbb'), opacity: z.number().min(0).max(1).optional() },
+    run: (s, { text, color, opacity }) => s.watermark(text as string, color as string | undefined, opacity as number | undefined),
+  },
+  {
+    name: 'add_header_footer',
+    description: 'Agrega encabezado y/o pie de página (texto) y opcionalmente números de página, en todas las páginas.',
+    shape: { header: z.string().optional(), footer: z.string().optional(), pageNumbers: z.boolean().optional() },
+    run: (s, { header, footer, pageNumbers }) => s.headerFooter(a({ header, footer, pageNumbers })),
+  },
+  {
+    name: 'add_form_field',
+    description: 'Crea un campo de formulario nuevo (text/checkbox/radio/select/list/button/signature). (x,y) = esquina inferior-izquierda en puntos PDF.',
+    shape: {
+      type: z.enum(FIELD_TYPES), page: z.number().int().min(1), x: z.number(), y: z.number(),
+      width: z.number().positive().optional(), height: z.number().positive().optional(), name: z.string().optional(),
+    },
+    run: (s, { type, page, x, y, width, height, name }) =>
+      s.addField(type as (typeof FIELD_TYPES)[number], page as number, x as number, y as number, width as number | undefined, height as number | undefined, name as string | undefined),
+  },
+  {
+    name: 'fill_field',
+    description: 'COMPLETA un campo de formulario por su fieldName O por su id de widget (el [[id]] de la Lectura, p. ej. p1-w3): texto para text/select/radio; para checkbox pasá "true"/"false". Podés llamarla varias veces para completar todo el form.',
+    shape: { name: z.string().describe('fieldName o id de widget (p1-w3)'), value: z.string().describe('valor (para checkbox: "true"/"false")') },
+    run: (s, { name, value }) => s.fillField(name as string, value === 'true' ? true : value === 'false' ? false : (value as string)),
+  },
+  {
+    name: 'fill_fields',
+    description: 'Completa VARIOS campos DE UNA SOLA VEZ (preferí esta sobre llamar fill_field N veces — es mucho más rápido). Pasá una lista {name, value}; name = fieldName o id de widget ([[p1-w3]]); para checkbox value = "true"/"false".',
+    shape: { fields: z.array(z.object({ name: z.string(), value: z.string() })).describe('lista de campos a completar') },
+    run: (s, { fields }) => s.fillFields(
+      (fields as Array<{ name: string; value: string }>).map(f => ({ name: f.name, value: f.value === 'true' ? true : f.value === 'false' ? false : f.value })),
+    ),
+  },
+  {
+    name: 'move_field',
+    description: 'Mueve un campo de formulario EXISTENTE (id de widget del grafo). Coordenadas en puntos PDF; omití lo que no cambia.',
+    shape: { id: z.string(), x: z.number().optional(), y: z.number().optional() },
+    run: (s, { id, x, y }) => s.moveField(id as string, x as number | undefined, y as number | undefined),
+  },
+  {
+    name: 'delete_field',
+    description: 'Elimina un campo de formulario existente (id de widget del grafo).',
+    shape: { id: z.string() },
+    run: (s, { id }) => s.deleteField(id as string),
+  },
+];
+
+/** Nombres calificados (mcp__<server>__<tool>) para allowedTools / permisos. */
+export const TOOL_NAMES = TOOL_DEFS.map(d => `mcp__aldus__${d.name}`);
+
+/** Servidor MCP para el Claude Agent SDK (path suscripción). */
 export function buildToolServer(session: EditSession) {
   const ok = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
-
-  const tools = [
-    // ── texto existente ──
-    tool(
-      'edit_text',
-      'Reemplaza el CONTENIDO de un nodo de texto (conserva su estilo). Usá el id exacto del grafo.',
-      { id: z.string().describe('id del nodo de texto, p. ej. p1-y708-x72'), text: z.string().describe('texto nuevo') },
-      async ({ id, text }) => ok(session.editText(id, text)),
-    ),
-    tool(
-      'move_text',
-      'Mueve un nodo de texto. Coordenadas en puntos PDF: x→derecha, y (baseline)→arriba, origen abajo-izquierda. Omití la coordenada que no cambia.',
-      { id: z.string(), x: z.number().optional(), y: z.number().optional() },
-      async ({ id, x, y }) => ok(session.moveText(id, x, y)),
-    ),
-    tool(
-      'set_text_color',
-      'Cambia el color de un nodo de texto (hex #rrggbb).',
-      { id: z.string(), color: z.string().describe('#rrggbb') },
-      async ({ id, color }) => ok(session.colorText(id, color)),
-    ),
-    tool(
-      'set_text_size',
-      'Cambia el tamaño de fuente de un nodo de texto (puntos).',
-      { id: z.string(), size: z.number().positive() },
-      async ({ id, size }) => ok(session.resizeText(id, size)),
-    ),
-    tool(
-      'delete_text',
-      'Elimina un nodo de texto del documento.',
-      { id: z.string() },
-      async ({ id }) => ok(session.deleteText(id)),
-    ),
-
-    // ── imagen existente ──
-    tool(
-      'move_image',
-      'Mueve y/o escala una imagen. Coordenadas/tamaño en puntos PDF (origen abajo-izquierda). Omití lo que no cambia.',
-      { id: z.string(), x: z.number().optional(), y: z.number().optional(), width: z.number().positive().optional(), height: z.number().positive().optional() },
-      async ({ id, x, y, width, height }) => ok(session.moveImage(id, { x, y, width, height })),
-    ),
-    tool(
-      'delete_image',
-      'Elimina una imagen del documento.',
-      { id: z.string() },
-      async ({ id }) => ok(session.deleteImage(id)),
-    ),
-
-    // ── resaltados (/Annots) ──
-    tool(
-      'highlight_text',
-      'Resalta (marcador) un nodo de texto EXISTENTE por su id. El resaltado cubre el texto y lo sigue si lo movés. Color hex opcional (default amarillo).',
-      { id: z.string().describe('id del nodo de texto a resaltar'), color: z.string().optional().describe('#rrggbb') },
-      async ({ id, color }) => ok(session.highlightText(id, color)),
-    ),
-    tool(
-      'set_highlight_color',
-      'Cambia el color de un resaltado YA EXISTENTE (id de highlight del grafo, p. ej. p1-hl0). Hex #rrggbb.',
-      { id: z.string(), color: z.string().describe('#rrggbb') },
-      async ({ id, color }) => ok(session.recolorHighlight(id, color)),
-    ),
-    tool(
-      'delete_highlight',
-      'Elimina un resaltado existente (id de highlight del grafo).',
-      { id: z.string() },
-      async ({ id }) => ok(session.deleteHighlight(id)),
-    ),
-
-    // ── links (/Annots) ──
-    tool(
-      'add_link',
-      'Pone un LINK clickeable sobre un nodo de texto EXISTENTE (por su id) hacia una URL.',
-      { id: z.string().describe('id del nodo de texto'), url: z.string().describe('URL destino') },
-      async ({ id, url }) => ok(session.linkText(id, url)),
-    ),
-    tool(
-      'delete_link',
-      'Elimina un link existente (id de link del grafo, p. ej. p1-link0).',
-      { id: z.string() },
-      async ({ id }) => ok(session.deleteLink(id)),
-    ),
-
-    // ── creación de contenido nuevo ──
-    tool(
-      'add_text',
-      'Agrega un párrafo de texto NUEVO. (x,y) = esquina superior-izquierda en puntos PDF (origen abajo-izq). Se re-extrae como un nodo editable.',
-      {
-        page: z.number().int().min(1), x: z.number(), y: z.number(), text: z.string(),
-        size: z.number().positive().optional(), bold: z.boolean().optional(), italic: z.boolean().optional(), color: z.string().optional().describe('#rrggbb'),
-      },
-      async ({ page, x, y, text, size, bold, italic, color }) => ok(session.addTextNode({ page, x, y, text, size, bold, italic, color })),
-    ),
-    tool(
-      'insert_image',
-      'Inserta una imagen (PNG/JPEG) desde una RUTA de archivo local. (x,y) = esquina superior-izquierda en puntos PDF.',
-      { page: z.number().int().min(1), x: z.number(), y: z.number(), path: z.string().describe('ruta a un .png/.jpg local'), maxWidth: z.number().positive().optional() },
-      async ({ page, x, y, path, maxWidth }) => ok(session.insertImageFile(page, x, y, path, maxWidth)),
-    ),
-    tool(
-      'add_watermark',
-      'Marca de agua de texto diagonal en TODAS las páginas.',
-      { text: z.string(), color: z.string().optional().describe('#rrggbb'), opacity: z.number().min(0).max(1).optional() },
-      async ({ text, color, opacity }) => ok(session.watermark(text, color, opacity)),
-    ),
-    tool(
-      'add_header_footer',
-      'Agrega encabezado y/o pie de página (texto) y opcionalmente números de página, en todas las páginas.',
-      { header: z.string().optional(), footer: z.string().optional(), pageNumbers: z.boolean().optional() },
-      async ({ header, footer, pageNumbers }) => ok(session.headerFooter({ header, footer, pageNumbers })),
-    ),
-    tool(
-      'add_form_field',
-      'Crea un campo de formulario nuevo (text/checkbox/radio/select/list/button/signature). (x,y) = esquina inferior-izquierda en puntos PDF.',
-      {
-        type: z.enum(FIELD_TYPES), page: z.number().int().min(1), x: z.number(), y: z.number(),
-        width: z.number().positive().optional(), height: z.number().positive().optional(), name: z.string().optional(),
-      },
-      async ({ type, page, x, y, width, height, name }) => ok(session.addField(type, page, x, y, width, height, name)),
-    ),
-    tool(
-      'fill_field',
-      'COMPLETA un campo de formulario por su fieldName O por su id de widget (el [[id]] de la Lectura, p. ej. p1-w3): texto para text/select/radio; para checkbox pasá "true"/"false". Podés llamarla varias veces para completar todo el form.',
-      { name: z.string().describe('fieldName o id de widget (p1-w3)'), value: z.string().describe('valor (para checkbox: "true"/"false")') },
-      async ({ name, value }) => {
-        const v = value === 'true' ? true : value === 'false' ? false : value;
-        return ok(session.fillField(name, v));
-      },
-    ),
-    tool(
-      'fill_fields',
-      'Completa VARIOS campos DE UNA SOLA VEZ (preferí esta sobre llamar fill_field N veces — es mucho más rápido). Pasá una lista {name, value}; name = fieldName o id de widget ([[p1-w3]]); para checkbox value = "true"/"false".',
-      { fields: z.array(z.object({ name: z.string(), value: z.string() })).describe('lista de campos a completar') },
-      async ({ fields }) => ok(session.fillFields(
-        fields.map(f => ({ name: f.name, value: f.value === 'true' ? true : f.value === 'false' ? false : f.value })),
-      )),
-    ),
-    tool(
-      'move_field',
-      'Mueve un campo de formulario EXISTENTE (id de widget del grafo). Coordenadas en puntos PDF; omití lo que no cambia.',
-      { id: z.string(), x: z.number().optional(), y: z.number().optional() },
-      async ({ id, x, y }) => ok(session.moveField(id, x, y)),
-    ),
-    tool(
-      'delete_field',
-      'Elimina un campo de formulario existente (id de widget del grafo).',
-      { id: z.string() },
-      async ({ id }) => ok(session.deleteField(id)),
-    ),
-  ];
-
+  const tools = TOOL_DEFS.map(d =>
+    tool(d.name, d.description, d.shape, async (args: Record<string, unknown>) => ok(d.run(session, args))),
+  );
   return createSdkMcpServer({ name: 'aldus', version: '0.0.1', tools });
+}
+
+/** Definiciones de tools en formato OpenAI (path OpenRouter). */
+export function openaiTools(): Array<{ type: 'function'; function: { name: string; description: string; parameters: unknown } }> {
+  return TOOL_DEFS.map(d => ({
+    type: 'function',
+    function: { name: d.name, description: d.description, parameters: z.toJSONSchema(z.object(d.shape)) },
+  }));
+}
+
+/** Ejecuta una tool por nombre contra la sesión (path OpenRouter). */
+export function runTool(session: EditSession, name: string, args: Record<string, unknown>): string {
+  const d = TOOL_DEFS.find(x => x.name === name);
+  if (!d) return `⚠️ tool desconocida: ${name}`;
+  try { return d.run(session, args); } catch (err) { return `⚠️ ${name}: ${err instanceof Error ? err.message : 'error'}`; }
 }

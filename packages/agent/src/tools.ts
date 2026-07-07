@@ -133,13 +133,26 @@ export const TOOL_DEFS: ToolDef[] = [
   },
   {
     name: 'add_form_field',
-    description: 'Crea un campo de formulario nuevo (text/checkbox/radio/select/list/button/signature). (x,y) = esquina inferior-izquierda en puntos PDF.',
+    description: 'Crea un campo de formulario nuevo (text/checkbox/radio/select/list/button/signature). (x,y) = esquina inferior-izquierda en puntos PDF. Para convertir placeholders (XXXX/____) de un texto usá placeholders_to_fields, NO esta.',
     shape: {
       type: z.enum(FIELD_TYPES), page: z.number().int().min(1), x: z.number(), y: z.number(),
       width: z.number().positive().optional(), height: z.number().positive().optional(), name: z.string().optional(),
     },
     run: (s, { type, page, x, y, width, height, name }) =>
       s.addField(type as (typeof FIELD_TYPES)[number], page as number, x as number, y as number, width as number | undefined, height as number | undefined, name as string | undefined),
+  },
+  {
+    name: 'placeholders_to_fields',
+    description:
+      'Convierte TODOS los placeholders ("XXXX", "xxxx", "____", "***") de un nodo de texto en campos de ' +
+      'formulario completables, en UNA sola llamada. La geometría se calcula EXACTA del grafo (posición y ancho ' +
+      'de cada hueco) — no pases coordenadas. `names` (opcional) nombra cada campo en orden de aparición. ' +
+      'SIEMPRE preferí esta tool a edit_text+add_form_field para "convertir en inputs".',
+    shape: {
+      id: z.string().describe('id del nodo de texto con los placeholders, p. ej. p1-y587-x114'),
+      names: z.array(z.string()).optional().describe('nombres de los campos, en orden, p. ej. ["razon_social","ruc","domicilio"]'),
+    },
+    run: (s, { id, names }) => s.placeholdersToFields(id as string, names as string[] | undefined),
   },
   {
     name: 'fill_field',

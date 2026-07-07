@@ -145,8 +145,8 @@ export function buildToolServer(session: EditSession) {
     ),
     tool(
       'fill_field',
-      'COMPLETA un campo de formulario por su NOMBRE (fieldName, no el id): texto para text/select/radio; para checkbox pasá "true"/"false". Podés llamarla varias veces para completar todo el form.',
-      { name: z.string().describe('fieldName del campo'), value: z.string().describe('valor (para checkbox: "true"/"false")') },
+      'COMPLETA un campo de formulario por su fieldName O por su id de widget (el [[id]] de la Lectura, p. ej. p1-w3): texto para text/select/radio; para checkbox pasá "true"/"false". Podés llamarla varias veces para completar todo el form.',
+      { name: z.string().describe('fieldName o id de widget (p1-w3)'), value: z.string().describe('valor (para checkbox: "true"/"false")') },
       async ({ name, value }) => {
         const v = value === 'true' ? true : value === 'false' ? false : value;
         return ok(session.fillField(name, v));

@@ -184,11 +184,16 @@ export class EditSession {
     return `✓ Campo ${fieldType} en p${page} @(${x},${y})`;
   }
 
-  /** COMPLETA un campo de formulario por su NOMBRE (no id). Valor: texto para
-   *  text/select/radio, true/false para checkbox. Determinístico (setFieldValues). */
-  fillField(fieldName: string, value: string | boolean | string[]): string {
-    const exists = this.doc.pages.some(p => p.widgets.some(w => w.fieldName === fieldName));
-    if (!exists) return `⚠️ No existe un campo llamado "${fieldName}".`;
+  /** COMPLETA un campo de formulario por su NOMBRE o por su id de widget
+   *  ([[p1-w3]] de la vista de Lectura — se resuelve al fieldName). Valor:
+   *  texto para text/select/radio, true/false para checkbox. Determinístico. */
+  fillField(nameOrId: string, value: string | boolean | string[]): string {
+    let fieldName = nameOrId;
+    if (!this.doc.pages.some(p => p.widgets.some(w => w.fieldName === fieldName))) {
+      const byId = this.widget(nameOrId.replace(/^\[\[|\]\]$/g, ''));
+      if (!byId) return `⚠️ No existe un campo llamado "${nameOrId}" (ni como fieldName ni como id).`;
+      fieldName = byId.fieldName;
+    }
     this.fills.set(fieldName, value);
     return `✓ Campo "${fieldName}" ← ${JSON.stringify(value)}`;
   }

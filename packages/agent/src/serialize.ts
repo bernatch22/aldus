@@ -54,10 +54,98 @@ function nearestLabel(
   return t.length > 40 ? t.slice(0, 40) + '…' : t;
 }
 
+/**
+ * VISTA DE LECTURA de un formulario: el texto de la página EN ORDEN DE LECTURA
+ * con cada campo intercalado como `[[id]]` donde cae visualmente. Los blancos
+ * de plantilla ("____") se suprimen — el marcador del campo ES el blanco. Así
+ * "qué va en cada campo" deja de ser un problema de coordenadas (donde un LLM
+ * flaquea) y pasa a ser lectura de texto: «executed by and between [[p1-w15]],
+ * with address at [[p1-w13]] [[p1-w9]] …» se entiende sola.
+ */
+function readingView(p: DocGraph['pages'][number]): string[] {
+  type Item = { x: number; y: number; text: string };
+  const items: Item[] = [];
+  const placed = new Set<string>();
+
+  for (const s of p.segments) {
+    // Widgets en la MISMA línea del segmento y dentro de su span horizontal.
+    const inline = p.widgets
+      .filter(w => Math.abs(w.y + w.height / 2 - (s.baseline + 4)) < Math.max(12, w.height) && w.x + w.width > s.x && w.x < s.x + s.width)
+      .sort((a, b) => a.x - b.x);
+    // Runs de blancos ("___") del texto, con su rango x APROXIMADO (proporcional
+    // — alcanza para decidir a qué run pertenece cada widget).
+    const runs: Array<{ start: number; end: number; x0: number; x1: number; ids: string[] }> = [];
+    for (const m of s.text.matchAll(/_{2,}/g)) {
+      const start = m.index!;
+      const end = start + m[0].length;
+      runs.push({
+        start, end,
+        x0: s.x + (s.width * start) / s.text.length,
+        x1: s.x + (s.width * end) / s.text.length,
+        ids: [],
+      });
+    }
+    // Cada widget inline → el run más cercano a su centro. REEMPLAZO LINEAL:
+    // el orden del texto queda intacto (nada de cortes proporcionales a mitad
+    // de palabra ni marcadores fuera de lugar).
+    for (const w of inline) {
+      if (!runs.length) break;
+      const cx = w.x + w.width / 2;
+      const best = runs.reduce((a, b) =>
+        Math.abs(cx - (a.x0 + a.x1) / 2) <= Math.abs(cx - (b.x0 + b.x1) / 2) ? a : b);
+      // Solo si el widget realmente cae sobre/junto al run (±35pt de margen).
+      if (cx > best.x0 - 35 && cx < best.x1 + 35) {
+        best.ids.push(w.id);
+        placed.add(w.id);
+      }
+    }
+    let text = '';
+    let cursor = 0;
+    for (const run of runs) {
+      text += s.text.slice(cursor, run.start);
+      text += run.ids.length ? run.ids.map(id => `[[${id}]]`).join(' ') : ' ';
+      cursor = run.end;
+    }
+    text += s.text.slice(cursor);
+    if (text.trim()) items.push({ x: s.x, y: s.baseline, text });
+  }
+  // Widgets SUELTOS (sin blanco de texto asociado — cajas independientes).
+  for (const w of p.widgets) {
+    if (!placed.has(w.id)) items.push({ x: w.x, y: w.y + w.height / 2 - 4, text: `[[${w.id}]]` });
+  }
+
+  // Agrupar en LÍNEAS por y (tolerancia 8pt), ordenar por x, emitir.
+  items.sort((a, b) => b.y - a.y || a.x - b.x);
+  const lines: Item[][] = [];
+  for (const it of items) {
+    const line = lines[lines.length - 1];
+    if (line && Math.abs(line[0].y - it.y) <= 8) line.push(it);
+    else lines.push([it]);
+  }
+  const out: string[] = [];
+  for (const line of lines) {
+    const txt = line
+      .sort((a, b) => a.x - b.x)
+      .map(i => i.text)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (txt) out.push(txt);
+  }
+  return out;
+}
+
 export function serializeDoc(doc: DocGraph): string {
   const out: string[] = [];
   for (const p of doc.pages) {
     out.push(`## Página ${p.page} — ${r(p.width)}×${r(p.height)} pt`);
+
+    // Página con formulario: primero la VISTA DE LECTURA (texto + [[campos]]
+    // intercalados) — la fuente de verdad para saber QUÉ va en cada campo.
+    if (p.widgets.length) {
+      out.push('### Lectura (texto con los campos [[id]] intercalados donde caen — así se entiende qué va en cada uno)');
+      out.push(...readingView(p));
+    }
 
     if (p.segments.length) {
       out.push('### Texto  (id @(x,baseline) ancho×alto tamaño estilo: "contenido")');

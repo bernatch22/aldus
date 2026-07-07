@@ -18,9 +18,14 @@ el PDF con el mismo bake que el editor).
   - Links: `add_link` (sobre un id de texto → URL), `delete_link`.
   - Crear: `add_text`, `insert_image` (desde una ruta local), `add_watermark`,
     `add_header_footer`, `add_form_field`. Campos existentes: `move_field`, `delete_field`.
-  - **Formularios**: cada campo se serializa con su VALOR actual (`= "…"` o
+  - **Formularios**: cada página con campos trae una sección **"Lectura"** — el
+    texto en orden de lectura con cada campo `[[id]]` intercalado donde cae
+    visualmente (los blancos `___` de plantilla se suprimen: el marcador ES el
+    blanco). Así "qué va en cada campo" es lectura de texto, no razonamiento de
+    coordenadas — Sonnet mapea 18/18 campos opacos de un template real que antes
+    fallaba. Cada campo además se serializa con su VALOR actual (`= "…"` o
     `(vacío)`) → el agente "extrae"/lee el form respondiendo, y **completa** con
-    `fill_field(fieldName, valor)`.
+    `fill_field(fieldName-o-id-de-widget, valor)`.
 - Dos clases de cambio (igual que el editor): **ediciones** de nodos existentes
   (Maps de `*Edit` con las MISMAS funciones de merge que la UI) y **creaciones** de
   nodos nuevos (una cola aplicada DESPUÉS del bake, cada una vía `createNodes`). El

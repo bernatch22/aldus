@@ -5,3 +5,6 @@ export { serializeDoc } from './serialize.js';
 export { EditSession } from './session.js';
 export { runTurn } from './agent.js';
 export type { TurnResult } from './agent.js';
+// Formularios DETERMINÍSTICOS (sin LLM): leer campos+valores+posiciones y completar.
+export { readFormFields, setFieldValues } from '@aldus/core/bake';
+export type { FormField } from '@aldus/core/bake';

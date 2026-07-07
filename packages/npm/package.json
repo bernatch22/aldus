@@ -1,0 +1,29 @@
+{
+  "name": "@bernatch22/aldus",
+  "version": "0.1.0",
+  "description": "Pixel-perfect PDF editing over a PDF's real content graph, plus an LLM agent (Claude subscription or OpenRouter) — read, edit, highlight, link, fill/build forms, from code or the `aldus` CLI.",
+  "keywords": ["pdf", "pdf-editor", "acroform", "form-fill", "llm", "agent", "openrouter", "claude"],
+  "license": "MIT",
+  "author": "Bernardo Castro",
+  "homepage": "https://bernardocastro.dev/aldus",
+  "repository": { "type": "git", "url": "git+https://github.com/bernatch22/aldus.git" },
+  "type": "module",
+  "bin": { "aldus": "./dist/cli.js" },
+  "exports": { ".": "./dist/index.js" },
+  "files": ["dist", "README.md"],
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "build": "node build.mjs",
+    "prepublishOnly": "node build.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.198",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.10.38",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  },
+  "publishConfig": { "access": "public" }
+}

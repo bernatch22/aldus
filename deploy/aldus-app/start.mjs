@@ -6,7 +6,7 @@
 import 'dotenv/config';
 
 process.env.ALDUS_PROVIDER ||= 'openrouter';
-process.env.ALDUS_OPENROUTER_MODEL ||= 'qwen/qwen3-coder';
+process.env.ALDUS_OPENROUTER_MODEL ||= 'anthropic/claude-sonnet-5';
 process.env.ALDUS_STATIC ||= new URL('./dist/public', import.meta.url).pathname;
 delete process.env.ANTHROPIC_API_KEY;
 

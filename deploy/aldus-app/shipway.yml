@@ -1,7 +1,9 @@
-# Deploy el EDITOR REAL de Aldus (server + editor SPA bundleados) a bc-web.
+# Deploy el BACKEND de Aldus (server bundleado) a bc-web.
 #   sync dist + start.mjs + package.json → npm install → pm2.
-# nginx mapea  bernardocastro.dev/aldus-app/  →  127.0.0.1:4110  (ver README).
-# La /aldus (marketing) lo embebe en un iframe.
+# nginx mapea  bernardocastro.dev/aldus/api/  →  127.0.0.1:4110/api/.
+# El FRONTEND (SPA del editor, build con VITE_BASE=/aldus/) se monta NATIVO en
+# la página /aldus de ~/bernardocastro.dev: los assets van a public/aldus/assets
+# y dist/index.html se copia a src/data/aldus-index.html (manifest de hashes).
 #
 # Build ANTES de deployar (desde la raíz del repo aldus):
 #   VITE_BASE=/aldus-app/ pnpm --filter @aldus/editor build && node deploy/aldus-app/build.mjs

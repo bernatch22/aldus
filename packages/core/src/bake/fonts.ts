@@ -8,10 +8,10 @@
  *   embedded font, so NEW text can be re-encoded with the ORIGINAL font
  *   (path B) as long as every character exists in its subset.
  */
-import { PDFDict, PDFDocument, PDFName, PDFPage, PDFRawStream, StandardFonts, decodePDFRawStream } from 'pdf-lib';
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, PDFPage, PDFRawStream, StandardFonts, decodePDFRawStream } from 'pdf-lib';
 import type { FontBucket } from '../model.js';
 import { latin1 } from './splice.js';
-import { parseToUnicode, type ReverseEncoder } from './toUnicode.js';
+import { encoderFromSimpleEncoding, parseToUnicode, type ReverseEncoder } from './toUnicode.js';
 
 const STD_FONTS: Record<FontBucket, [StandardFonts, StandardFonts, StandardFonts, StandardFonts]> = {
   sans: [StandardFonts.Helvetica, StandardFonts.HelveticaBold, StandardFonts.HelveticaOblique, StandardFonts.HelveticaBoldOblique],
@@ -45,10 +45,41 @@ export function encoderForFont(
     if (tu instanceof PDFRawStream) {
       const decoded = decodePDFRawStream(tu).decode();
       enc = parseToUnicode(latin1(decoded, 0, decoded.length));
+    } else if (fdict instanceof PDFDict) {
+      // Sin /ToUnicode (típico Word/Quartz): una fuente SIMPLE con encoding
+      // estándar define el mapa unicode→byte por sí misma. Antes esto caía a
+      // fuente estándar aunque la original renderizara el texto perfecto.
+      enc = simpleEncodingEncoder(fdict);
     }
   } catch {
     enc = null;
   }
   cache.set(fontName, enc);
   return enc;
+}
+
+/** Encoder para fuentes simples (TrueType/Type1) con /MacRomanEncoding o
+ *  /WinAnsiEncoding (el nombre directo, o BaseEncoding sin Differences). */
+function simpleEncodingEncoder(fdict: PDFDict): ReverseEncoder | null {
+  const subtype = fdict.lookupMaybe(PDFName.of('Subtype'), PDFName)?.decodeText();
+  if (subtype !== 'TrueType' && subtype !== 'Type1') return null;
+
+  const encRaw = fdict.lookup(PDFName.of('Encoding'));
+  let encName: string | undefined;
+  if (encRaw instanceof PDFName) encName = encRaw.decodeText();
+  else if (encRaw instanceof PDFDict) {
+    if (encRaw.has(PDFName.of('Differences'))) return null; // remapeado: no adivinar
+    encName = encRaw.lookupMaybe(PDFName.of('BaseEncoding'), PDFName)?.decodeText();
+  }
+  if (encName !== 'MacRomanEncoding' && encName !== 'WinAnsiEncoding') return null;
+
+  const firstChar = fdict.lookupMaybe(PDFName.of('FirstChar'), PDFNumber)?.asNumber();
+  const lastChar = fdict.lookupMaybe(PDFName.of('LastChar'), PDFNumber)?.asNumber();
+  if (firstChar === undefined || lastChar === undefined) return null;
+
+  let widths: number[] | null = null;
+  const w = fdict.lookupMaybe(PDFName.of('Widths'), PDFArray);
+  if (w) widths = w.asArray().map(v => (v instanceof PDFNumber ? v.asNumber() : 0));
+
+  return encoderFromSimpleEncoding(encName, firstChar, lastChar, widths);
 }

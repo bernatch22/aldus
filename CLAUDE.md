@@ -88,9 +88,13 @@ los detalles viven en módulos por responsabilidad — ver Estructura):
   `textEmitStrategies`, NUNCA editar una hermana): (A) `VerbatimReemit` — mover/escalar/
   reestilar → re-emite VERBATIM (bytes/kerning/color intactos, Tc/Tz/color overridables);
   (B/C) `StyledRunsReemit` — texto nuevo → re-codifica con la fuente ORIGINAL vía mapa
-  inverso del /ToUnicode (`toUnicode.ts`); subset insuficiente o cambio de familia/estilo
-  → fuente estándar (`fonts.ts` stdFontFor, cola en `fallback.ts`) PRESERVANDO color
-  (`color.ts` rawFillToRgb del op).
+  inverso del /ToUnicode (`toUnicode.ts`); **sin /ToUnicode** (típico Word/Quartz) el mapa
+  sale del ENCODING simple (`encoderFromSimpleEncoding`: /MacRoman|/WinAnsi + FirstChar..
+  LastChar con width>0); subset insuficiente o cambio de familia/estilo → fuente estándar
+  (`fonts.ts` stdFontFor, cola en `fallback.ts`) PRESERVANDO color (`color.ts`
+  rawFillToRgb del op). `applyTextDiff` (edits.ts) mapea estilo POR CARÁCTER en cambios
+  multi-región (posicional si el largo coincide, LCS si no) — antes un reemplazo de
+  varios "XXXX" en línea mixta bold/regular heredaba UN estilo y forzaba el fallback.
 - `promoteMovedImages` (edits.ts): la regla "movida → zOrder front al guardar", ÚNICA
   fuente de verdad compartida por el editor (bake) y el agente (EditSession.bake).
 - Imágenes: reubica el `Do` (solo Subtype /Image — JAMÁS un Form XObject: envuelve

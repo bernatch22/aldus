@@ -116,8 +116,48 @@ export function applyTextDiff(runs: StyledRun[], newText: string): StyledRun[] {
     if (take > 0) pushPiece({ ...r, text: r.text.slice(0, take) });
     cursor += r.text.length;
   }
-  // lo insertado
-  if (inserted) pushPiece({ ...styleSrc, text: inserted });
+  // El MEDIO cambiado. Un solo prefijo/sufijo se queda corto cuando el cambio
+  // toca VARIAS regiones (p. ej. el agente reemplaza tres "XXXX" sueltos): todo
+  // el medio contaría como "insertado" y heredaría UN estilo (el del primer
+  // tramo — una línea mixta bold/regular quedaba TODA bold y el bake caía a
+  // fuente estándar). Acá mapeamos ESTILO POR CARÁCTER: los caracteres que
+  // sobreviven conservan el estilo de su tramo original; los nuevos heredan el
+  // del último conservado.
+  const oldMid = oldText.slice(p, oldText.length - s);
+  if (inserted && oldMid && oldMid.length * inserted.length <= 250_000) {
+    // Estilo del carácter i del texto viejo (por tramo).
+    const styleAt: StyledRun[] = [];
+    for (const r of runs) for (let i = 0; i < r.text.length; i++) styleAt.push(r);
+    // LCS clásico sobre el medio (posicional cuando coinciden los largos: el
+    // reemplazo 1:1 tipo "XXXX"→espacios conserva cada frontera de estilo).
+    let match: Array<number | null>; // idx en oldMid (global: +p) por char de inserted, null = nuevo
+    if (oldMid.length === inserted.length) {
+      match = [...inserted].map((ch, i) => (oldMid[i] === ch ? i : null));
+    } else {
+      const n = oldMid.length, m2 = inserted.length;
+      const dp: Uint32Array[] = Array.from({ length: n + 1 }, () => new Uint32Array(m2 + 1));
+      for (let i = n - 1; i >= 0; i--) {
+        for (let j = m2 - 1; j >= 0; j--) {
+          dp[i][j] = oldMid[i] === inserted[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+        }
+      }
+      match = new Array(m2).fill(null);
+      for (let i = 0, j = 0; i < n && j < m2; ) {
+        if (oldMid[i] === inserted[j]) { match[j] = i; i++; j++; }
+        else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
+        else j++;
+      }
+    }
+    let inherit = styleSrc;
+    for (let j = 0; j < inserted.length; j++) {
+      const oi = match[j];
+      const st = oi != null ? (styleAt[p + oi] ?? inherit) : inherit;
+      if (oi != null) inherit = st;
+      pushPiece({ ...st, text: inserted[j] });
+    }
+  } else if (inserted) {
+    pushPiece({ ...styleSrc, text: inserted });
+  }
   // sufijo intacto
   const sufStart = oldText.length - s;
   cursor = 0;

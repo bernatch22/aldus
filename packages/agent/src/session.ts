@@ -26,9 +26,6 @@ import {
 } from '@aldus/core/bake';
 import type { DocGraph } from './graph.js';
 
-/** Placeholders de plantilla que placeholdersToFields convierte en campos. */
-const PLACEHOLDER_RE = /X{3,}|x{3,}|_{3,}|\*{2,}/g;
-
 /** Una CREACIÓN pendiente: se aplica después del bake (bytes→bytes). El
  *  highlight/link "sobre un texto" guarda el segId y resuelve su rect al hornear. */
 type CreateOp =
@@ -185,63 +182,6 @@ export class EditSession {
   addField(fieldType: WidgetKind, page: number, x: number, y: number, width?: number, height?: number, name?: string): string {
     this.creates.push({ kind: 'field', fieldType, page, x, y, width, height, name });
     return `✓ Campo ${fieldType} en p${page} @(${x},${y})`;
-  }
-
-  /**
-   * DETERMINÍSTICO: convierte los placeholders ("XXXX"/"xxxx"/"____"/"***") de
-   * un nodo de texto en CAMPOS de formulario. La geometría se CALCULA del grafo
-   * (x por carácter desde los runs reales) — el LLM no adivina coordenadas.
-   * Cada placeholder → espacios (mismo largo: estilo y layout intactos) + un
-   * widget text cubriendo EXACTAMENTE su hueco.
-   */
-  placeholdersToFields(id: string, names?: string[]): string {
-    const s = this.seg(id); if (!s) return `⚠️ No existe el nodo de texto "${id}".`;
-    const matches = [...s.text.matchAll(PLACEHOLDER_RE)];
-    if (!matches.length) return `⚠️ ${id} no tiene placeholders (XXX/xxx/___/***).`;
-
-    // x por CARÁCTER de seg.text: los runs traen x/width exactos del stream;
-    // dentro de un run, proporcional. Los espacios INFERIDOS entre runs (no
-    // existen en ningún run) interpolan entre el fin de un run y el próximo.
-    const charX = new Array<number>(s.text.length + 1).fill(s.x);
-    let cursor = 0;
-    let lastEnd = s.x;
-    for (const r of s.runs) {
-      const at = s.text.indexOf(r.text, cursor);
-      if (at < 0) continue; // no debería pasar: el texto del run vive en el segmento
-      for (let k = cursor; k <= at; k++) charX[k] = lastEnd + ((r.x - lastEnd) * (k - cursor)) / Math.max(1, at - cursor);
-      const w = r.width / Math.max(1, r.text.length);
-      for (let k = 0; k <= r.text.length; k++) charX[at + k] = r.x + w * k;
-      cursor = at + r.text.length;
-      lastEnd = r.x + r.width;
-    }
-    for (let k = cursor; k <= s.text.length; k++) charX[k] = lastEnd;
-
-    // Reemplazo por espacios (mismo largo) → applyTextDiff preserva el estilo
-    // POR CARÁCTER (mapeo posicional) y el bake re-emite con la fuente original.
-    const newText = s.text.replace(PLACEHOLDER_RE, m => ' '.repeat(m.length));
-    this.putSeg(s, { runs: applyTextDiff(originalStyledRuns(s), newText) });
-
-    const made: string[] = [];
-    matches.forEach((m, i) => {
-      // El campo abarca el placeholder MÁS los espacios pegados (el hueco
-      // visual completo) — sin invadir el texto vecino.
-      let from = m.index!;
-      let to = m.index! + m[0].length;
-      while (from > 0 && s.text[from - 1] === ' ') from--;
-      while (to < s.text.length && s.text[to] === ' ') to++;
-      const x0 = charX[from];
-      const x1 = charX[to];
-      const width = Math.max(24, x1 - x0);
-      const name = names?.[i]?.trim() || `campo_${i + 1}`;
-      this.creates.push({
-        kind: 'field', fieldType: 'text', page: s.page,
-        x: Math.round(x0 * 100) / 100, y: Math.round((s.baseline - 3) * 100) / 100,
-        width: Math.round(width * 100) / 100, height: Math.round((s.fontSize + 5) * 100) / 100,
-        name,
-      });
-      made.push(`${name} @(${Math.round(x0)},${Math.round(s.baseline - 3)}) ${Math.round(width)}pt`);
-    });
-    return `✓ ${matches.length} placeholder(s) de ${id} → campos: ${made.join(' · ')}`;
   }
 
   /** COMPLETA un campo de formulario por su NOMBRE o por su id de widget

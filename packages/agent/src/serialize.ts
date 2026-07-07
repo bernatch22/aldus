@@ -8,9 +8,23 @@
  * Coordenadas: puntos PDF, origen abajo-izquierda, x→derecha, y→arriba. Para el
  * texto la `y` es la BASELINE (lo que consumen las tools move_text).
  */
+import type { SegmentNode } from '@aldus/core';
 import type { DocGraph } from './graph.js';
 
 const r = (n: number): number => Math.round(n);
+
+/** Estilo del segmento (del run DOMINANTE — el de mayor tamaño): negrita,
+ *  itálica, fuente PostScript y color si se conoce. Compacto para el prompt. */
+function styleOf(s: SegmentNode): string {
+  const run = s.runs.reduce((a, b) => (b.fontSize > a.fontSize ? b : a), s.runs[0]);
+  if (!run) return '';
+  const bits: string[] = [];
+  if (run.font.bold) bits.push('bold');
+  if (run.font.italic) bits.push('italic');
+  bits.push(run.font.postScriptName || run.font.bucket);
+  if (run.color) bits.push(run.color); // muestreado (browser); ausente en headless
+  return bits.join(' ');
+}
 
 export function serializeDoc(doc: DocGraph): string {
   const out: string[] = [];
@@ -18,12 +32,12 @@ export function serializeDoc(doc: DocGraph): string {
     out.push(`## Página ${p.page} — ${r(p.width)}×${r(p.height)} pt`);
 
     if (p.segments.length) {
-      out.push('### Texto  (id @(x,y) tamaño: "contenido")');
+      out.push('### Texto  (id @(x,baseline) ancho×alto tamaño estilo: "contenido")');
       // Orden de lectura: de arriba hacia abajo, izquierda a derecha.
       const segs = [...p.segments].sort((a, b) => b.baseline - a.baseline || a.x - b.x);
       for (const s of segs) {
         const t = s.text.replace(/\n/g, '\\n');
-        out.push(`- ${s.id} @(${r(s.x)},${r(s.baseline)}) ${r(s.fontSize)}pt: ${JSON.stringify(t)}`);
+        out.push(`- ${s.id} @(${r(s.x)},${r(s.baseline)}) ${r(s.width)}×${r(s.height)} ${r(s.fontSize)}pt ${styleOf(s)}: ${JSON.stringify(t)}`);
       }
     }
 
@@ -49,8 +63,8 @@ export function serializeDoc(doc: DocGraph): string {
     }
 
     if (p.links.length) {
-      out.push('### Links');
-      for (const l of p.links) out.push(`- ${l.id} → ${JSON.stringify(l.url)} @(${r(l.x)},${r(l.y)})`);
+      out.push('### Links  (id → url @(x,y) ancho×alto)');
+      for (const l of p.links) out.push(`- ${l.id} → ${JSON.stringify(l.url)} @(${r(l.x)},${r(l.y)}) ${r(l.width)}×${r(l.height)}`);
     }
 
     out.push('');

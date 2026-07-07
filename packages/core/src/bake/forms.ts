@@ -9,9 +9,22 @@
  * una operación aparte que reescribe /V + regenera las apariencias.
  */
 import {
-  PDFDocument, PDFTextField, PDFCheckBox, PDFRadioGroup, PDFDropdown, PDFOptionList, PDFButton,
+  PDFArray, PDFDocument, PDFName, PDFRef, PDFTextField, PDFCheckBox, PDFRadioGroup, PDFDropdown, PDFOptionList, PDFButton,
+  type PDFField,
 } from 'pdf-lib';
 import type { WidgetKind } from '../model.js';
+
+/** Rect de un widget del campo (puntos PDF, origen abajo-izq) + página 1-based.
+ *  Un radio group tiene varios widgets → devolvemos uno por widget. */
+export interface FieldRect {
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Valor de exportación del widget (radio) — para saber qué rect es cada opción. */
+  export?: string;
+}
 
 export interface FormField {
   name: string;
@@ -21,26 +34,64 @@ export interface FormField {
   /** Opciones disponibles (radio/select/list). */
   options?: string[];
   readOnly: boolean;
+  /** Posición(es) del campo en el PDF: uno por widget (radio = varios). */
+  rects: FieldRect[];
 }
 
 const nz = (s: string | undefined): string | undefined => (s ? s : undefined);
 
-/** Lee TODOS los campos del formulario con su valor actual. `[]` si no hay AcroForm. */
+/** Mapa dict-de-widget → nº de página (1-based), escaneando /Annots de cada página. */
+function widgetPages(doc: PDFDocument): Map<unknown, number> {
+  const map = new Map<unknown, number>();
+  doc.getPages().forEach((pg, i) => {
+    const annots = pg.node.lookupMaybe(PDFName.of('Annots'), PDFArray);
+    if (!annots) return;
+    for (let k = 0; k < annots.size(); k++) {
+      const ref = annots.get(k);
+      map.set(ref instanceof PDFRef ? doc.context.lookup(ref) : ref, i + 1);
+    }
+  });
+  return map;
+}
+
+/** Rects (geometría + página) de todos los widgets de un campo. */
+function rectsOf(field: PDFField, pageBy: Map<unknown, number>): FieldRect[] {
+  const out: FieldRect[] = [];
+  for (const w of field.acroField.getWidgets()) {
+    try {
+      const r = w.getRectangle();
+      // /AS del widget = su valor de exportación (radio/checkbox) para mapear rect↔opción.
+      const as = w.dict.get(PDFName.of('AS'));
+      out.push({
+        page: pageBy.get(w.dict) ?? 1,
+        x: Math.round(r.x * 10) / 10, y: Math.round(r.y * 10) / 10,
+        width: Math.round(r.width * 10) / 10, height: Math.round(r.height * 10) / 10,
+        export: as instanceof PDFName && as.asString() !== '/Off' ? as.asString().slice(1) : undefined,
+      });
+    } catch { /* widget sin rect legible — lo salteamos */ }
+  }
+  return out;
+}
+
+/** Lee TODOS los campos del formulario con su valor actual y su geometría.
+ *  `[]` si no hay AcroForm. */
 export async function readFormFields(pdfBytes: Uint8Array): Promise<FormField[]> {
   const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
   let form: ReturnType<PDFDocument['getForm']>;
   try { form = doc.getForm(); } catch { return []; }
+  const pageBy = widgetPages(doc);
   const out: FormField[] = [];
   for (const f of form.getFields()) {
     const name = f.getName();
     const readOnly = f.isReadOnly();
-    if (f instanceof PDFTextField) out.push({ name, type: 'text', value: nz(f.getText() ?? undefined), readOnly });
-    else if (f instanceof PDFCheckBox) out.push({ name, type: 'checkbox', value: f.isChecked() ? 'On' : undefined, readOnly });
-    else if (f instanceof PDFRadioGroup) out.push({ name, type: 'radio', value: nz(f.getSelected() ?? undefined), options: f.getOptions(), readOnly });
-    else if (f instanceof PDFDropdown) out.push({ name, type: 'select', value: nz(f.getSelected()[0]), options: f.getOptions(), readOnly });
-    else if (f instanceof PDFOptionList) out.push({ name, type: 'list', value: f.getSelected().length ? f.getSelected() : undefined, options: f.getOptions(), readOnly });
-    else if (f instanceof PDFButton) out.push({ name, type: 'button', readOnly });
-    else out.push({ name, type: 'signature', readOnly });
+    const rects = rectsOf(f, pageBy);
+    if (f instanceof PDFTextField) out.push({ name, type: 'text', value: nz(f.getText() ?? undefined), readOnly, rects });
+    else if (f instanceof PDFCheckBox) out.push({ name, type: 'checkbox', value: f.isChecked() ? 'On' : undefined, readOnly, rects });
+    else if (f instanceof PDFRadioGroup) out.push({ name, type: 'radio', value: nz(f.getSelected() ?? undefined), options: f.getOptions(), readOnly, rects });
+    else if (f instanceof PDFDropdown) out.push({ name, type: 'select', value: nz(f.getSelected()[0]), options: f.getOptions(), readOnly, rects });
+    else if (f instanceof PDFOptionList) out.push({ name, type: 'list', value: f.getSelected().length ? f.getSelected() : undefined, options: f.getOptions(), readOnly, rects });
+    else if (f instanceof PDFButton) out.push({ name, type: 'button', readOnly, rects });
+    else out.push({ name, type: 'signature', readOnly, rects });
   }
   return out;
 }

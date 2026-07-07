@@ -461,9 +461,16 @@ describe('documento: texto nuevo, watermark, links', () => {
     expect(Math.round(g2.highlights[0].x)).toBe(Math.round(hl.x + 40));
     expect(Math.round(g2.highlights[0].y)).toBe(Math.round(hl.y - 100));
 
+    // Recolorear: reescribe /C (el grafo lo lee de ahí) — sin apilar otra annot.
+    const recolor = mergeHighlightEdit(g2.highlights[0], null, { color: '#ff0066' });
+    const { pdf: recolored } = await bakeSegmentEdits(moved, [], [], [], [recolor!]);
+    const g3 = await graphOf(recolored);
+    expect(g3.highlights).toHaveLength(1); // NO se duplica
+    expect(g3.highlights[0].color.toLowerCase()).toBe('#ff0066');
+
     // Eliminar: sale de /Annots.
-    const del = mergeHighlightEdit(g2.highlights[0], null, { remove: true });
-    const { pdf: gone } = await bakeSegmentEdits(moved, [], [], [], [del!]);
+    const del = mergeHighlightEdit(g3.highlights[0], null, { remove: true });
+    const { pdf: gone } = await bakeSegmentEdits(recolored, [], [], [], [del!]);
     expect((await graphOf(gone)).highlights).toHaveLength(0);
   });
 

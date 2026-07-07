@@ -20,12 +20,15 @@ interface AgentDone {
   toolCalls: number;
   edits: SegmentEdit[];
   imageEdits: ImageEdit[];
+  /** El agente horneó+persistió cambios que el estado local no representa
+   *  (annotations/creaciones) → el editor debe RECARGAR el documento. */
+  reloaded?: boolean;
 }
 
 /** El protocolo completo del wire: eventos en vivo + terminales. */
 type AgentWireEvent =
   | AgentEvent
-  | { type: 'done'; sessionId?: string; toolCalls?: number; edits?: SegmentEdit[]; imageEdits?: ImageEdit[] }
+  | { type: 'done'; sessionId?: string; toolCalls?: number; edits?: SegmentEdit[]; imageEdits?: ImageEdit[]; reloaded?: boolean }
   | { type: 'error'; error?: string };
 
 async function ok<T>(res: Response): Promise<T> {
@@ -112,7 +115,7 @@ export const api = {
     let final: AgentDone | undefined;
     let failure: Error | undefined;
     await readNdjson<AgentWireEvent>(res.body, ev => {
-      if (ev.type === 'done') final = { sessionId: ev.sessionId, toolCalls: ev.toolCalls ?? 0, edits: ev.edits ?? [], imageEdits: ev.imageEdits ?? [] };
+      if (ev.type === 'done') final = { sessionId: ev.sessionId, toolCalls: ev.toolCalls ?? 0, edits: ev.edits ?? [], imageEdits: ev.imageEdits ?? [], reloaded: ev.reloaded };
       else if (ev.type === 'error') failure = new Error(ev.error || 'El agente falló.');
       else onEvent(ev);
     });

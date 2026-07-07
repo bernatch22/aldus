@@ -39,7 +39,7 @@ import {
   type WidgetEdit,
 } from '@aldus/core';
 import { activeEditingBox, round1 } from '../styledDom';
-import { log } from './helpers';
+import { clampX, clampY, log } from './helpers';
 import { GroupBox } from './GroupBox';
 import { HighlightBox } from './HighlightBox';
 import { ImageBox } from './ImageBox';
@@ -47,7 +47,7 @@ import { LinkBox } from './LinkBox';
 import { SegmentBox } from './SegmentBox';
 import { WidgetBox } from './WidgetBox';
 import { TextEditLayer, type TextEditLayerHandle } from './TextEditLayer';
-import type { AddTextRequest, EditAction, HighlightEditAction, ImageEditAction, LinkEditAction, OverlayHighlight, WidgetEditAction } from './types';
+import type { AddTextRequest, EditAction, HighlightEditAction, ImageEditAction, LinkEditAction, OverlayHighlight, SavedHighlight, WidgetEditAction } from './types';
 
 export type { AddTextRequest, EditAction, HighlightEditAction, ImageEditAction, LinkEditAction, WidgetEditAction } from './types';
 
@@ -247,17 +247,20 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
   const moveGroup = (dxCss: number, dyCss: number) => {
     const dxPt = round1(dxCss / scale);
     const dyPt = round1(-dyCss / scale);
+    // Clamp por nodo: ninguno puede salir de página (lo de afuera se pierde al
+    // re-extraer). cx/cy mantienen el bbox entero dentro de [0, pageDim].
+    const cx = (x: number, w: number) => round1(clampX(x + dxPt, w, graph.width));
     for (const nid of multiSel) {
       const s = allSegments.find(x => x.id === nid);
-      if (s) { const e = effectiveGeometry(s, edits.get(s.id) ?? null); const m = mergeSegmentEdit(s, edits.get(s.id) ?? null, { x: round1(e.x + dxPt), baseline: round1(e.baseline + dyPt) }); onEdit(m ?? { segmentId: s.id, revert: true }); continue; }
+      if (s) { const e = effectiveGeometry(s, edits.get(s.id) ?? null); const ny = clampY(e.y + dyPt, e.height, graph.height); const m = mergeSegmentEdit(s, edits.get(s.id) ?? null, { x: cx(e.x, e.width), baseline: round1(e.baseline + (ny - e.y)) }); onEdit(m ?? { segmentId: s.id, revert: true }); continue; }
       const im = graph.images.find(x => x.id === nid);
-      if (im) { const e = effectiveImageRect(im, imageEdits.get(im.id) ?? null); const m = mergeImageEdit(im, imageEdits.get(im.id) ?? null, { x: round1(e.x + dxPt), y: round1(e.y + dyPt) }); onImageEdit(m ?? { imageId: im.id, revert: true }); continue; }
+      if (im) { const e = effectiveImageRect(im, imageEdits.get(im.id) ?? null); const m = mergeImageEdit(im, imageEdits.get(im.id) ?? null, { x: cx(e.x, e.width), y: round1(clampY(e.y + dyPt, e.height, graph.height)) }); onImageEdit(m ?? { imageId: im.id, revert: true }); continue; }
       const w = graph.widgets.find(x => x.id === nid);
-      if (w) { const e = effectiveWidgetRect(w, widgetEdits.get(w.id) ?? null); const m = mergeWidgetEdit(w, widgetEdits.get(w.id) ?? null, { x: round1(e.x + dxPt), y: round1(e.y + dyPt) }); onWidgetEdit(m ?? { widgetId: w.id, revert: true }); continue; }
+      if (w) { const e = effectiveWidgetRect(w, widgetEdits.get(w.id) ?? null); const m = mergeWidgetEdit(w, widgetEdits.get(w.id) ?? null, { x: cx(e.x, e.width), y: round1(clampY(e.y + dyPt, e.height, graph.height)) }); onWidgetEdit(m ?? { widgetId: w.id, revert: true }); continue; }
       const hl = graph.highlights.find(x => x.id === nid);
-      if (hl) { const e = effectiveHighlightRect(hl, highlightEdits.get(hl.id) ?? null); const m = mergeHighlightEdit(hl, highlightEdits.get(hl.id) ?? null, { x: round1(e.x + dxPt), y: round1(e.y + dyPt) }); onHighlightEdit(m ?? { highlightId: hl.id, revert: true }); continue; }
+      if (hl) { const e = effectiveHighlightRect(hl, highlightEdits.get(hl.id) ?? null); const m = mergeHighlightEdit(hl, highlightEdits.get(hl.id) ?? null, { x: cx(e.x, e.width), y: round1(clampY(e.y + dyPt, e.height, graph.height)) }); onHighlightEdit(m ?? { highlightId: hl.id, revert: true }); continue; }
       const lk = graph.links.find(x => x.id === nid);
-      if (lk) { const e = effectiveLinkRect(lk, linkEdits.get(lk.id) ?? null); const m = mergeLinkEdit(lk, linkEdits.get(lk.id) ?? null, { x: round1(e.x + dxPt), y: round1(e.y + dyPt) }); onLinkEdit(m ?? { linkId: lk.id, revert: true }); }
+      if (lk) { const e = effectiveLinkRect(lk, linkEdits.get(lk.id) ?? null); const m = mergeLinkEdit(lk, linkEdits.get(lk.id) ?? null, { x: cx(e.x, e.width), y: round1(clampY(e.y + dyPt, e.height, graph.height)) }); onLinkEdit(m ?? { linkId: lk.id, revert: true }); }
     }
   };
 
@@ -367,7 +370,17 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           onRequestLink={onRequestLink}
           onAddText={onAddText}
           highlights={hlBySeg.get(seg.id) ?? null}
-          savedHighlights={savedHlBySeg.get(seg.id) ?? null}
+          savedHighlights={(savedHlBySeg.get(seg.id) ?? []).flatMap((hl): SavedHighlight[] => {
+            const e = highlightEdits.get(hl.id) ?? null;
+            if (e?.remove) return []; // borrado: no dibujar la capa hija
+            return [{ id: hl.id, x: hl.x, y: hl.y, width: hl.width, height: hl.height, color: e?.color ?? hl.color }];
+          })}
+          onHighlightPatch={(hlId, patch) => {
+            const hl = graph.highlights.find(h => h.id === hlId);
+            if (!hl) return;
+            const m = mergeHighlightEdit(hl, highlightEdits.get(hlId) ?? null, patch);
+            onHighlightEdit(m ?? { highlightId: hlId, revert: true });
+          }}
           highlightColor={highlightColor}
           onHighlightColor={onHighlightColor}
         />

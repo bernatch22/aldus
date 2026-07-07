@@ -38,9 +38,21 @@ export function agentRouter(store: DocStore): Router {
       const session = new EditSession(doc);
       session.seed(edits, imageEdits);
       const { sessionId, toolCalls } = await runTurn({ doc, session, prompt, resume, onEvent: write });
-      const out = session.getEdits();
-      console.log(`[agent] → OK ${Date.now() - t0}ms · toolCalls=${toolCalls} · edits=${out.edits.length}+${out.imageEdits.length}`);
-      write({ type: 'done', sessionId, toolCalls, edits: out.edits, imageEdits: out.imageEdits });
+      // Si el agente usó SOLO tools de texto/imagen → devolvemos los edits y el
+      // editor los aplica a su estado local (preview, sin persistir). Si además
+      // creó annotations/contenido (highlight, link, watermark, campo…) que el
+      // estado local no sabe representar, horneamos TODO (incluidas las
+      // ediciones semilla del editor) y persistimos: el editor recarga limpio.
+      if (session.hasBakedOps) {
+        const { pdf, warnings } = await session.bake();
+        store.writePdf(id, pdf);
+        console.log(`[agent] → OK ${Date.now() - t0}ms · toolCalls=${toolCalls} · HORNEADO+persistido (${warnings.length} aviso/s)`);
+        write({ type: 'done', sessionId, toolCalls, reloaded: true, warnings });
+      } else {
+        const out = session.getEdits();
+        console.log(`[agent] → OK ${Date.now() - t0}ms · toolCalls=${toolCalls} · edits=${out.edits.length}+${out.imageEdits.length}`);
+        write({ type: 'done', sessionId, toolCalls, edits: out.edits, imageEdits: out.imageEdits });
+      }
     } catch (err) {
       console.error(`[agent] ✗ ${Date.now() - t0}ms:`, err instanceof Error ? err.message : err);
       write({ type: 'error', error: err instanceof Error ? err.message : 'El agente falló.' });

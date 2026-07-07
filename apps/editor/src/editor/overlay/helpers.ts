@@ -48,8 +48,15 @@ export function containerStyle(seg: SegmentNode, edit: SegmentEdit | null, scale
   };
 }
 
-// Ningún drag puede dejar un nodo perdido fuera de la página: al soltar,
-// siempre quedan al menos 24pt visibles.
-export const MIN_VISIBLE = 24;
-export const clampX = (x: number, w: number, pageW: number) => Math.min(Math.max(x, MIN_VISIBLE - w), pageW - MIN_VISIBLE);
-export const clampY = (y: number, h: number, pageH: number) => Math.min(Math.max(y, MIN_VISIBLE - h), pageH - MIN_VISIBLE);
+// Ningún nodo puede quedar (ni parcialmente) FUERA de la página: lo que sale
+// del MediaBox pdf.js NO lo extrae al re-abrir (se pierde el texto/objeto). Por
+// eso el clamp mantiene el bbox ENTERO dentro de [0, pageDim]. Si el nodo es más
+// grande que la página, se permite el rango negativo (cubre todo el lado) en vez
+// de trabarlo. Origen PDF abajo-izq: x/y son la esquina inferior-izquierda.
+const clampSpan = (v: number, size: number, pageDim: number) => {
+  const lo = Math.min(0, pageDim - size);
+  const hi = Math.max(0, pageDim - size);
+  return Math.min(Math.max(v, lo), hi);
+};
+export const clampX = (x: number, w: number, pageW: number) => clampSpan(x, w, pageW);
+export const clampY = (y: number, h: number, pageH: number) => clampSpan(y, h, pageH);

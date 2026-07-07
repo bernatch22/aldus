@@ -210,7 +210,7 @@ export interface HighlightNode {
   color: string;
 }
 
-/** Una edición pendiente sobre un resaltado: mover/escalar/eliminar. */
+/** Una edición pendiente sobre un resaltado: mover/escalar/recolorear/eliminar. */
 export interface HighlightEdit {
   highlightId: string;
   page: number;
@@ -218,6 +218,8 @@ export interface HighlightEdit {
   y?: number;
   width?: number;
   height?: number;
+  /** Color hex nuevo "#rrggbb": reescribe /C y regenera el appearance stream. */
+  color?: string;
   remove?: boolean;
   /** Snapshot para que el bake localice la anotación sin ambigüedad. */
   original: { x: number; y: number; width: number; height: number; color: string };

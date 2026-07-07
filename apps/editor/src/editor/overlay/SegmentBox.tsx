@@ -9,17 +9,17 @@ import { useEffect } from 'react';
 import {
   effectiveGeometry,
   pdfRectToCss,
-  type HighlightNode,
+  type HighlightPatch,
   type SegmentEdit,
   type SegmentNode,
   type SegmentPatch,
 } from '@aldus/core';
 import { round1, seedHtml } from '../styledDom';
-import { clampX, containerStyle, dbgStyles } from './helpers';
+import { clampX, clampY, containerStyle, dbgStyles } from './helpers';
 import { FloatingBar } from './FloatingBar';
 import { useDragGesture } from './useDragGesture';
 import { useGripResize } from './useGripResize';
-import type { AddTextRequest, OverlayHighlight } from './types';
+import type { AddTextRequest, OverlayHighlight, SavedHighlight } from './types';
 
 interface SegmentBoxProps {
   seg: SegmentNode;
@@ -54,13 +54,17 @@ interface SegmentBoxProps {
   /** Resaltados GUARDADOS (/Annots) PEGADOS a este segmento: capa hija (como
    *  los pendientes) → heredan el transform y lo siguen al arrastrar; su /Rect
    *  se sincroniza aparte (ver NodeOverlay). Se ubican por su offset ORIGINAL
-   *  respecto del segmento (constante → quedan pegados aunque el box se mueva). */
-  savedHighlights: HighlightNode[] | null;
+   *  respecto del segmento (constante → quedan pegados aunque el box se mueva).
+   *  Ya resueltos con color EFECTIVO (recolor aplicado). */
+  savedHighlights: SavedHighlight[] | null;
+  /** Patch sobre un resaltado guardado pegado (recolorear/toggle): la
+   *  FloatingBar lo usa para recolorear o quitar el highlight del segmento. */
+  onHighlightPatch: (hlId: string, patch: HighlightPatch) => void;
   highlightColor: string;
   onHighlightColor: (c: string) => void;
 }
 
-export function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, onCanvas, isLocked, onDragging, area, onArea, groupMode, onSelect, onStartEdit, onPatch, onDocOp, onRequestLink, highlights, savedHighlights, highlightColor, onHighlightColor }: SegmentBoxProps) {
+export function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, onCanvas, isLocked, onDragging, area, onArea, groupMode, onSelect, onStartEdit, onPatch, onDocOp, onRequestLink, highlights, savedHighlights, onHighlightPatch, highlightColor, onHighlightColor }: SegmentBoxProps) {
   const eff = effectiveGeometry(seg, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
 
@@ -97,7 +101,12 @@ export function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editin
     },
     onDrop: (_e, { dx, dy }) => {
       const nx = round1(clampX(eff.x + dx / scale, eff.width, pageWidth));
-      const nb = round1(Math.min(Math.max(eff.baseline - dy / scale, 8), pageHeight - 4));
+      // Clampear el BBOX entero (no la baseline sola): los glifos suben desde la
+      // baseline, así que clampear baseline≤pageH dejaba el texto salir por
+      // arriba → pdf.js no lo re-extrae y "se pierde". clampY sobre eff.y (borde
+      // inferior) mantiene toda la caja dentro; el delta se traslada a baseline.
+      const ny = clampY(eff.y - dy / scale, eff.height, pageHeight);
+      const nb = round1(eff.baseline + (ny - eff.y));
       const noop = edit == null && nx === round1(seg.x) && nb === round1(seg.baseline);
       if (noop) {
         // Soltó donde estaba: nada que commitear — cancelar el lift.
@@ -166,7 +175,14 @@ export function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editin
   return (
     <>
       {selected && !isLocked && !groupMode && (
-        <FloatingBar seg={seg} edit={edit} rect={rect} pageWidth={pageWidth} frameWpt={areaWpx / scale} onPatch={onPatch} onDocOp={onDocOp} onRequestLink={onRequestLink} highlightColor={highlightColor} onHighlightColor={onHighlightColor} />
+        <FloatingBar
+          seg={seg} edit={edit} rect={rect} pageWidth={pageWidth} frameWpt={areaWpx / scale}
+          onPatch={onPatch} onDocOp={onDocOp} onRequestLink={onRequestLink}
+          savedHighlights={savedHighlights ?? null}
+          hasPendingHighlight={!!highlights?.length}
+          onHighlightPatch={onHighlightPatch}
+          highlightColor={highlightColor} onHighlightColor={onHighlightColor}
+        />
       )}
       <div
         className={`seg-box${selected ? ' selected' : ''}${masked ? ' masked' : ''}${edit ? ' edited' : ''}${editing ? ' editing' : ''}${isLocked ? ' locked' : ''}${edit && onCanvas && !moved ? ' on-canvas' : ''}`}

@@ -380,8 +380,15 @@ function HighlightProps({ hl, edit, onHighlightEdit }: { hl: HighlightNode; edit
   return (
     <>
       <Section title="Anotación">
-        <div className="flex justify-between text-[12px]"><span className="text-neutral-400">Color</span><span className="flex items-center gap-1.5 text-neutral-700"><span className="h-3.5 w-3.5 rounded-[3px]" style={{ background: hl.color }} />{hl.color}</span></div>
-        <div className="text-[11px] text-neutral-400">Capa /Annots: se mueve y borra sin tocar el contenido — incluso después de Aplicar.</div>
+        <div className="flex items-center justify-between text-[12px]">
+          <span className="text-neutral-400">Color</span>
+          <label className="flex cursor-pointer items-center gap-1.5 text-neutral-700" title="Cambiar el color del resaltado">
+            <span className="h-3.5 w-3.5 rounded-[3px] ring-1 ring-black/10" style={{ background: eff.color }} />
+            {eff.color}
+            <input type="color" className="sr-only" value={eff.color} onChange={e => commit({ color: e.target.value.toLowerCase() === hl.color.toLowerCase() ? null : e.target.value })} />
+          </label>
+        </div>
+        <div className="text-[11px] text-neutral-400">Capa /Annots: se mueve, recolorea y borra sin tocar el contenido — incluso después de Aplicar.</div>
       </Section>
       <Section title="Geometría (pt)">
         <Row><NumberInput label="X" defaultValue={eff.x} onCommit={num('x', hl.x)} /><NumberInput label="Y" defaultValue={eff.y} onCommit={num('y', hl.y)} /></Row>

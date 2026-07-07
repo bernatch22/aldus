@@ -179,6 +179,14 @@ export function usePendingEdits(
     setPendingHighlights(prev => [...prev, ...hs]);
   }, [pushHistory]);
 
+  /** Quita los resaltados PENDIENTES anclados a un segmento (toggle "quitar"
+   *  antes de Aplicar → no apila). No-op si no hay ninguno. */
+  const removePendingHighlightsFor = useCallback((segmentId: string) => {
+    if (!highlightsRef.current.some(h => h.segmentId === segmentId)) return;
+    pushHistory();
+    setPendingHighlights(prev => prev.filter(h => h.segmentId !== segmentId));
+  }, [pushHistory]);
+
   // Buscar un segmento por id: primero el grafo del preview; si fue editado
   // (extirpado del preview), el cache de fantasmas.
   const findSeg = useCallback(
@@ -203,7 +211,7 @@ export function usePendingEdits(
     edits, imageEdits, widgetEdits, pendingHighlights, highlightEdits, linkEdits,
     editsRef, imageEditsRef, widgetEditsRef, highlightsRef,
     segCache,
-    onEdit, onImageEdit, onWidgetEdit, onHighlightEdit, onLinkEdit, syncHighlightEdits, applyAgentEdits, addHighlights,
+    onEdit, onImageEdit, onWidgetEdit, onHighlightEdit, onLinkEdit, syncHighlightEdits, applyAgentEdits, addHighlights, removePendingHighlightsFor,
     findSeg, clearAll, history,
   };
 }

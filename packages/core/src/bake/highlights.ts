@@ -1,12 +1,14 @@
 /**
  * Highlights live in /Annots (Subtype /Highlight), NOT in the content stream:
- * an edit rewrites /Rect + /QuadPoints (the appearance stream is a Form
- * XObject with BBox, scaled to /Rect by the viewer — no AP regeneration
- * needed), a remove pulls the annotation. Creation lives in createNodes.
+ * an edit rewrites /Rect + /QuadPoints (the appearance stream is a Form XObject
+ * scaled to /Rect by the viewer, so a MOVE/RESIZE needs no AP regen), a RECOLOR
+ * rewrites /C AND regenerates the AP (the fill color is baked into it), a
+ * remove pulls the annotation. Creation lives in createNodes.
  */
 import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, PDFRef } from 'pdf-lib';
 import type { HighlightEdit } from '../model.js';
 import { applyAnnotRectEdits } from './annotEdits.js';
+import { highlightAppearance } from './createNodes.js';
 import type { BakeReport } from './report.js';
 
 export function applyHighlightEdits(doc: PDFDocument, edits: HighlightEdit[], report: BakeReport): void {
@@ -14,11 +16,18 @@ export function applyHighlightEdits(doc: PDFDocument, edits: HighlightEdit[], re
     doc,
     'Highlight',
     'resaltado',
-    edits.map(e => ({ id: e.highlightId, page: e.page, x: e.x, y: e.y, width: e.width, height: e.height, remove: e.remove, original: e.original })),
+    edits.map(e => ({ id: e.highlightId, page: e.page, x: e.x, y: e.y, width: e.width, height: e.height, color: e.color, remove: e.remove, original: e.original })),
     report,
-    (dict, nx, ny, nw, nh) => {
+    (dict, nx, ny, nw, nh, edit) => {
       // QuadPoints ISO 32000: UL UR LL LR (y crece hacia arriba).
       dict.set(PDFName.of('QuadPoints'), doc.context.obj([nx, ny + nh, nx + nw, ny + nh, nx, ny, nx + nw, ny]));
+      // RECOLOR: /C + regenerar el AP (el color va quemado en su content). El
+      // AP vive en espacio local [0,0,w,h] → BBox = tamaño del rect actual.
+      if (edit.color) {
+        const { apRef, color } = highlightAppearance(doc.context, edit.color, nw, nh);
+        dict.set(PDFName.of('C'), doc.context.obj(color));
+        dict.set(PDFName.of('AP'), doc.context.obj({ N: apRef }));
+      }
     },
   );
 }

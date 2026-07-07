@@ -90,7 +90,7 @@ export function EditorPage() {
   const {
     edits, imageEdits, widgetEdits, pendingHighlights, highlightEdits, linkEdits,
     editsRef, highlightsRef, segCache,
-    onEdit, onImageEdit, onWidgetEdit, onHighlightEdit, onLinkEdit, syncHighlightEdits, applyAgentEdits, addHighlights,
+    onEdit, onImageEdit, onWidgetEdit, onHighlightEdit, onLinkEdit, syncHighlightEdits, applyAgentEdits, addHighlights, removePendingHighlightsFor,
     findSeg, clearAll, history,
   } = usePendingEdits(graphRef, () => setSelectedId(null));
 
@@ -156,6 +156,11 @@ export function EditorPage() {
       addHighlights(items);
       return;
     }
+    if (action === 'unhighlight') {
+      // Toggle "quitar" del pendiente (aún sin Aplicar) — no apila.
+      removePendingHighlightsFor(params.segmentId as string);
+      return;
+    }
     setError('');
     const run = () => api.docOp(id, action, params);
     run()
@@ -165,7 +170,7 @@ export function EditorPage() {
         registerServerOp(run); // undoable: Ctrl+Z revierte la escritura
       })
       .catch(e => setError(e instanceof Error ? e.message : 'No se pudo aplicar'));
-  }, [id, addHighlights, registerServerOp]);
+  }, [id, addHighlights, removePendingHighlightsFor, registerServerOp]);
 
   // Convertir un segmento/rect en link: abre el modal (no más window.prompt).
   const requestLink = useCallback((target: { page: number; x: number; y: number; width: number; height: number }) => {
@@ -375,6 +380,7 @@ export function EditorPage() {
             edits={edits}
             imageEdits={imageEdits}
             onApply={applyAgentEdits}
+            onReload={() => { clearAll(); setSelectedId(null); setDocVersion(v => v + 1); }}
             onClose={() => setAiOpen(false)}
           />
         )}

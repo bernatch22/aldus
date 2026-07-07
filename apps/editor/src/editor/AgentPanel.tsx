@@ -27,6 +27,8 @@ interface Msg {
   streaming?: boolean;
   tools?: string[];
   edits?: number;
+  /** El turno horneó+guardó (annotations/creaciones) — ya persistido. */
+  saved?: boolean;
 }
 
 interface Props {
@@ -34,6 +36,9 @@ interface Props {
   edits: Map<string, SegmentEdit>;
   imageEdits: Map<string, ImageEdit>;
   onApply: (edits: SegmentEdit[], imageEdits: ImageEdit[]) => void;
+  /** El agente horneó+persistió cambios (annotations/creaciones) → recargar el
+   *  documento desde el server (descarta el estado local, ya horneado). */
+  onReload: () => void;
   onClose: () => void;
 }
 
@@ -43,7 +48,7 @@ const SUGGESTIONS = [
   'Corregí las faltas de ortografía del título',
 ];
 
-export function AgentPanel({ docId, edits, imageEdits, onApply, onClose }: Props) {
+export function AgentPanel({ docId, edits, imageEdits, onApply, onReload, onClose }: Props) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -71,8 +76,14 @@ export function AgentPanel({ docId, edits, imageEdits, onApply, onClose }: Props
         },
       );
       sessionId.current = res.sessionId ?? sessionId.current;
-      onApply(res.edits, res.imageEdits);
-      patchLast(msg => ({ ...msg, streaming: false, text: msg.text || '(listo)', edits: res.edits.length + res.imageEdits.length }));
+      if (res.reloaded) onReload(); else onApply(res.edits, res.imageEdits);
+      patchLast(msg => ({
+        ...msg, streaming: false,
+        text: msg.text || '(listo)',
+        // reloaded = ya horneado+guardado (no hay nada que "revisar y guardar").
+        edits: res.reloaded ? 0 : res.edits.length + res.imageEdits.length,
+        saved: res.reloaded,
+      }));
     } catch (e) {
       const err = e instanceof Error ? e.message : 'Falló el agente.';
       patchLast(msg => ({ ...msg, streaming: false, error: true, text: (msg.text ? `${msg.text}\n\n` : '') + `⚠️ ${err}` }));
@@ -132,6 +143,9 @@ export function AgentPanel({ docId, edits, imageEdits, onApply, onClose }: Props
                 : m.text}
               {m.role === 'assistant' && !m.error && !m.streaming && typeof m.edits === 'number' && m.edits > 0 && (
                 <div className="mt-1.5 text-[11px] font-medium text-blue-600">✎ {m.edits} edición(es) activa(s) — revisá y guardá</div>
+              )}
+              {m.role === 'assistant' && !m.error && !m.streaming && m.saved && (
+                <div className="mt-1.5 text-[11px] font-medium text-emerald-600">✓ Aplicado y guardado en el documento</div>
               )}
             </div>
           </div>

@@ -4,6 +4,7 @@ import {
   effectiveGeometry, mergeSegmentEdit,
   type HighlightEdit, type ImageEdit, type LinkEdit, type PageGraph, type SegmentEdit, type SegmentNode, type WidgetEdit,
 } from '@aldus/core';
+import { clampX, clampY } from '../../editor/overlay/helpers';
 
 const r1 = (v: number) => Math.round(v * 10) / 10;
 
@@ -65,15 +66,17 @@ export function useEditorHotkeys(opts: {
       }
 
       const seg = selectedId ? findSeg(selectedId) : null;
-      if (seg && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+      if (seg && graph && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
         e.preventDefault();
         const step = e.shiftKey ? 5 : 0.5;
         const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
         const dy = e.key === 'ArrowUp' ? step : e.key === 'ArrowDown' ? -step : 0;
         const cur = edits.get(seg.id) ?? null;
         const eff = effectiveGeometry(seg, cur);
-        const nx = r1(eff.x + dx);
-        const nb = r1(eff.baseline + dy);
+        const nx = r1(clampX(eff.x + dx, eff.width, graph.width));
+        // Clampear el bbox entero (glifos suben desde baseline) → mapear a baseline.
+        const ny = clampY(eff.y + dy, eff.height, graph.height);
+        const nb = r1(eff.baseline + (ny - eff.y));
         const merged = mergeSegmentEdit(seg, cur, { x: nx === r1(seg.x) ? null : nx, baseline: nb === r1(seg.baseline) ? null : nb });
         onEdit(merged ?? { segmentId: seg.id, revert: true });
         return;

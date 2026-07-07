@@ -41,6 +41,11 @@ export function serializeDoc(doc: DocGraph): string {
       }
     }
 
+    if (p.highlights.length) {
+      out.push('### Resaltados  (id color @(x,y) ancho×alto)');
+      for (const h of p.highlights) out.push(`- ${h.id} ${h.color} @(${r(h.x)},${r(h.y)}) ${r(h.width)}×${r(h.height)}`);
+    }
+
     if (p.links.length) {
       out.push('### Links');
       for (const l of p.links) out.push(`- ${l.id} → ${JSON.stringify(l.url)} @(${r(l.x)},${r(l.y)})`);

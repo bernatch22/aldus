@@ -401,10 +401,11 @@ export interface HighlightPatch {
   y?: number | null;
   width?: number | null;
   height?: number | null;
+  color?: string | null;
   remove?: boolean | null;
 }
 
-const HIGHLIGHT_KEYS = ['x', 'y', 'width', 'height', 'remove'] as const;
+const HIGHLIGHT_KEYS = ['x', 'y', 'width', 'height', 'color', 'remove'] as const;
 
 export function mergeHighlightEdit(h: HighlightNode, prev: HighlightEdit | null, patch: HighlightPatch): HighlightEdit | null {
   const next: HighlightEdit = prev
@@ -430,6 +431,7 @@ export function effectiveHighlightRect(h: HighlightNode, edit: HighlightEdit | n
     y: edit?.y ?? h.y,
     width: edit?.width ?? h.width,
     height: edit?.height ?? h.height,
+    color: edit?.color ?? h.color,
     removed: edit?.remove === true,
     moved: edit?.x !== undefined || edit?.y !== undefined,
   };

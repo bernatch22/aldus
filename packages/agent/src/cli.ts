@@ -2,9 +2,9 @@
  * cli.ts — el CLI `aldus`. Carga un PDF, embebe su grafo en el agente, y deja
  * preguntar contenido o pedir cambios. Dos modos:
  *
- *   aldus <pdf> -p "<prompt>" [-o out.pdf]   one-shot (imprime la respuesta;
- *                                             si hubo ediciones y hay -o, guarda)
- *   aldus <pdf>                              chat interactivo (multi-turno)
+ *   aldus <pdf> "<prompt>" [-o out.pdf] [--open]   one-shot (el prompt va
+ *       posicional o con -p; si hubo cambios se guarda; --open abre el PDF)
+ *   aldus <pdf>                                     chat interactivo (multi-turno)
  *
  * En el chat: escribí preguntas o instrucciones; `/save [ruta]` hornea las
  * ediciones, `/edits` las lista, `/exit` sale.
@@ -14,6 +14,7 @@
 import { parseArgs } from 'node:util';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { loadDoc } from './graph.js';
 import { EditSession } from './session.js';
@@ -24,7 +25,17 @@ const TOOL_LABEL: Record<string, string> = {
   edit_text: 'editando texto', move_text: 'moviendo texto', set_text_color: 'coloreando texto',
   set_text_size: 'cambiando tamaño', delete_text: 'eliminando texto',
   move_image: 'moviendo imagen', delete_image: 'eliminando imagen',
+  highlight_text: 'resaltando', set_highlight_color: 'recoloreando resaltado', delete_highlight: 'quitando resaltado',
+  add_link: 'agregando link', delete_link: 'quitando link',
+  add_text: 'agregando texto', insert_image: 'insertando imagen', add_watermark: 'marca de agua',
+  add_header_footer: 'encabezado/pie', add_form_field: 'creando campo', move_field: 'moviendo campo', delete_field: 'quitando campo',
 };
+
+/** Abre un archivo con el visor por defecto del SO (mac/linux/win). */
+function openFile(file: string): void {
+  const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+  spawn(cmd, [file], { stdio: 'ignore', detached: true, shell: process.platform === 'win32' }).unref();
+}
 /** Streamea los eventos del turno a stdout (texto token a token + tools). */
 function streamToStdout(ev: AgentEvent): void {
   if (ev.type === 'text') process.stdout.write(ev.delta);
@@ -34,9 +45,15 @@ function streamToStdout(ev: AgentEvent): void {
 function usage(): never {
   console.error(`aldus — agente sobre el grafo de un PDF
 
-  aldus <archivo.pdf> -p "<prompt>" [-o salida.pdf]   one-shot
-  aldus <archivo.pdf>                                 chat interactivo
+  aldus <archivo.pdf> "<prompt>" [-o salida.pdf] [--open]   one-shot
+  aldus <archivo.pdf> -p "<prompt>"                         (equivalente, con flag)
+  aldus <archivo.pdf>                                       chat interactivo
 
+Ejemplos:
+  aldus contrato.pdf "Describí el contenido"
+  aldus contrato.pdf "Resaltá los montos y poné el título en mayúsculas" --open
+
+  --open   abre el PDF resultante (o el original si no hubo cambios).
 Chat: preguntá o pedí cambios; /save [ruta] guarda, /edits lista, /exit sale.
 Auth: suscripción de Claude Code (corré sin ANTHROPIC_API_KEY).`);
   process.exit(1);
@@ -61,11 +78,14 @@ async function main(): Promise<void> {
     options: {
       prompt: { type: 'string', short: 'p' },
       out: { type: 'string', short: 'o' },
+      open: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
   });
   const file = positionals[0];
   if (!file || values.help) usage();
+  // El prompt puede ir POSICIONAL (aldus x.pdf "…") o con -p; el flag gana.
+  const prompt = values.prompt ?? positionals[1];
 
   process.stdout.write(`📄 Cargando ${file} …\n`);
   const doc = await loadDoc(file);
@@ -74,15 +94,14 @@ async function main(): Promise<void> {
   const session = new EditSession(doc);
 
   // ── one-shot ──
-  if (values.prompt) {
-    const { toolCalls } = await runTurn({ doc, session, prompt: values.prompt, onEvent: streamToStdout });
+  if (prompt) {
+    await runTurn({ doc, session, prompt, onEvent: streamToStdout });
     process.stdout.write('\n');
-    if (session.count > 0) {
-      const out = values.out || defaultOut(file);
-      await save(session, out);
-    } else if (toolCalls === 0 && values.out) {
-      console.log('(sin ediciones — nada que guardar)');
-    }
+    const out = values.out || defaultOut(file);
+    if (session.count > 0) await save(session, out);
+    // --open: abre el resultado si hubo cambios, si no el original (p. ej. un
+    // "describí el contenido" no edita → mostramos el PDF que se describió).
+    if (values.open) openFile(session.count > 0 ? out : file);
     return;
   }
 

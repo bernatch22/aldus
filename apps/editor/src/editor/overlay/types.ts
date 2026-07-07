@@ -4,6 +4,19 @@
  */
 import type { FontBucket, HighlightEdit, ImageEdit, LinkEdit, SegmentEdit, WidgetEdit } from '@aldus/core';
 
+/** Un resaltado GUARDADO (HighlightNode) PEGADO a un segmento, ya resuelto para
+ *  el overlay: geometría ORIGINAL (el box la posiciona por offset y lo sigue al
+ *  mover) + color EFECTIVO (con su highlightEdit de recolor aplicado). */
+export interface SavedHighlight {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Color efectivo (edit?.color ?? node.color). */
+  color: string;
+}
+
 export type EditAction = SegmentEdit | { segmentId: string; revert: true };
 export type ImageEditAction = ImageEdit | { imageId: string; revert: true };
 export type WidgetEditAction = WidgetEdit | { widgetId: string; revert: true };

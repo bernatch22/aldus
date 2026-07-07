@@ -13,11 +13,13 @@ import {
   styledText,
   toggleListMarker,
   type FontBucket,
+  type HighlightPatch,
   type SegmentEdit,
   type SegmentNode,
   type SegmentPatch,
   type StyledRun,
 } from '@aldus/core';
+import type { SavedHighlight } from './types';
 import { AlignLeft, AlignCenter, AlignRight, Bold, Italic, Underline, Highlighter, Link2, List, Trash2 } from 'lucide-react';
 import {
   activeEditingBox,
@@ -34,7 +36,7 @@ import { liveEditRuns, styleAtRange } from './TextEditLayer';
 
 /** Toolbar flotante arriba del segmento seleccionado: alineación (relativa a
  *  la página), B/I, resaltar (+color), link, eliminar. */
-export function FloatingBar({ seg, edit, rect, pageWidth, frameWpt, onPatch, onDocOp, onRequestLink, highlightColor, onHighlightColor }: {
+export function FloatingBar({ seg, edit, rect, pageWidth, frameWpt, onPatch, onDocOp, onRequestLink, savedHighlights, hasPendingHighlight, onHighlightPatch, highlightColor, onHighlightColor }: {
   seg: SegmentNode;
   edit: SegmentEdit | null;
   rect: { left: number; top: number };
@@ -44,9 +46,20 @@ export function FloatingBar({ seg, edit, rect, pageWidth, frameWpt, onPatch, onD
   onPatch: (patch: SegmentPatch) => void;
   onDocOp: (action: string, params: Record<string, unknown>) => void;
   onRequestLink: (target: { page: number; x: number; y: number; width: number; height: number }) => void;
+  /** Resaltados GUARDADOS pegados a este segmento: quitar (toggle) recolorea a
+   *  TODOS (un texto suele tener uno; si hay varios apilados, un clic los
+   *  limpia). */
+  savedHighlights: SavedHighlight[] | null;
+  /** El segmento tiene un resaltado PENDIENTE (aún sin Aplicar). */
+  hasPendingHighlight: boolean;
+  onHighlightPatch: (hlId: string, patch: HighlightPatch) => void;
   highlightColor: string;
   onHighlightColor: (c: string) => void;
 }) {
+  const gluedHls = savedHighlights ?? [];
+  const gluedTop = gluedHls[0] ?? null;
+  const highlighted = !!gluedTop || hasPendingHighlight;
+  const patchAllHls = (patch: HighlightPatch) => gluedHls.forEach(h => onHighlightPatch(h.id, patch));
   const styled: StyledRun[] = edit?.runs ?? originalStyledRuns(seg);
   // Con el editor abierto, B/I reflejan el estilo BAJO LA SELECCIÓN (no el del
   // segmento entero) y el toggle aplica solo a esa parte.
@@ -187,9 +200,19 @@ export function FloatingBar({ seg, edit, rect, pageWidth, frameWpt, onPatch, onD
       <FbBtn label="Centrar el texto en el área (ensanchá con el grip)" active={curAlign === 'center'} onClick={() => setAlign('center')}><AlignCenter size={14} /></FbBtn>
       <FbBtn label="Texto a la derecha del área" active={curAlign === 'right'} onClick={() => setAlign('right')}><AlignRight size={14} /></FbBtn>
       <FbSep />
-      <FbBtn label="Resaltar (acumula, se escribe con Aplicar)" onClick={() => onDocOp('highlight', { ...bbox, color: highlightColor })}><Highlighter size={14} /></FbBtn>
-      <button className="fb-swatch" title="Color del resaltador" style={{ background: highlightColor }} onMouseDown={e => e.preventDefault()} onClick={e => e.stopPropagation()}>
-        <input type="color" value={highlightColor} onChange={e => onHighlightColor(e.target.value)} />
+      {/* Resaltar: si el segmento YA tiene un highlight guardado pegado, el
+          botón lo QUITA (toggle, como Word/Acrobat) y el swatch lo RECOLOREA —
+          nunca apila otra anotación encima. Si no, crea uno nuevo. */}
+      <FbBtn
+        label={highlighted ? (gluedHls.length > 1 ? `Quitar el resaltado (${gluedHls.length} apilados)` : 'Quitar el resaltado') : 'Resaltar (acumula, se escribe con Aplicar)'}
+        active={highlighted}
+        onClick={() => {
+          if (highlighted) { patchAllHls({ remove: true }); onDocOp('unhighlight', { segmentId: seg.id }); } // quita guardados + pendientes
+          else onDocOp('highlight', { ...bbox, color: highlightColor });
+        }}
+      ><Highlighter size={14} /></FbBtn>
+      <button className="fb-swatch" title={gluedTop ? 'Color del resaltado (recolorea el existente)' : 'Color del resaltador'} style={{ background: gluedTop?.color ?? highlightColor }} onMouseDown={e => e.preventDefault()} onClick={e => e.stopPropagation()}>
+        <input type="color" value={gluedTop?.color ?? highlightColor} onChange={e => (gluedTop ? patchAllHls({ color: e.target.value }) : onHighlightColor(e.target.value))} />
       </button>
       <FbBtn label="Link" onClick={() => onRequestLink(bbox)}><Link2 size={14} /></FbBtn>
       <FbSep />

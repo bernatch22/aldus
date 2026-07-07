@@ -14,6 +14,8 @@ export interface AnnotRectEdit {
   y?: number;
   width?: number;
   height?: number;
+  /** Subtype-specific extra (e.g. highlight recolor); handled by `onRect`. */
+  color?: string;
   remove?: boolean;
   original: { x: number; y: number; width: number; height: number };
 }
@@ -35,7 +37,7 @@ export function applyAnnotRectEdits(
   label: string,
   edits: AnnotRectEdit[],
   report: BakeReport,
-  onRect?: (dict: PDFDict, nx: number, ny: number, nw: number, nh: number) => void,
+  onRect?: (dict: PDFDict, nx: number, ny: number, nw: number, nh: number, edit: AnnotRectEdit) => void,
 ): void {
   if (!edits.length) return;
   const tol = 2;
@@ -75,8 +77,8 @@ export function applyAnnotRectEdits(
         } else {
           const nx = edit.x ?? rx, ny = edit.y ?? ry, nw = edit.width ?? rw, nh = edit.height ?? rh;
           dict.set(PDFName.of('Rect'), doc.context.obj([nx, ny, nx + nw, ny + nh]));
-          onRect?.(dict, nx, ny, nw, nh);
-          report.apply(`${edit.id}: ${label} reubicado/escalado`);
+          onRect?.(dict, nx, ny, nw, nh, edit);
+          report.apply(`${edit.id}: ${label} ${edit.color ? 'recoloreado' : 'reubicado/escalado'}`);
         }
         done = true;
         break;

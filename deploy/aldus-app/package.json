@@ -1,0 +1,21 @@
+{
+  "name": "aldus-app-deploy",
+  "private": true,
+  "type": "module",
+  "description": "El editor real de Aldus (server + editor SPA) empaquetado para el demo bernardocastro.dev/aldus-app.",
+  "scripts": {
+    "start": "node start.mjs"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "multer": "^2.0.1",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.10.38",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.198",
+    "zod": "^4.0.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

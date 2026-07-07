@@ -1,7 +1,11 @@
-/** Cliente del server de Aldus. Un solo origen (/api, proxied por Vite). */
+/** Cliente del server de Aldus. Same-origin; la base sale de BASE_URL (Vite) →
+ *  `/api` en dev/root, `/aldus-app/api` cuando el editor se sirve en un subpath
+ *  (el demo embebido en bernardocastro.dev). Un solo lugar define el prefijo. */
 
 import type { HighlightEdit, ImageEdit, LinkEdit, SegmentEdit, WidgetEdit, WidgetKind } from '@aldus/core';
 import { readNdjson } from './ndjson';
+
+const API = `${import.meta.env.BASE_URL.replace(/\/+$/, '')}/api`;
 
 export interface DocMeta {
   id: string;
@@ -40,34 +44,34 @@ async function ok<T>(res: Response): Promise<T> {
 }
 
 export const api = {
-  list: (): Promise<DocMeta[]> => fetch('/api/documents').then(r => ok<DocMeta[]>(r)),
+  list: (): Promise<DocMeta[]> => fetch(`${API}/documents`).then(r => ok<DocMeta[]>(r)),
 
   upload: (file: File): Promise<DocMeta> => {
     const fd = new FormData();
     fd.append('pdf', file);
-    return fetch('/api/documents', { method: 'POST', body: fd }).then(r => ok<DocMeta>(r));
+    return fetch(`${API}/documents`, { method: 'POST', body: fd }).then(r => ok<DocMeta>(r));
   },
 
-  pdfUrl: (id: string): string => `/api/documents/${id}/pdf`,
+  pdfUrl: (id: string): string => `${API}/documents/${id}/pdf`,
 
   /** DESHACE la última escritura del server (restaura la revisión previa).
    *  El historial lo usa para que las ops instantáneas entren al Ctrl+Z. */
   revert: (id: string): Promise<{ ok: boolean }> =>
-    fetch(`/api/documents/${id}/revert`, { method: 'POST' }).then(r => ok<{ ok: boolean }>(r)),
+    fetch(`${API}/documents/${id}/revert`, { method: 'POST' }).then(r => ok<{ ok: boolean }>(r)),
 
   saveEdits: (id: string, edits: SegmentEdit[]): Promise<{ ok: boolean; count: number }> =>
-    fetch(`/api/documents/${id}/edits`, {
+    fetch(`${API}/documents/${id}/edits`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ edits }),
     }).then(r => ok<{ ok: boolean; count: number }>(r)),
 
   loadEdits: (id: string): Promise<{ edits: SegmentEdit[]; savedAt: string | null }> =>
-    fetch(`/api/documents/${id}/edits`).then(r => ok<{ edits: SegmentEdit[]; savedAt: string | null }>(r)),
+    fetch(`${API}/documents/${id}/edits`).then(r => ok<{ edits: SegmentEdit[]; savedAt: string | null }>(r)),
 
   /** Crea un campo de formulario nuevo en el punto dado. */
   createField: (id: string, spec: { type: WidgetKind; page: number; x: number; y: number }): Promise<{ ok: boolean; name: string }> =>
-    fetch(`/api/documents/${id}/fields`, {
+    fetch(`${API}/documents/${id}/fields`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(spec),
@@ -75,7 +79,7 @@ export const api = {
 
   /** Operación de documento: addText | watermark | headerFooter | highlight | addLink | removeLink. */
   docOp: (id: string, action: string, params: Record<string, unknown>): Promise<{ ok: boolean }> =>
-    fetch(`/api/documents/${id}/ops`, {
+    fetch(`${API}/documents/${id}/ops`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ action, ...params }),
@@ -88,7 +92,7 @@ export const api = {
     fd.append('page', String(spec.page));
     fd.append('x', String(spec.x));
     fd.append('y', String(spec.y));
-    return fetch(`/api/documents/${id}/images`, { method: 'POST', body: fd }).then(r => ok<{ ok: boolean }>(r));
+    return fetch(`${API}/documents/${id}/images`, { method: 'POST', body: fd }).then(r => ok<{ ok: boolean }>(r));
   },
 
   /** Corre un turno del agente LLM STREAMEADO (NDJSON). `onEvent` recibe los
@@ -103,7 +107,7 @@ export const api = {
     resume: string | undefined,
     onEvent: (ev: AgentEvent) => void,
   ): Promise<AgentDone> => {
-    const res = await fetch(`/api/documents/${id}/agent`, {
+    const res = await fetch(`${API}/documents/${id}/agent`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ prompt, edits, imageEdits, resume }),
@@ -136,7 +140,7 @@ export const api = {
     highlightEdits: HighlightEdit[] = [],
     linkEdits: LinkEdit[] = [],
   ): Promise<{ ok: boolean; applied: string[]; warnings: string[] }> =>
-    fetch(`/api/documents/${id}/bake`, {
+    fetch(`${API}/documents/${id}/bake`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ edits, imageEdits, widgetEdits, highlights, highlightEdits, linkEdits }),

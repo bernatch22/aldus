@@ -29,6 +29,16 @@ app.use('/api/documents', bakeRouter(store));
 app.use('/api/documents', opsRouter(store));
 app.use('/api/documents', agentRouter(store));
 
+// Servir el editor buildeado (SPA) cuando ALDUS_STATIC apunta a su dist — el
+// modo "app autocontenida" del demo (bernardocastro.dev/aldus-app): mismo origen
+// que /api, sin CORS. El fallback a index.html cubre las rutas de cliente
+// (/doc/:id); /api/* ya matcheó antes, así que nunca cae acá.
+const STATIC = process.env.ALDUS_STATIC;
+if (STATIC) {
+  app.use(express.static(STATIC));
+  app.get('*', (_req, res) => res.sendFile(path.join(STATIC, 'index.html')));
+}
+
 app.listen(PORT, HOST, () => {
   console.log([
     '┌─────────────────────────────────────────────┐',

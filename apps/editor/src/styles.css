@@ -69,6 +69,74 @@ body {
    texto soltado sobre un campo quedaba bajo su tinte — "cambiaba de color". */
 .seg-box.selected, .seg-box.editing, .seg-box.edited { z-index: 20; }
 .seg-text { white-space: pre; outline: none; min-height: 100%; width: max-content; color: #000; }
+/* RESALTADO pendiente: capa DETRÁS del texto (primer hijo, z bajo), anclada al
+   box → sigue el transform del drag. Alpha (no mix-blend-mode) para tintar
+   consistente bajo cualquier stacking context (un ancestro transformado aísla
+   el multiply). El horneado final (server) sí usa multiply exacto. */
+.seg-hl {
+  position: absolute;
+  left: -1px;
+  top: -1px;
+  z-index: 0;
+  border-radius: 1px;
+  opacity: .45;
+  pointer-events: none;
+}
+/* Resaltado GUARDADO (HighlightNode): box overlay movible/borrable. */
+.hl-box {
+  position: absolute;
+  border-radius: 1px;
+  opacity: .45;
+  cursor: move;
+  outline: 1px solid transparent;
+  outline-offset: 1px;
+}
+.hl-box:hover { outline-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.hl-box.selected { outline-color: var(--accent); opacity: .5; z-index: 21; }
+.hl-box.locked { pointer-events: none; }
+.hl-del {
+  position: absolute;
+  top: -11px;
+  right: -11px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 9999px;
+  background: #ef4444;
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,.3);
+  opacity: 1;
+}
+/* Link GUARDADO (LinkNode): área clickeable movible/borrable. */
+.link-box {
+  position: absolute;
+  border-radius: 2px;
+  cursor: move;
+  outline: 1px dashed transparent;
+  outline-offset: 1px;
+}
+.link-box:hover { outline-color: color-mix(in srgb, var(--accent) 65%, transparent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.link-box.selected { outline-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); z-index: 21; }
+.link-box.locked { pointer-events: none; }
+.link-tag {
+  position: absolute;
+  top: -24px;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 320px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: #1d4ed8;
+  color: #fff;
+  font-size: 11px;
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(0,0,0,.25);
+}
+.link-tag button { display: grid; place-items: center; opacity: .8; }
+.link-tag button:hover { opacity: 1; }
 /* EL editor (TextEditLayer): textarea transparente ENCIMA de un backdrop que
    dibuja los tramos estilados (bold/italic/color). Ambos superpuestos, mismas
    métricas → el caret del textarea cae sobre el glifo dibujado. */

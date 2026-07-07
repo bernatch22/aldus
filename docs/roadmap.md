@@ -22,8 +22,10 @@ streaming en vivo.
 - **Tier 2 — edición seria (restante):** sub/superscript; **Link/Join/Split de
   segmentos** (el feature estrella de Foxit — natural con nuestro modelo);
   smart guides + align/distribute.
-- **Tier 3 — anotaciones (/Annots, ortogonal al bake):** underline/strikeout/
-  squiggly anclados a quads de segmentos; shapes; FreeText.
+- **Tier 3 — anotaciones (/Annots, ortogonal al bake):** ✅ highlights (capa
+  /Highlight real, movible/borrable después de guardar); ✅ links movibles/
+  borrables como edición (LinkBox + LinkEdit); restante: strikeout/squiggly
+  anclados a quads de segmentos; shapes; FreeText.
 - **Tier 5 — pro batch:** page numbers, crop/rotate/opacity de imagen,
   redacción (exige bake maduro), Bates.
 - **Integración signwax:** signwax pasa a consumir `@aldus/core` + `@aldus/agent`

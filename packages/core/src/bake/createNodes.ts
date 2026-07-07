@@ -8,7 +8,6 @@
  */
 
 import {
-  BlendMode,
   PDFArray,
   PDFDict,
   PDFDocument,
@@ -21,6 +20,7 @@ import {
 } from 'pdf-lib';
 import { FIELD_DEFAULT_SIZE, type FontBucket, type WidgetKind } from '../model.js';
 import { stdFontFor } from './fonts.js';
+import { fmt } from './splice.js';
 export { FIELD_DEFAULT_SIZE };
 
 const hexToRgb = (hex: string) => {
@@ -75,7 +75,9 @@ function addSignatureField(doc: PDFDocument, page: PDFPage, name: string, rect: 
   const ref = ctx.register(dict);
 
   // Alta en /Annots de la página…
-  const annots = page.node.lookup(PDFName.of('Annots'), PDFArray) ?? ctx.obj([]);
+  // lookupMaybe: la variante tipada LANZA si /Annots falta — el `?? obj([])`
+  // (crear el array en una página sin anotaciones) nunca llegaría a correr.
+  const annots = page.node.lookupMaybe(PDFName.of('Annots'), PDFArray) ?? ctx.obj([]);
   annots.push(ref);
   page.node.set(PDFName.of('Annots'), annots);
 
@@ -286,8 +288,12 @@ export async function addHeaderFooter(
 
 // ── highlight ────────────────────────────────────────────────────────────────
 
-/** Resalta un rect como un marcador: blend Multiply (el texto de arriba sigue
- *  legible) + color saturado a 0.55 de opacidad para que se vea de verdad. */
+/** Resalta un rect como una ANOTACIÓN /Highlight (capa /Annots, no content
+ *  stream) — así, como los widgets/links, sigue siendo seleccionable, movible
+ *  y borrable después de guardar (y no se quema tapando el texto). Lleva
+ *  QuadPoints + /C + un appearance stream (blend Multiply, α 0.55) para que los
+ *  viewers externos lo pinten legible; el editor de Aldus lo dibuja aparte
+ *  (overlay) leyendo el HighlightNode del grafo. */
 export async function addHighlight(
   pdfBytes: Uint8Array,
   spec: { page: number; x: number; y: number; width: number; height: number; color?: string },
@@ -295,15 +301,34 @@ export async function addHighlight(
   const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
   const page = doc.getPages()[spec.page - 1];
   if (!page) throw new Error(`página ${spec.page} fuera de rango`);
-  page.drawRectangle({
-    x: spec.x - 1,
-    y: spec.y - 1,
-    width: spec.width + 2,
-    height: spec.height + 2,
-    color: spec.color ? hexToRgb(spec.color) : rgb(1, 0.84, 0), // amarillo marcador saturado
-    opacity: 0.55,
-    blendMode: BlendMode.Multiply,
+  const ctx = doc.context;
+  const x = spec.x - 1, y = spec.y - 1, w = spec.width + 2, h = spec.height + 2;
+  const c = spec.color ? hexToRgb(spec.color) : rgb(1, 0.84, 0); // amarillo marcador
+  // ExtGState: Multiply + opacidad → el texto de arriba sigue legible.
+  const gsRef = ctx.register(ctx.obj({ Type: 'ExtGState', BM: 'Multiply', ca: 0.55, CA: 0.55 }));
+  // Appearance stream (Form XObject) en espacio local [0,0,w,h]; el viewer lo
+  // escala al /Rect de la anotación (así move/resize no necesitan regenerarlo).
+  const ap = ctx.stream(`/GS gs ${fmt(c.red)} ${fmt(c.green)} ${fmt(c.blue)} rg 0 0 ${fmt(w)} ${fmt(h)} re f`, {
+    Type: 'XObject', Subtype: 'Form', FormType: 1, BBox: [0, 0, w, h],
+    Resources: ctx.obj({ ExtGState: ctx.obj({ GS: gsRef }) }),
   });
+  const apRef = ctx.register(ap);
+  const dict = ctx.obj({
+    Type: 'Annot',
+    Subtype: 'Highlight',
+    Rect: [x, y, x + w, y + h],
+    // QuadPoints ISO 32000: UL UR LL LR (y crece hacia arriba).
+    QuadPoints: [x, y + h, x + w, y + h, x, y, x + w, y],
+    C: [c.red, c.green, c.blue],
+    CA: 0.55,
+    AP: ctx.obj({ N: apRef }),
+  });
+  const ref = ctx.register(dict);
+  // lookupMaybe: la variante tipada LANZA si /Annots falta — el `?? obj([])`
+  // (crear el array en una página sin anotaciones) nunca llegaría a correr.
+  const annots = page.node.lookupMaybe(PDFName.of('Annots'), PDFArray) ?? ctx.obj([]);
+  annots.push(ref);
+  page.node.set(PDFName.of('Annots'), annots);
   return { pdf: await doc.save() };
 }
 
@@ -325,7 +350,9 @@ export async function addLink(
     A: ctx.obj({ Type: 'Action', S: 'URI', URI: PDFString.of(spec.url) }),
   });
   const ref = ctx.register(dict);
-  const annots = page.node.lookup(PDFName.of('Annots'), PDFArray) ?? ctx.obj([]);
+  // lookupMaybe: la variante tipada LANZA si /Annots falta — el `?? obj([])`
+  // (crear el array en una página sin anotaciones) nunca llegaría a correr.
+  const annots = page.node.lookupMaybe(PDFName.of('Annots'), PDFArray) ?? ctx.obj([]);
   annots.push(ref);
   page.node.set(PDFName.of('Annots'), annots);
   return { pdf: await doc.save() };
@@ -338,7 +365,7 @@ export async function removeLink(
   const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
   const page = doc.getPages()[spec.page - 1];
   if (!page) throw new Error(`página ${spec.page} fuera de rango`);
-  const annots = page.node.lookup(PDFName.of('Annots'), PDFArray);
+  const annots = page.node.lookupMaybe(PDFName.of('Annots'), PDFArray);
   if (!annots) return { pdf: pdfBytes, removed: false };
   const tol = 2;
   for (let i = 0; i < annots.size(); i++) {
@@ -346,7 +373,7 @@ export async function removeLink(
     const dict = raw instanceof PDFRef ? doc.context.lookup(raw) : raw;
     if (!(dict instanceof PDFDict)) continue;
     if (dict.get(PDFName.of('Subtype')) !== PDFName.of('Link')) continue;
-    const rect = dict.lookup(PDFName.of('Rect'), PDFArray);
+    const rect = dict.lookupMaybe(PDFName.of('Rect'), PDFArray);
     if (!rect || rect.size() !== 4) continue;
     const nums = [0, 1, 2, 3].map(k => Number((rect.get(k) as { asNumber?: () => number }).asNumber?.() ?? NaN));
     if (nums.some(Number.isNaN)) continue;

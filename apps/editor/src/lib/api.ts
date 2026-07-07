@@ -1,6 +1,6 @@
 /** Cliente del server de Aldus. Un solo origen (/api, proxied por Vite). */
 
-import type { ImageEdit, SegmentEdit, WidgetEdit, WidgetKind } from '@aldus/core';
+import type { HighlightEdit, ImageEdit, LinkEdit, SegmentEdit, WidgetEdit, WidgetKind } from '@aldus/core';
 import { readNdjson } from './ndjson';
 
 export interface DocMeta {
@@ -46,6 +46,11 @@ export const api = {
   },
 
   pdfUrl: (id: string): string => `/api/documents/${id}/pdf`,
+
+  /** DESHACE la última escritura del server (restaura la revisión previa).
+   *  El historial lo usa para que las ops instantáneas entren al Ctrl+Z. */
+  revert: (id: string): Promise<{ ok: boolean }> =>
+    fetch(`/api/documents/${id}/revert`, { method: 'POST' }).then(r => ok<{ ok: boolean }>(r)),
 
   saveEdits: (id: string, edits: SegmentEdit[]): Promise<{ ok: boolean; count: number }> =>
     fetch(`/api/documents/${id}/edits`, {
@@ -116,17 +121,21 @@ export const api = {
     return final;
   },
 
-  /** Aplica las ediciones AL PDF (bake del content stream + /Annots) y lo persiste. */
+  /** Aplica las ediciones AL PDF (bake del content stream + /Annots) y lo
+   *  persiste. `highlights` = resaltados NUEVOS (a crear como anotación);
+   *  `highlightEdits`/`linkEdits` = mover/borrar anotaciones ya guardadas. */
   bake: (
     id: string,
     edits: SegmentEdit[],
     imageEdits: ImageEdit[] = [],
     widgetEdits: WidgetEdit[] = [],
     highlights: Array<Record<string, unknown>> = [],
+    highlightEdits: HighlightEdit[] = [],
+    linkEdits: LinkEdit[] = [],
   ): Promise<{ ok: boolean; applied: string[]; warnings: string[] }> =>
     fetch(`/api/documents/${id}/bake`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ edits, imageEdits, widgetEdits, highlights }),
+      body: JSON.stringify({ edits, imageEdits, widgetEdits, highlights, highlightEdits, linkEdits }),
     }).then(r => ok<{ ok: boolean; applied: string[]; warnings: string[] }>(r)),
 };

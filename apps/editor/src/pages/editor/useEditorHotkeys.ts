@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import {
   effectiveGeometry, mergeSegmentEdit,
-  type ImageEdit, type PageGraph, type SegmentEdit, type SegmentNode, type WidgetEdit,
+  type HighlightEdit, type ImageEdit, type LinkEdit, type PageGraph, type SegmentEdit, type SegmentNode, type WidgetEdit,
 } from '@aldus/core';
 
 const r1 = (v: number) => Math.round(v * 10) / 10;
@@ -20,15 +20,18 @@ export function useEditorHotkeys(opts: {
   setSelectedId: (id: string | null) => void;
   graph: PageGraph | null;
   edits: Map<string, SegmentEdit>;
+  highlightEdits: Map<string, HighlightEdit>;
   onEdit: (edit: SegmentEdit | { segmentId: string; revert: true }) => void;
   onImageEdit: (edit: ImageEdit) => void;
   onWidgetEdit: (edit: WidgetEdit) => void;
+  onHighlightEdit: (edit: HighlightEdit) => void;
+  onLinkEdit: (edit: LinkEdit) => void;
   undo: () => void;
   redo: () => void;
   findSeg: (sid: string) => SegmentNode | null;
   cancelPlacing: () => void;
 }) {
-  const { pdf, pageNum, setPageNum, selectedId, setSelectedId, graph, edits, onEdit, onImageEdit, onWidgetEdit, undo, redo, findSeg, cancelPlacing } = opts;
+  const { pdf, pageNum, setPageNum, selectedId, setSelectedId, graph, edits, highlightEdits, onEdit, onImageEdit, onWidgetEdit, onHighlightEdit, onLinkEdit, undo, redo, findSeg, cancelPlacing } = opts;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -55,6 +58,10 @@ export function useEditorHotkeys(opts: {
         if (img) { e.preventDefault(); onImageEdit({ imageId: img.id, page: img.page, remove: true, original: { x: img.x, y: img.y, width: img.width, height: img.height } }); return; }
         const w = graph.widgets.find(x => x.id === selectedId);
         if (w) { e.preventDefault(); onWidgetEdit({ widgetId: w.id, page: w.page, remove: true, original: { fieldName: w.fieldName, x: w.x, y: w.y, width: w.width, height: w.height } }); return; }
+        const hl = graph.highlights.find(x => x.id === selectedId);
+        if (hl) { e.preventDefault(); onHighlightEdit({ highlightId: hl.id, page: hl.page, remove: true, original: { x: hl.x, y: hl.y, width: hl.width, height: hl.height, color: hl.color } }); return; }
+        const lk = graph.links.find(x => x.id === selectedId);
+        if (lk) { e.preventDefault(); onLinkEdit({ linkId: lk.id, page: lk.page, remove: true, original: { url: lk.url, x: lk.x, y: lk.y, width: lk.width, height: lk.height } }); return; }
       }
 
       const seg = selectedId ? findSeg(selectedId) : null;
@@ -78,5 +85,5 @@ export function useEditorHotkeys(opts: {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [pdf, pageNum, setPageNum, selectedId, setSelectedId, graph, edits, onEdit, onImageEdit, onWidgetEdit, undo, redo, findSeg, cancelPlacing]);
+  }, [pdf, pageNum, setPageNum, selectedId, setSelectedId, graph, edits, highlightEdits, onEdit, onImageEdit, onWidgetEdit, onHighlightEdit, onLinkEdit, undo, redo, findSeg, cancelPlacing]);
 }

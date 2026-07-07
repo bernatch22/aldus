@@ -15,13 +15,17 @@ export function bakeRouter(store: DocStore): Router {
     const edits = Array.isArray(req.body?.edits) ? req.body.edits : [];
     const imageEdits = Array.isArray(req.body?.imageEdits) ? req.body.imageEdits : [];
     const widgetEdits = Array.isArray(req.body?.widgetEdits) ? req.body.widgetEdits : [];
+    // `highlights` = resaltados NUEVOS a crear (annots); `highlightEdits` /
+    // `linkEdits` = mover/borrar anotaciones ya existentes en el PDF.
     const highlights = Array.isArray(req.body?.highlights) ? req.body.highlights : [];
-    if (edits.length === 0 && imageEdits.length === 0 && widgetEdits.length === 0 && highlights.length === 0) {
-      return res.status(400).json({ error: 'Body esperado: { edits, imageEdits, widgetEdits, highlights } con al menos una edición.' });
+    const highlightEdits = Array.isArray(req.body?.highlightEdits) ? req.body.highlightEdits : [];
+    const linkEdits = Array.isArray(req.body?.linkEdits) ? req.body.linkEdits : [];
+    if (edits.length === 0 && imageEdits.length === 0 && widgetEdits.length === 0 && highlights.length === 0 && highlightEdits.length === 0 && linkEdits.length === 0) {
+      return res.status(400).json({ error: 'Body esperado: { edits, imageEdits, widgetEdits, highlights, highlightEdits, linkEdits } con al menos una edición.' });
     }
     try {
       const original = store.readPdf(id);
-      let { pdf, applied, warnings } = await bakeSegmentEdits(new Uint8Array(original), edits, imageEdits, widgetEdits);
+      let { pdf, applied, warnings } = await bakeSegmentEdits(new Uint8Array(original), edits, imageEdits, widgetEdits, highlightEdits, linkEdits);
       for (const h of highlights) {
         ({ pdf } = await addHighlight(pdf, h));
         applied.push(`highlight en p${h.page}`);

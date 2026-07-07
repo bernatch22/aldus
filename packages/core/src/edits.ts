@@ -11,7 +11,7 @@
  * segmento: quitar la negrita a una parte no toca el resto.
  */
 
-import type { FontBucket, ImageEdit, ImageNode, SegmentEdit, SegmentNode, StyledRun, WidgetEdit, WidgetNode } from './model.js';
+import type { FontBucket, HighlightEdit, HighlightNode, ImageEdit, ImageNode, LinkEdit, LinkNode, SegmentEdit, SegmentNode, StyledRun, WidgetEdit, WidgetNode } from './model.js';
 import { classifyGap } from './tokens.js';
 
 /** Un parche parcial: `undefined` = no tocar; `null` = LIMPIAR el override
@@ -392,6 +392,86 @@ export function effectiveWidgetRect(w: WidgetNode, edit: WidgetEdit | null) {
     width: edit?.width ?? w.width,
     height: edit?.height ?? w.height,
     removed: edit?.remove === true,
+  };
+}
+
+/** Parche parcial de un resaltado: `undefined` = no tocar; `null` = limpiar. */
+export interface HighlightPatch {
+  x?: number | null;
+  y?: number | null;
+  width?: number | null;
+  height?: number | null;
+  remove?: boolean | null;
+}
+
+const HIGHLIGHT_KEYS = ['x', 'y', 'width', 'height', 'remove'] as const;
+
+export function mergeHighlightEdit(h: HighlightNode, prev: HighlightEdit | null, patch: HighlightPatch): HighlightEdit | null {
+  const next: HighlightEdit = prev
+    ? { ...prev }
+    : {
+        highlightId: h.id,
+        page: h.page,
+        original: { x: h.x, y: h.y, width: h.width, height: h.height, color: h.color },
+      };
+  for (const key of HIGHLIGHT_KEYS) {
+    const value = patch[key];
+    if (value === undefined) continue;
+    if (value === null) delete next[key];
+    else (next as unknown as Record<string, unknown>)[key] = value;
+  }
+  return HIGHLIGHT_KEYS.every(k => next[k] === undefined) ? null : next;
+}
+
+/** Rect EFECTIVO de un resaltado con su edición aplicada. */
+export function effectiveHighlightRect(h: HighlightNode, edit: HighlightEdit | null) {
+  return {
+    x: edit?.x ?? h.x,
+    y: edit?.y ?? h.y,
+    width: edit?.width ?? h.width,
+    height: edit?.height ?? h.height,
+    removed: edit?.remove === true,
+    moved: edit?.x !== undefined || edit?.y !== undefined,
+  };
+}
+
+/** Parche parcial de un link: `undefined` = no tocar; `null` = limpiar. */
+export interface LinkPatch {
+  x?: number | null;
+  y?: number | null;
+  width?: number | null;
+  height?: number | null;
+  remove?: boolean | null;
+}
+
+const LINK_KEYS = ['x', 'y', 'width', 'height', 'remove'] as const;
+
+export function mergeLinkEdit(l: LinkNode, prev: LinkEdit | null, patch: LinkPatch): LinkEdit | null {
+  const next: LinkEdit = prev
+    ? { ...prev }
+    : {
+        linkId: l.id,
+        page: l.page,
+        original: { url: l.url, x: l.x, y: l.y, width: l.width, height: l.height },
+      };
+  for (const key of LINK_KEYS) {
+    const value = patch[key];
+    if (value === undefined) continue;
+    if (value === null) delete next[key];
+    else (next as unknown as Record<string, unknown>)[key] = value;
+  }
+  return LINK_KEYS.every(k => next[k] === undefined) ? null : next;
+}
+
+/** Rect EFECTIVO de un link con su edición aplicada. */
+export function effectiveLinkRect(l: LinkNode, edit: LinkEdit | null) {
+  return {
+    x: edit?.x ?? l.x,
+    y: edit?.y ?? l.y,
+    width: edit?.width ?? l.width,
+    height: edit?.height ?? l.height,
+    removed: edit?.remove === true,
+    moved: edit?.x !== undefined || edit?.y !== undefined,
   };
 }
 

@@ -27,6 +27,8 @@ export function usePlacement(opts: {
   onError: (msg: string) => void;
   onAreaWidth: (segId: string, area: { w?: number; h?: number } | null) => void;
   onSelect: (id: string | null) => void;
+  /** Registra la creación en el historial (undo = revert del server). */
+  onServerOp: (redo: () => Promise<unknown>) => void;
 }) {
   const { id, pageNum, graph } = opts;
   const cb = useRef(opts);
@@ -65,7 +67,7 @@ export function usePlacement(opts: {
     if (p.kind === 'text') {
       pendingTextAreaRef.current = { x: r1(x), y: r1(y), area: { w: 240, h: Math.round(size * 1.2 * 2) } };
     }
-    const run = p.kind === 'field'
+    const run = (): Promise<unknown> => p.kind === 'field'
       ? api.createField(id, { type: p.type, page: pageNum, x: r1(x), y: r1(y - FIELD_DEFAULT_SIZE[p.type].height) })
       : p.kind === 'image'
         ? api.insertImage(id, p.file, { page: pageNum, x: r1(x), y: r1(y) })
@@ -74,16 +76,21 @@ export function usePlacement(opts: {
             text: 'Texto nuevo',
             size, bucket: pageTextStyle.bucket,
           });
-    run
-      .then(() => { cb.current.onBumpDoc(); cb.current.onNotice('Creado — doble click para editar'); })
+    run()
+      .then(() => {
+        cb.current.onBumpDoc();
+        cb.current.onNotice('Creado — doble click para editar');
+        cb.current.onServerOp(run); // Ctrl+Z deshace la creación (revert del server)
+      })
       .catch(e => { pendingTextAreaRef.current = null; cb.current.onError(e instanceof Error ? e.message : 'No se pudo crear'); });
   }, [placing, id, pageNum, pageTextStyle]);
 
   // Enter en una línea → crea el texto de la línea de abajo (el editor sigue
   // abierto LOCAL sobre la línea nueva, sin depender de que el server responda).
   const onAddText = useCallback((req: AddTextRequest) => {
-    api.docOp(id, 'addText', { page: req.page, x: r1(req.x), y: r1(req.baseline + req.size), text: req.text, size: req.size, bucket: req.bucket })
-      .then(() => cb.current.onBumpDoc())
+    const run = () => api.docOp(id, 'addText', { page: req.page, x: r1(req.x), y: r1(req.baseline + req.size), text: req.text, size: req.size, bucket: req.bucket });
+    run()
+      .then(() => { cb.current.onBumpDoc(); cb.current.onServerOp(run); })
       .catch(e => cb.current.onError(e instanceof Error ? e.message : 'No se pudo agregar'));
   }, [id]);
 

@@ -5,17 +5,19 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { PDFDocument, PDFName, PDFArray, PDFRawStream, PDFRef, StandardFonts, decodePDFRawStream, rgb } from 'pdf-lib';
+import { PDFDocument, PDFDict, PDFName, PDFArray, PDFRawStream, PDFRef, StandardFonts, decodePDFRawStream, rgb } from 'pdf-lib';
 import { walkContent } from '../src/bake/index.js';
 import {
   extractPageGraph,
   mergeSegmentEdit,
+  mergeHighlightEdit,
+  mergeLinkEdit,
   originalStyledRuns,
   type PageGraph,
   type PdfJsPage,
   type SegmentEdit,
 } from '../src/index.js';
-import { addFormField, addLink, addRadioOption, addText, addWatermark, bakeSegmentEdits, insertImage, removeLink, setFieldOptions } from '../src/bake/index.js';
+import { addFormField, addHighlight, addLink, addRadioOption, addText, addWatermark, bakeSegmentEdits, insertImage, removeLink, setFieldOptions } from '../src/bake/index.js';
 
 async function makePdf(): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
@@ -24,6 +26,23 @@ async function makePdf(): Promise<Uint8Array> {
   page.drawText('Nombre:', { x: 72, y: 700, size: 12, font: helv });
   page.drawText('Juan Perez', { x: 220, y: 700, size: 12, font: helv });
   page.drawText('Segunda linea de prueba', { x: 72, y: 680, size: 12, font: helv });
+  return doc.save();
+}
+
+/** Un PDF cuyo contenido está envuelto en un CLIP rect (como los generadores
+ *  que recortan la página): el texto vive dentro de `q <rect> W n … Q`. Mover
+ *  un segmento FUERA de ese rect, con re-emisión in-place, lo recortaría a nada
+ *  — el bake debe emitirlo al final del stream (CTM identidad, sin clip). */
+async function makeClippedPdf(clip: [number, number, number, number]): Promise<Uint8Array> {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([612, 792]);
+  const helv = await doc.embedFont(StandardFonts.Helvetica);
+  page.drawText('x', { x: 0, y: 0, size: 1, font: helv }); // registra el recurso de fuente
+  const fonts = page.node.Resources()!.lookup(PDFName.of('Font'), PDFDict);
+  const fontName = fonts.keys()[0].asString().slice(1); // "/F1-0" → "F1-0"
+  const [cx, cy, cw, ch] = clip;
+  const content = `q ${cx} ${cy} ${cw} ${ch} re W n BT /${fontName} 12 Tf 1 0 0 1 100 100 Tm (Recortame) Tj ET Q`;
+  page.node.set(PDFName.of('Contents'), doc.context.register(doc.context.stream(content)));
   return doc.save();
 }
 
@@ -340,7 +359,191 @@ describe('documento: texto nuevo, watermark, links', () => {
     expect(removed).toBe(true);
     expect((await graphOf(without)).links).toHaveLength(0);
   });
+
+  it('mueve y elimina un link como EDICIÓN (/Annots, mismo pipeline que widgets)', async () => {
+    const pdf = await makePdf();
+    const { pdf: withLink } = await addLink(pdf, { page: 1, x: 72, y: 690, width: 120, height: 16, url: 'https://aldus.dev' });
+    const g = await graphOf(withLink);
+    const link = g.links[0];
+    // Mover: reescribe /Rect preservando la acción URI.
+    const move = mergeLinkEdit(link, null, { x: link.x + 50, y: link.y - 30 });
+    const { pdf: moved, applied } = await bakeSegmentEdits(withLink, [], [], [], [], [move!]);
+    expect(applied.some(a => a.includes('link reubicado'))).toBe(true);
+    const g2 = await graphOf(moved);
+    expect(Math.round(g2.links[0].x)).toBe(Math.round(link.x + 50));
+    expect(g2.links[0].url).toContain('aldus.dev');
+    // Eliminar como edición.
+    const del = mergeLinkEdit(g2.links[0], null, { remove: true });
+    const { pdf: gone } = await bakeSegmentEdits(moved, [], [], [], [], [del!]);
+    expect((await graphOf(gone)).links).toHaveLength(0);
+  });
+
+  it('el watermark queda EDITABLE: es texto del grafo y se puede eliminar', async () => {
+    const pdf = await makePdf();
+    const { pdf: withWm } = await addWatermark(pdf, { text: 'BORRADOR' });
+    const g = await graphOf(withWm);
+    const wm = g.segments.find(s => s.text.includes('BORRADOR'));
+    expect(wm).toBeTruthy();
+    const del = mergeSegmentEdit(wm!, null, { remove: true });
+    const { pdf: clean, warnings } = await bakeSegmentEdits(withWm, [del!]);
+    expect(warnings).toHaveLength(0);
+    const g2 = await graphOf(clean);
+    expect(g2.segments.some(s => s.text.includes('BORRADOR'))).toBe(false);
+    // El resto del contenido sigue intacto.
+    expect(g2.segments.some(s => s.text.includes('Juan Perez'))).toBe(true);
+  });
+
+  it('el SUBRAYADO sigue a su texto: mover lo reubica, eliminar lo extirpa', async () => {
+    const decodeStreams = async (bytes: Uint8Array): Promise<Uint8Array> => {
+      const doc = await PDFDocument.load(bytes.slice());
+      const resolve = (o: unknown) => (o instanceof PDFRef ? doc.context.lookup(o) : o);
+      const raw = resolve(doc.getPages()[0].node.get(PDFName.of('Contents')));
+      const streams = raw instanceof PDFArray
+        ? [...Array(raw.size()).keys()].map(i => resolve(raw.get(i)) as PDFRawStream)
+        : [raw as PDFRawStream];
+      const parts = streams.map(s => decodePDFRawStream(s).decode());
+      const out = new Uint8Array(parts.reduce((a, p) => a + p.length + 1, 0));
+      let off = 0;
+      for (const p of parts) { out.set(p, off); off += p.length; out[off++] = 0x0a; }
+      return out;
+    };
+    const thinRects = async (bytes: Uint8Array) =>
+      walkContent(await decodeStreams(bytes)).fillRects.filter(r => r.height <= 2);
+
+    const pdf = await makePdf();
+    const g = await graphOf(pdf);
+    const seg = segByText(g, 'Juan Perez');
+    // 1) Subrayar (los runs llevan underline + w medido).
+    const e1 = mergeSegmentEdit(seg, null, {
+      runs: [{ text: seg.text, bold: false, italic: false, underline: true, dx: 0, w: seg.width }],
+    });
+    const { pdf: withUl } = await bakeSegmentEdits(pdf, [e1!]);
+    const rects1 = await thinRects(withUl);
+    expect(rects1.length).toBe(1);
+    expect(Math.abs(rects1[0].x - seg.x)).toBeLessThan(3);
+
+    // 2) MOVER el texto subrayado → el rect viejo se va, aparece uno en la
+    //    posición nueva (antes quedaba huérfano: "la línea fantasma").
+    const g2 = await graphOf(withUl);
+    const seg2 = segByText(g2, 'Juan Perez');
+    const e2 = mergeSegmentEdit(seg2, null, { x: seg2.x + 100, baseline: seg2.baseline - 40 });
+    const { pdf: moved } = await bakeSegmentEdits(withUl, [e2!]);
+    const rects2 = await thinRects(moved);
+    expect(rects2.length).toBe(1);
+    expect(Math.abs(rects2[0].x - (seg2.x + 100))).toBeLessThan(3);
+    expect(Math.abs(rects2[0].y - (seg2.baseline - 40 - seg2.fontSize * 0.11))).toBeLessThan(2);
+
+    // 3) ELIMINAR el texto → el subrayado se va con él.
+    const g3 = await graphOf(moved);
+    const seg3 = segByText(g3, 'Juan Perez');
+    const e3 = mergeSegmentEdit(seg3, null, { remove: true });
+    const { pdf: gone } = await bakeSegmentEdits(moved, [e3!]);
+    expect((await thinRects(gone)).length).toBe(0);
+  });
+
+  it('crea, mueve y elimina un resaltado (/Annots, capa aparte del contenido)', async () => {
+    const pdf = await makePdf();
+    // Crear: anotación /Highlight (no se quema en el content stream).
+    const { pdf: withHl } = await addHighlight(pdf, { page: 1, x: 220, y: 698, width: 70, height: 14, color: '#33ccff' });
+    const g = await graphOf(withHl);
+    expect(g.highlights).toHaveLength(1);
+    const hl = g.highlights[0];
+    expect(hl.color.toLowerCase()).toBe('#33ccff'); // /C round-trip exacto
+    expect(Math.round(hl.x)).toBe(219);              // spec.x - 1
+    expect(Math.round(hl.width)).toBe(72);           // spec.width + 2
+
+    // Mover: editarlo actualiza /Rect + /QuadPoints (sigue siendo un objeto).
+    const edit = mergeHighlightEdit(hl, null, { x: hl.x + 40, y: hl.y - 100 });
+    expect(edit).not.toBeNull();
+    const { pdf: moved } = await bakeSegmentEdits(withHl, [], [], [], [edit!]);
+    const g2 = await graphOf(moved);
+    expect(g2.highlights).toHaveLength(1);
+    expect(Math.round(g2.highlights[0].x)).toBe(Math.round(hl.x + 40));
+    expect(Math.round(g2.highlights[0].y)).toBe(Math.round(hl.y - 100));
+
+    // Eliminar: sale de /Annots.
+    const del = mergeHighlightEdit(g2.highlights[0], null, { remove: true });
+    const { pdf: gone } = await bakeSegmentEdits(moved, [], [], [], [del!]);
+    expect((await graphOf(gone)).highlights).toHaveLength(0);
+  });
+
+  it('GLUE: mover un texto resaltado mueve texto Y resaltado juntos (mismo bake)', async () => {
+    // El repro del editor: highlight guardado sobre un texto → refrescar →
+    // mover el texto. El editor manda EN EL MISMO /bake el SegmentEdit (move)
+    // y el HighlightEdit sincronizado (mismo delta). Ni el texto ni el
+    // resaltado pueden desaparecer, y ambos quedan en la posición nueva.
+    const pdf = await makePdf();
+    const g0 = await graphOf(pdf);
+    const seg0 = segByText(g0, 'Juan Perez');
+    const { pdf: withHl } = await addHighlight(pdf, {
+      page: 1, x: seg0.x, y: seg0.y, width: seg0.width, height: seg0.height, color: '#ffd400',
+    });
+
+    const g = await graphOf(withHl);
+    const seg = segByText(g, 'Juan Perez');
+    const hl = g.highlights[0];
+    expect(hl).toBeDefined();
+
+    const dx = 30, dy = -50; // delta del drag (PDF: y baja)
+    const segEdit = mergeSegmentEdit(seg, null, { x: seg.x + dx, baseline: seg.baseline + dy });
+    const hlEdit = mergeHighlightEdit(hl, null, { x: hl.x + dx, y: hl.y + dy });
+    const r = await bakeSegmentEdits(withHl, [segEdit!], [], [], [hlEdit!]);
+    expect(r.warnings).toEqual([]);
+
+    const g2 = await graphOf(r.pdf);
+    const seg2 = segByText(g2, 'Juan Perez'); // el texto SIGUE existiendo
+    expect(seg2.x).toBeCloseTo(seg.x + dx, 0);
+    expect(seg2.baseline).toBeCloseTo(seg.baseline + dy, 0);
+    expect(g2.highlights).toHaveLength(1); // ni duplicado ni desaparecido
+    expect(Math.round(g2.highlights[0].x)).toBe(Math.round(hl.x + dx));
+    expect(Math.round(g2.highlights[0].y)).toBe(Math.round(hl.y + dy));
+  });
+
+  it('CLIP: mover un texto FUERA del clip lo re-emite al final del stream (no lo recorta)', async () => {
+    // Repro del doc real: el contenido va dentro de `q <rect> W n … Q`. El
+    // texto está en y=100 (dentro); movido a y=500 escapa el clip [40..240 en y].
+    const clip: [number, number, number, number] = [40, 40, 300, 200];
+    const pdf = await makeClippedPdf(clip);
+
+    // El walk trackea el clip activo en cada show (nueva capacidad de textWalk).
+    const shows0 = walkContent(await decodeStreams(pdf)).shows.filter(s => s.op === 'Tj');
+    expect(shows0).toHaveLength(1);
+    expect(shows0[0].clip).not.toBeNull();
+    expect(shows0[0].clip!.y).toBeCloseTo(40, 0);
+    expect(shows0[0].clip!.height).toBeCloseTo(200, 0);
+
+    const g = await graphOf(pdf);
+    const seg = segByText(g, 'Recortame');
+    const nb = 500; // FUERA del clip (240 es el borde superior)
+    const { pdf: moved, warnings } = await bakeSegmentEdits(pdf, [mergeSegmentEdit(seg, null, { baseline: nb })!]);
+    expect(warnings).toEqual([]);
+
+    // Re-walk: el show movido NO puede quedar recortado por el clip — se emite
+    // al final (clip null) o dentro de un clip que sí lo contiene. Antes del
+    // fix quedaba dentro del q…W n…Q original (clip 40..240) → invisible.
+    const shows1 = walkContent(await decodeStreams(moved)).shows.filter(s => s.op === 'Tj');
+    expect(shows1).toHaveLength(1);
+    const m = shows1[0];
+    expect(m.y).toBeCloseTo(nb, 0);
+    const cropped = m.clip && (m.y < m.clip.y || m.y > m.clip.y + m.clip.height);
+    expect(cropped).toBeFalsy();
+  });
 });
+
+/** Concatena y decodifica los content streams de la página 1 (para walkContent). */
+async function decodeStreams(bytes: Uint8Array): Promise<Uint8Array> {
+  const doc = await PDFDocument.load(bytes.slice());
+  const resolve = (o: unknown) => (o instanceof PDFRef ? doc.context.lookup(o) : o);
+  const raw = resolve(doc.getPages()[0].node.get(PDFName.of('Contents')));
+  const streams = raw instanceof PDFArray
+    ? [...Array(raw.size()).keys()].map(i => resolve(raw.get(i)) as PDFRawStream)
+    : [raw as PDFRawStream];
+  const parts = streams.map(s => decodePDFRawStream(s).decode());
+  const out = new Uint8Array(parts.reduce((a, p) => a + p.length + 1, 0));
+  let off = 0;
+  for (const p of parts) { out.set(p, off); off += p.length; out[off++] = 0x0a; }
+  return out;
+}
 
 describe('color al editar', () => {
   function streamText(doc: PDFDocument, obj: unknown): string {

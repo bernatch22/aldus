@@ -12,7 +12,7 @@
  *    getOperatorList() se ejecuta antes para que los fonts estén resueltos.
  */
 
-import type { FontBucket, FontInfo, ImageNode, LineNode, LinkNode, PageGraph, SegmentNode, TextRunNode, WidgetKind, WidgetNode } from './model.js';
+import type { FontBucket, FontInfo, HighlightNode, ImageNode, LineNode, LinkNode, PageGraph, SegmentNode, TextRunNode, WidgetKind, WidgetNode } from './model.js';
 import { segmentText, splitSegments } from './tokens.js';
 
 /** Re-agrupa en UN segmento multilínea las líneas consecutivas que llevan la
@@ -97,6 +97,8 @@ interface RawAnnotation {
   url?: string;
   unsafeUrl?: string;
   options?: Array<{ exportValue?: string; displayValue?: string }>;
+  /** /C de la anotación (0..1 en pdf.js) — color del resaltado. */
+  color?: Uint8ClampedArray | number[];
 }
 
 function extractLinks(annots: unknown[], page: number, x0: number, y0: number): LinkNode[] {
@@ -115,6 +117,30 @@ function extractLinks(annots: unknown[], page: number, x0: number, y0: number): 
       y: Math.min(ay, by) - y0,
       width: Math.abs(bx - ax),
       height: Math.abs(by - ay),
+    });
+  }
+  return out;
+}
+
+/** Resaltados: anotaciones /Highlight de /Annots (capa aparte del contenido).
+ *  pdf.js entrega el color en `color` como bytes 0..255 (o 0..1 en versiones
+ *  viejas) — normalizamos a hex. */
+function extractHighlights(annots: unknown[], page: number, x0: number, y0: number): HighlightNode[] {
+  const out: HighlightNode[] = [];
+  const hx = (v: number) => Math.max(0, Math.min(255, Math.round(v <= 1 ? v * 255 : v))).toString(16).padStart(2, '0');
+  for (const raw of annots as RawAnnotation[]) {
+    if (raw?.subtype !== 'Highlight' || !Array.isArray(raw.rect)) continue;
+    const [ax, ay, bx, by] = raw.rect;
+    const c = raw.color && (raw.color as ArrayLike<number>).length >= 3 ? raw.color as ArrayLike<number> : null;
+    out.push({
+      id: `p${page}-hl${out.length}`,
+      kind: 'highlight',
+      page,
+      x: Math.min(ax, bx) - x0,
+      y: Math.min(ay, by) - y0,
+      width: Math.abs(bx - ax),
+      height: Math.abs(by - ay),
+      color: c ? `#${hx(c[0])}${hx(c[1])}${hx(c[2])}` : '#ffd400',
     });
   }
   return out;
@@ -314,6 +340,7 @@ export async function extractPageGraph(page: PdfJsPage): Promise<PageGraph> {
     images: extractImages(opList.fnArray, opList.argsArray, page.pageNumber, x0, y0),
     widgets: extractWidgets(annots, page.pageNumber, x0, y0),
     links: extractLinks(annots, page.pageNumber, x0, y0),
+    highlights: extractHighlights(annots, page.pageNumber, x0, y0),
   };
 }
 

@@ -19,7 +19,7 @@
  */
 import type { PDFDocument, PDFPage } from 'pdf-lib';
 import type { SegmentEdit, StyledRun } from '../model.js';
-import type { ShowOp } from './textWalk.js';
+import { IDENTITY, type FillRectOp, type ShowOp } from './textWalk.js';
 import type { ReverseEncoder } from './toUnicode.js';
 import { hexToRg, hexToRgbObj, rawFillToRgb, rgbToHex } from './color.js';
 import { encoderForFont } from './fonts.js';
@@ -38,6 +38,8 @@ export interface SegmentEmitContext {
   ops: ShowOp[];
   src: Uint8Array;
   encCache: Map<string, ReverseEncoder | null>;
+  /** Simple filled rects of the page (underline candidates). */
+  fillRects: FillRectOp[];
   /** Sink: in-place stream replacements. */
   splices: Splice[];
   /** Sink: blocks appended at the end of the stream (identity CTM). */
@@ -52,6 +54,41 @@ export interface ITextEmitStrategy {
   canHandle(edit: SegmentEdit): boolean;
   emit(ctx: SegmentEmitContext): void;
 }
+
+/**
+ * UNDERLINES belonging to a segment: thin filled rects sitting just under one
+ * of its baselines, horizontally inside the segment. The bake emits them as
+ * `y = baseline - size*0.11, h = size*0.055` — the filter mirrors that. They
+ * must FOLLOW their text: relocated on move (path A), spliced out on remove
+ * and on rewrites (B/C re-emit fresh ones from the runs).
+ */
+const underlineRectsFor = (edit: SegmentEdit, fillRects: FillRectOp[]): FillRectOp[] => {
+  const size = edit.original.fontSize;
+  const lines = edit.original.baselines?.length ? edit.original.baselines : [edit.original.baseline];
+  const x0 = edit.original.x - 2;
+  const x1 = edit.original.x + edit.original.width + 2;
+  return fillRects.filter(r =>
+    r.height <= Math.max(1.5, size * 0.12) &&
+    r.x < x1 && r.x + r.width > x0 &&
+    lines.some(b => Math.abs(r.y - (b - size * 0.11)) <= size * 0.2),
+  );
+};
+
+/**
+ * Does re-emitting at (x, y) IN PLACE fall (partly) outside the op's active
+ * CLIP rect? If so, the in-place splice would render NOTHING (the clip crops
+ * it) — the emission must go at the END of the stream (identity CTM, no clip).
+ * Margin of 1pt: borderline targets escape too (half-clipped text is broken).
+ */
+const escapesClip = (o: ShowOp, x: number, y: number): boolean => {
+  if (!o.clip) return false;
+  const m = 1;
+  return x < o.clip.x - m || x > o.clip.x + o.clip.width + m || y < o.clip.y - m || y > o.clip.y + o.clip.height + m;
+};
+
+/** Un ShowOp "des-anidado": mismo op pero como si corriera al FINAL del stream
+ *  (CTM identidad, así relTm emite la matriz ABSOLUTA). */
+const atStreamEnd = (o: ShowOp): ShowOp => ({ ...o, ctm: IDENTITY });
 
 /** Scale/position/style shared by every strategy. */
 const editBasics = (edit: SegmentEdit) => ({
@@ -71,21 +108,40 @@ class VerbatimReemit implements ITextEmitStrategy {
     return edit.text === edit.original.text && edit.font === undefined && !edit.runs;
   }
 
-  emit({ edit, ops, src, splices, report }: SegmentEmitContext): void {
+  emit({ edit, ops, src, fillRects, splices, appendBlocks, report }: SegmentEmitContext): void {
     const { ratio, newX, newBaseline, styleOv } = editBasics(edit);
     const editSplices: Splice[] = [];
+    const editAppends: string[] = [];
     for (const o of ops) {
-      const block = reemitBlock(o, src, ratio,
-        newX + (o.x - edit.original.x) * ratio,
-        newBaseline + (o.y - edit.original.baseline) * ratio,
-        styleOv);
+      const nx = newX + (o.x - edit.original.x) * ratio;
+      const ny = newBaseline + (o.y - edit.original.baseline) * ratio;
+      // Destino FUERA del clip del op: el in-place se recortaría a nada (el
+      // texto "desaparece" al renderizar aunque los ops existan). Extirpar el
+      // original y re-emitir al final del stream (CTM identidad, sin clip).
+      const escaped = escapesClip(o, nx, ny);
+      const block = reemitBlock(escaped ? atStreamEnd(o) : o, src, ratio, nx, ny, styleOv);
       if (!block) {
         report.warn(`${edit.segmentId}: matriz degenerada — sin cambios`);
         return;
       }
-      editSplices.push({ start: o.record.start, end: o.record.end, text: block });
+      if (escaped) {
+        editSplices.push({ start: o.record.start, end: o.record.end, text: '' });
+        editAppends.push(block);
+      } else {
+        editSplices.push({ start: o.record.start, end: o.record.end, text: block });
+      }
     }
     splices.push(...editSplices);
+    appendBlocks.push(...editAppends);
+    // Sus SUBRAYADOS lo siguen: extirpar el rect viejo y re-emitirlo con el
+    // mismo desplazamiento/escala (al final del stream, CTM identidad).
+    for (const r of underlineRectsFor(edit, fillRects)) {
+      splices.push({ start: r.start, end: r.end, text: '' });
+      const nx = newX + (r.x - edit.original.x) * ratio;
+      const ny = newBaseline + (r.y - edit.original.baseline) * ratio;
+      const fill = r.fillColorRaw || '0 0 0 rg';
+      appendBlocks.push(`q ${fill} ${fmt(nx)} ${fmt(ny)} ${fmt(r.width * ratio)} ${fmt(r.height * ratio)} re f Q`);
+    }
     report.apply(`${edit.segmentId}: reubicado/escalado (${ops.length} op${ops.length > 1 ? 's' : ''})`);
   }
 }
@@ -111,6 +167,8 @@ class StyledRunsReemit implements ITextEmitStrategy {
     // The segment's ops are emptied; the new content goes IN PLACE of the
     // first one (z-order intact).
     for (const o of ops.slice(1)) splices.push({ start: o.record.start, end: o.record.end, text: '' });
+    // Old UNDERLINES out too — the runs below re-emit fresh ones (sr.underline).
+    for (const r of underlineRectsFor(edit, ctx.fillRects)) splices.push({ start: r.start, end: r.end, text: '' });
     const firstOp = ops[0];
     const inlineBlocks: string[] = [];
 
@@ -139,6 +197,10 @@ class StyledRunsReemit implements ITextEmitStrategy {
       });
     }
     const leading = (edit.fontSize ?? edit.original.fontSize) * 1.2;
+    // ¿Alguna línea cae fuera del clip del punto de inserción? → TODO el
+    // bloque nuevo va al final del stream (extirpando el op original) en vez
+    // de in-place, o el clip lo recortaría a nada.
+    const escaped = lineRuns.some((_, li) => escapesClip(firstOp, newX, newBaseline - li * leading));
 
     let substituted = 0;
     for (let li = 0; li < lineRuns.length; li++) {
@@ -153,8 +215,9 @@ class StyledRunsReemit implements ITextEmitStrategy {
           ...styleOv,
           colorRaw: sr.color ? hexToRg(sr.color) : styleOv.colorRaw,
         };
+        const srcForBlock = ops.find(o => o.fontName === fontName) ?? firstOp;
         const inlineBlock = fontName && bytes
-          ? newTextBlock(ops.find(o => o.fontName === fontName) ?? firstOp, ratio, x, lineBase, bytes, runOv)
+          ? newTextBlock(escaped ? atStreamEnd(srcForBlock) : srcForBlock, ratio, x, lineBase, bytes, runOv)
           : null;
         if (inlineBlock) {
           inlineBlocks.push(inlineBlock);
@@ -199,7 +262,12 @@ class StyledRunsReemit implements ITextEmitStrategy {
         }
       }
     }
-    splices.push({ start: firstOp.record.start, end: firstOp.record.end, text: inlineBlocks.join('\n') });
+    if (escaped) {
+      splices.push({ start: firstOp.record.start, end: firstOp.record.end, text: '' });
+      if (inlineBlocks.length) appendBlocks.push(inlineBlocks.join('\n'));
+    } else {
+      splices.push({ start: firstOp.record.start, end: firstOp.record.end, text: inlineBlocks.join('\n') });
+    }
     if (substituted && !familyChanged) {
       report.warn(`${edit.segmentId}: ${substituted} tramo${substituted > 1 ? 's' : ''} sin fuente original disponible (estilo nuevo o subset insuficiente) — sustituido por estándar`);
     }
@@ -225,13 +293,14 @@ export function applySegmentEditsToPage(args: {
   pageNum: number;
   pageEdits: SegmentEdit[];
   shows: ShowOp[];
+  fillRects: FillRectOp[];
   src: Uint8Array;
   splices: Splice[];
   appendBlocks: string[];
   fallbackDraws: FallbackDraw[];
   report: BakeReport;
 }): void {
-  const { doc, page, pageNum, pageEdits, shows, src, splices, appendBlocks, fallbackDraws, report } = args;
+  const { doc, page, pageNum, pageEdits, shows, fillRects, src, splices, appendBlocks, fallbackDraws, report } = args;
   const encCache = new Map<string, ReverseEncoder | null>();
 
   for (const edit of pageEdits) {
@@ -247,14 +316,15 @@ export function applySegmentEditsToPage(args: {
       const c = rawFillToRgb(colorOp.fillColorRaw);
       if (c) report.color(edit.segmentId, rgbToHex(c));
     }
-    // REMOVE: extirpate every op of the segment and move on.
+    // REMOVE: extirpate every op of the segment — and its underlines with it.
     if (edit.remove) {
       for (const o of ops) splices.push({ start: o.record.start, end: o.record.end, text: '' });
+      for (const r of underlineRectsFor(edit, fillRects)) splices.push({ start: r.start, end: r.end, text: '' });
       report.apply(`${edit.segmentId}: eliminado`);
       continue;
     }
 
-    const ctx: SegmentEmitContext = { doc, page, pageNum, edit, ops, src, encCache, splices, appendBlocks, fallbackDraws, report };
+    const ctx: SegmentEmitContext = { doc, page, pageNum, edit, ops, src, encCache, fillRects, splices, appendBlocks, fallbackDraws, report };
     for (const strategy of textEmitStrategies) {
       if (strategy.canHandle(edit)) {
         strategy.emit(ctx);

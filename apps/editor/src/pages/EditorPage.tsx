@@ -88,11 +88,27 @@ export function EditorPage() {
 
   // ── Estado pendiente + historial + fantasmas ──
   const {
-    edits, imageEdits, widgetEdits, pendingHighlights,
+    edits, imageEdits, widgetEdits, pendingHighlights, highlightEdits, linkEdits,
     editsRef, highlightsRef, segCache,
-    onEdit, onImageEdit, onWidgetEdit, applyAgentEdits, addHighlights,
+    onEdit, onImageEdit, onWidgetEdit, onHighlightEdit, onLinkEdit, syncHighlightEdits, applyAgentEdits, addHighlights,
     findSeg, clearAll, history,
   } = usePendingEdits(graphRef, () => setSelectedId(null));
+
+  // Las operaciones INSTANTÁNEAS de server (crear texto/imagen/campo,
+  // watermark, encabezado, links) entran al historial como COMANDOS:
+  // deshacer = restaurar la revisión previa del server; rehacer = re-ejecutar
+  // la operación. Sin esto, Ctrl+Z no deshacía haber creado un nodo.
+  const { pushCommand } = history;
+  const registerServerOp = useCallback((redo: () => Promise<unknown>) => {
+    pushCommand({
+      undo: () => api.revert(id)
+        .then(() => setDocVersion(v => v + 1))
+        .catch(e => setError(e instanceof Error ? e.message : 'No se pudo deshacer')),
+      redo: () => redo()
+        .then(() => setDocVersion(v => v + 1))
+        .catch(e => setError(e instanceof Error ? e.message : 'No se pudo rehacer')),
+    });
+  }, [pushCommand, id]);
 
   const { locked, toggleLock } = useLocks(id, graph);
   const { areaWidths, onAreaWidth } = useAreaWidths(id);
@@ -118,6 +134,7 @@ export function EditorPage() {
     onError: setError,
     onAreaWidth,
     onSelect: setSelectedId,
+    onServerOp: registerServerOp,
   });
 
   // El grafo nuevo llegó = el preview aterrizó.
@@ -140,10 +157,15 @@ export function EditorPage() {
       return;
     }
     setError('');
-    api.docOp(id, action, params)
-      .then(() => { setDocVersion(v => v + 1); setNotice('Aplicado'); })
+    const run = () => api.docOp(id, action, params);
+    run()
+      .then(() => {
+        setDocVersion(v => v + 1);
+        setNotice('Aplicado');
+        registerServerOp(run); // undoable: Ctrl+Z revierte la escritura
+      })
       .catch(e => setError(e instanceof Error ? e.message : 'No se pudo aplicar'));
-  }, [id, addHighlights]);
+  }, [id, addHighlights, registerServerOp]);
 
   // Convertir un segmento/rect en link: abre el modal (no más window.prompt).
   const requestLink = useCallback((target: { page: number; x: number; y: number; width: number; height: number }) => {
@@ -152,8 +174,8 @@ export function EditorPage() {
 
   const cancelPlacing = useCallback(() => setPlacing(null), [setPlacing]);
   useEditorHotkeys({
-    pdf, pageNum, setPageNum, selectedId, setSelectedId, graph, edits,
-    onEdit, onImageEdit, onWidgetEdit,
+    pdf, pageNum, setPageNum, selectedId, setSelectedId, graph, edits, highlightEdits,
+    onEdit, onImageEdit, onWidgetEdit, onHighlightEdit, onLinkEdit,
     undo: history.undo, redo: history.redo, findSeg, cancelPlacing,
   });
 
@@ -173,7 +195,15 @@ export function EditorPage() {
       // posterior → "desaparecen al guardar". El save es definitivo (no hay
       // re-extracción después) → reordenar acá es seguro.
       const imgEditsForSave = promoteMovedImages([...imageEdits.values()]);
-      const r = await api.bake(id, [...edits.values()], imgEditsForSave, [...widgetEdits.values()], resolveHighlights() as unknown as Array<Record<string, unknown>>);
+      const r = await api.bake(
+        id,
+        [...edits.values()],
+        imgEditsForSave,
+        [...widgetEdits.values()],
+        resolveHighlights() as unknown as Array<Record<string, unknown>>,
+        [...highlightEdits.values()],
+        [...linkEdits.values()],
+      );
       clearAll();
       setSelectedId(null);
       setDocVersion(v => v + 1);
@@ -183,13 +213,19 @@ export function EditorPage() {
     } finally {
       setBaking(false);
     }
-  }, [id, edits, imageEdits, widgetEdits, resolveHighlights, clearAll]);
+  }, [id, edits, imageEdits, widgetEdits, highlightEdits, linkEdits, resolveHighlights, clearAll]);
 
   const numPages = pdf?.numPages ?? 0;
-  const totalEdits = edits.size + imageEdits.size + widgetEdits.size + pendingHighlights.length;
+  const totalEdits = edits.size + imageEdits.size + widgetEdits.size + pendingHighlights.length + highlightEdits.size + linkEdits.size;
   const pageEdits = useMemo(() => new Map([...edits].filter(([, e]) => e.page === pageNum)), [edits, pageNum]);
   const pageImageEdits = useMemo(() => new Map([...imageEdits].filter(([, e]) => e.page === pageNum)), [imageEdits, pageNum]);
   const pageWidgetEdits = useMemo(() => new Map([...widgetEdits].filter(([, e]) => e.page === pageNum)), [widgetEdits, pageNum]);
+  // Highlights PENDIENTES de la página = capa overlay (no horneada; ver
+  // useLocalPreview): se anclan a su segmento y lo siguen al arrastrar.
+  const pageHighlights = useMemo(() => pendingHighlights.filter(h => h.page === pageNum), [pendingHighlights, pageNum]);
+  // Ediciones de anotaciones GUARDADAS de la página (mover/borrar /Annots).
+  const pageHighlightEdits = useMemo(() => new Map([...highlightEdits].filter(([, e]) => e.page === pageNum)), [highlightEdits, pageNum]);
+  const pageLinkEdits = useMemo(() => new Map([...linkEdits].filter(([, e]) => e.page === pageNum)), [linkEdits, pageNum]);
   // Segmentos editados = extirpados del preview → el overlay los dibuja como
   // FANTASMAS (nodo original cacheado + edición aplicada, transparente).
   const phantomSegments = useMemo(() => {
@@ -303,6 +339,9 @@ export function EditorPage() {
                 widgetEdits={pageWidgetEdits} onWidgetEdit={onWidgetEdit}
                 locked={locked} placing={placing != null} onPlace={onPlace}
                 onDocOp={docOp} onRequestLink={requestLink} onAddText={onAddText}
+                highlights={pageHighlights}
+                highlightEdits={pageHighlightEdits} onHighlightEdit={onHighlightEdit} onSyncHighlightEdits={syncHighlightEdits}
+                linkEdits={pageLinkEdits} onLinkEdit={onLinkEdit}
                 highlightColor={highlightColor} onHighlightColor={setHl}
                 phantomSegments={phantomSegments}
                 onDragging={onDragging}
@@ -323,6 +362,8 @@ export function EditorPage() {
           edits={edits} onEdit={onEdit}
           imageEdits={imageEdits} onImageEdit={onImageEdit}
           widgetEdits={widgetEdits} onWidgetEdit={onWidgetEdit}
+          highlightEdits={highlightEdits} onHighlightEdit={onHighlightEdit}
+          linkEdits={linkEdits} onLinkEdit={onLinkEdit}
           locked={locked} onToggleLock={toggleLock}
           onDocOp={docOp} onRequestLink={requestLink}
         />

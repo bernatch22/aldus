@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, type MutableRefObject } from 'react';
-import type { ImageEdit, PageGraph, SegmentEdit, SegmentNode, WidgetEdit } from '@aldus/core';
+import type { HighlightEdit, ImageEdit, LinkEdit, PageGraph, SegmentEdit, SegmentNode, WidgetEdit } from '@aldus/core';
 import { useHistory, type History } from './useHistory';
 
 export interface PendingHighlight {
@@ -12,12 +12,14 @@ export interface PendingHighlight {
   color?: string;
 }
 
-/** Snapshot de las cuatro colecciones (el memento del historial). */
+/** Snapshot de las colecciones pendientes (el memento del historial). */
 interface Snap {
   e: Map<string, SegmentEdit>;
   i: Map<string, ImageEdit>;
   w: Map<string, WidgetEdit>;
   h: PendingHighlight[];
+  hl: Map<string, HighlightEdit>;
+  l: Map<string, LinkEdit>;
 }
 
 /**
@@ -41,15 +43,22 @@ export function usePendingEdits(
   const [imageEdits, setImageEdits] = useState<Map<string, ImageEdit>>(new Map());
   const [widgetEdits, setWidgetEdits] = useState<Map<string, WidgetEdit>>(new Map());
   const [pendingHighlights, setPendingHighlights] = useState<PendingHighlight[]>([]);
+  // Ediciones (mover/borrar) de anotaciones YA GUARDADAS (/Annots del grafo).
+  const [highlightEdits, setHighlightEdits] = useState<Map<string, HighlightEdit>>(new Map());
+  const [linkEdits, setLinkEdits] = useState<Map<string, LinkEdit>>(new Map());
 
   const editsRef = useRef(edits);
   const imageEditsRef = useRef(imageEdits);
   const widgetEditsRef = useRef(widgetEdits);
   const highlightsRef = useRef(pendingHighlights);
+  const highlightEditsRef = useRef(highlightEdits);
+  const linkEditsRef = useRef(linkEdits);
   editsRef.current = edits;
   imageEditsRef.current = imageEdits;
   widgetEditsRef.current = widgetEdits;
   highlightsRef.current = pendingHighlights;
+  highlightEditsRef.current = highlightEdits;
+  linkEditsRef.current = linkEdits;
 
   const afterRestoreRef = useRef(onAfterRestore);
   afterRestoreRef.current = onAfterRestore;
@@ -61,12 +70,16 @@ export function usePendingEdits(
     i: imageEditsRef.current,
     w: widgetEditsRef.current,
     h: highlightsRef.current,
+    hl: highlightEditsRef.current,
+    l: linkEditsRef.current,
   }), []);
   const restoreSnap = useCallback((s: Snap) => {
     setEdits(s.e);
     setImageEdits(s.i);
     setWidgetEdits(s.w);
     setPendingHighlights(s.h);
+    setHighlightEdits(s.hl);
+    setLinkEdits(s.l);
     afterRestoreRef.current?.();
   }, []);
   const history: History = useHistory(snapNow, restoreSnap);
@@ -110,6 +123,43 @@ export function usePendingEdits(
     });
   }, [pushHistory]);
 
+  // Mover/borrar un resaltado YA GUARDADO (nodo /Annots): acumula como edición
+  // (nada se escribe hasta Aplicar), igual que imágenes/campos.
+  const onHighlightEdit = useCallback((edit: HighlightEdit | { highlightId: string; revert: true }) => {
+    pushHistory();
+    setHighlightEdits(prev => {
+      const next = new Map(prev);
+      if ('revert' in edit) next.delete(edit.highlightId); else next.set(edit.highlightId, edit);
+      return next;
+    });
+  }, [pushHistory]);
+
+  // GLUE: un resaltado guardado sigue al texto que resalta. Cuando un segmento
+  // se mueve, su highlight se corre por el mismo delta — SIN pushHistory: el
+  // snapshot del propio movimiento del segmento ya capturó los highlightEdits
+  // previos, así un solo Ctrl+Z revierte texto + resaltado juntos. Los ítems
+  // ya sincronizados (mismo edit) no re-emiten (idempotente).
+  const syncHighlightEdits = useCallback((actions: (HighlightEdit | { highlightId: string; revert: true })[]) => {
+    if (!actions.length) return;
+    setHighlightEdits(prev => {
+      const next = new Map(prev);
+      for (const a of actions) {
+        if ('revert' in a) next.delete(a.highlightId); else next.set(a.highlightId, a);
+      }
+      return next;
+    });
+  }, []);
+
+  // Ídem para un link YA GUARDADO (nodo /Annots).
+  const onLinkEdit = useCallback((edit: LinkEdit | { linkId: string; revert: true }) => {
+    pushHistory();
+    setLinkEdits(prev => {
+      const next = new Map(prev);
+      if ('revert' in edit) next.delete(edit.linkId); else next.set(edit.linkId, edit);
+      return next;
+    });
+  }, [pushHistory]);
+
   // El AGENTE devuelve el SET COMPLETO de ediciones (texto + imagen):
   // reemplazan el estado (una sola vez, deshacible con Ctrl+Z). Cacheamos el
   // nodo original de cada segmento editado para el fantasma, igual que una
@@ -143,15 +193,17 @@ export function usePendingEdits(
     setImageEdits(new Map());
     setWidgetEdits(new Map());
     setPendingHighlights([]);
+    setHighlightEdits(new Map());
+    setLinkEdits(new Map());
     segCache.current.clear();
     clearHistory();
   }, [clearHistory]);
 
   return {
-    edits, imageEdits, widgetEdits, pendingHighlights,
+    edits, imageEdits, widgetEdits, pendingHighlights, highlightEdits, linkEdits,
     editsRef, imageEditsRef, widgetEditsRef, highlightsRef,
     segCache,
-    onEdit, onImageEdit, onWidgetEdit, applyAgentEdits, addHighlights,
+    onEdit, onImageEdit, onWidgetEdit, onHighlightEdit, onLinkEdit, syncHighlightEdits, applyAgentEdits, addHighlights,
     findSeg, clearAll, history,
   };
 }

@@ -19,13 +19,20 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   cssPointToPdf,
   effectiveGeometry,
+  effectiveHighlightRect,
   effectiveImageRect,
+  effectiveLinkRect,
   effectiveWidgetRect,
+  mergeHighlightEdit,
   mergeImageEdit,
+  mergeLinkEdit,
   mergeSegmentEdit,
   mergeWidgetEdit,
   pdfRectToCss,
+  type HighlightEdit,
+  type HighlightNode,
   type ImageEdit,
+  type LinkEdit,
   type PageGraph,
   type SegmentEdit,
   type SegmentNode,
@@ -34,13 +41,15 @@ import {
 import { activeEditingBox, round1 } from '../styledDom';
 import { log } from './helpers';
 import { GroupBox } from './GroupBox';
+import { HighlightBox } from './HighlightBox';
 import { ImageBox } from './ImageBox';
+import { LinkBox } from './LinkBox';
 import { SegmentBox } from './SegmentBox';
 import { WidgetBox } from './WidgetBox';
 import { TextEditLayer, type TextEditLayerHandle } from './TextEditLayer';
-import type { AddTextRequest, EditAction, ImageEditAction, WidgetEditAction } from './types';
+import type { AddTextRequest, EditAction, HighlightEditAction, ImageEditAction, LinkEditAction, OverlayHighlight, WidgetEditAction } from './types';
 
-export type { AddTextRequest, EditAction, ImageEditAction, WidgetEditAction } from './types';
+export type { AddTextRequest, EditAction, HighlightEditAction, ImageEditAction, LinkEditAction, WidgetEditAction } from './types';
 
 interface Props {
   graph: PageGraph;
@@ -68,6 +77,18 @@ interface Props {
   onRequestLink: (target: { page: number; x: number; y: number; width: number; height: number }) => void;
   /** Enter al final de un ítem de lista → crear el siguiente. */
   onAddText: (req: AddTextRequest) => void;
+  /** Resaltados pendientes de la página (capa overlay, no horneada): anclados
+   *  a su segmento lo siguen al arrastrar; los huérfanos se dibujan sueltos. */
+  highlights: OverlayHighlight[];
+  /** Ediciones (mover/borrar) de anotaciones GUARDADAS (/Annots del grafo). */
+  highlightEdits: Map<string, HighlightEdit>;
+  onHighlightEdit: (action: HighlightEditAction) => void;
+  /** GLUE: sincroniza los highlightEdits de resaltados pegados a su segmento
+   *  cuando éste se mueve — SIN empujar historial (piggyback del snapshot del
+   *  movimiento del segmento). */
+  onSyncHighlightEdits: (actions: HighlightEditAction[]) => void;
+  linkEdits: Map<string, LinkEdit>;
+  onLinkEdit: (action: LinkEditAction) => void;
   /** Color del resaltador (persistido) + su setter. */
   highlightColor: string;
   onHighlightColor: (c: string) => void;
@@ -83,7 +104,7 @@ interface Props {
   onEditingChange: (active: boolean) => void;
 }
 
-export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, imagePixels, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, areaWidths, onAreaWidth, onEditingChange }: Props) {
+export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, imagePixels, onDocOp, onRequestLink, onAddText, highlights, highlightEdits, onHighlightEdit, onSyncHighlightEdits, linkEdits, onLinkEdit, highlightColor, onHighlightColor, phantomSegments, onDragging, areaWidths, onAreaWidth, onEditingChange }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => { onEditingChange(editingId != null); }, [editingId, onEditingChange]);
   // Cambio de página con editor abierto: cerrarlo (con commit) via blur.
@@ -126,6 +147,68 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
   const inGraph = new Set(graph.segments.map(s => s.id));
   const allSegments = [...graph.segments, ...phantomSegments.filter(s => !inGraph.has(s.id))];
 
+  // Resaltados pendientes por segmento (los renderiza su SegmentBox como capa
+  // hija → heredan su transform y lo siguen al arrastrar). Los que no matchean
+  // ningún segmento presente ("huérfanos") se dibujan sueltos, quietos.
+  const segIds = new Set(allSegments.map(s => s.id));
+  const hlBySeg = new Map<string, OverlayHighlight[]>();
+  const orphanHls: OverlayHighlight[] = [];
+  for (const h of highlights) {
+    if (h.segmentId && segIds.has(h.segmentId)) {
+      hlBySeg.set(h.segmentId, [...(hlBySeg.get(h.segmentId) ?? []), h]);
+    } else {
+      orphanHls.push(h);
+    }
+  }
+
+  // ── RESALTADOS GUARDADOS pegados a su texto ──
+  // Un HighlightNode de /Annots se ASOCIA por geometría (solape de rects
+  // ORIGINALES — estable: no cambia al mover) al segmento que resalta. Pegado:
+  // se dibuja como capa hija de ESE SegmentBox (hereda su transform → sigue al
+  // texto en vivo) y su edición /Rect se sincroniza con el movimiento del
+  // segmento (abajo). Sin segmento debajo = "huérfano" → box independiente.
+  const overlap = (a: { x: number; y: number; width: number; height: number }, b: typeof a) => {
+    const ix = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+    const iy = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+    return ix * iy;
+  };
+  const savedHlBySeg = new Map<string, HighlightNode[]>();
+  const orphanSavedHls: HighlightNode[] = [];
+  for (const hl of graph.highlights) {
+    if (highlightEdits.get(hl.id)?.remove) continue; // borrado: el preview lo saca
+    let best: SegmentNode | null = null, bestA = 0;
+    for (const s of allSegments) best = overlap(hl, s) > bestA ? ((bestA = overlap(hl, s)), s) : best;
+    if (best && bestA > hl.width * hl.height * 0.3) savedHlBySeg.set(best.id, [...(savedHlBySeg.get(best.id) ?? []), hl]);
+    else orphanSavedHls.push(hl);
+  }
+  // Ids de resaltados pegados: excluidos del marquee (los mueve su segmento).
+  const gluedHlIds = new Set([...savedHlBySeg.values()].flat().map(h => h.id));
+
+  // GLUE (persistencia): cuando el segmento ancla se mueve, corré cada
+  // resaltado pegado por el MISMO delta (x, y↔baseline). Idempotente vía la
+  // guarda de igualdad; sin pushHistory (piggyback del snapshot del segmento).
+  useEffect(() => {
+    const actions: HighlightEditAction[] = [];
+    for (const [segId, hls] of savedHlBySeg) {
+      const s = allSegments.find(x => x.id === segId);
+      if (!s) continue;
+      const se = edits.get(segId) ?? null;
+      const dx = round1((se?.x ?? s.x) - s.x);
+      const dy = round1((se?.baseline ?? s.baseline) - s.baseline); // y del PDF sigue a baseline
+      if (dx === 0 && dy === 0) continue; // segmento sin mover: no tocar (respeta ediciones manuales)
+      for (const hl of hls) {
+        const cur = highlightEdits.get(hl.id) ?? null;
+        const wantX = round1(hl.x + dx);
+        const wantY = round1(hl.y + dy);
+        if (round1(cur?.x ?? hl.x) === wantX && round1(cur?.y ?? hl.y) === wantY) continue;
+        const m = mergeHighlightEdit(hl, cur, { x: wantX === round1(hl.x) ? null : wantX, y: wantY === round1(hl.y) ? null : wantY });
+        actions.push(m ?? { highlightId: hl.id, revert: true });
+      }
+    }
+    if (actions.length) onSyncHighlightEdits(actions);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edits, highlightEdits, graph]);
+
   // Seleccionar OTRO nodo cierra (con commit) el editor de texto abierto — el
   // preventDefault de los pointerdown impide el blur natural, así que lo
   // forzamos acá. Sin esto, la B de la toolbar le pegaba al editor viejo.
@@ -152,6 +235,10 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
     if (im) { const e = effectiveImageRect(im, imageEdits.get(im.id) ?? null); return pdfRectToCss({ x: e.x, y: e.y, width: e.width, height: e.height }, graph.height, scale); }
     const w = graph.widgets.find(x => x.id === nid);
     if (w) { const e = effectiveWidgetRect(w, widgetEdits.get(w.id) ?? null); return pdfRectToCss({ x: e.x, y: e.y, width: e.width, height: e.height }, graph.height, scale); }
+    const hl = graph.highlights.find(x => x.id === nid);
+    if (hl) { const e = effectiveHighlightRect(hl, highlightEdits.get(hl.id) ?? null); return pdfRectToCss({ x: e.x, y: e.y, width: e.width, height: e.height }, graph.height, scale); }
+    const lk = graph.links.find(x => x.id === nid);
+    if (lk) { const e = effectiveLinkRect(lk, linkEdits.get(lk.id) ?? null); return pdfRectToCss({ x: e.x, y: e.y, width: e.width, height: e.height }, graph.height, scale); }
     return null;
   };
 
@@ -166,7 +253,11 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
       const im = graph.images.find(x => x.id === nid);
       if (im) { const e = effectiveImageRect(im, imageEdits.get(im.id) ?? null); const m = mergeImageEdit(im, imageEdits.get(im.id) ?? null, { x: round1(e.x + dxPt), y: round1(e.y + dyPt) }); onImageEdit(m ?? { imageId: im.id, revert: true }); continue; }
       const w = graph.widgets.find(x => x.id === nid);
-      if (w) { const e = effectiveWidgetRect(w, widgetEdits.get(w.id) ?? null); const m = mergeWidgetEdit(w, widgetEdits.get(w.id) ?? null, { x: round1(e.x + dxPt), y: round1(e.y + dyPt) }); onWidgetEdit(m ?? { widgetId: w.id, revert: true }); }
+      if (w) { const e = effectiveWidgetRect(w, widgetEdits.get(w.id) ?? null); const m = mergeWidgetEdit(w, widgetEdits.get(w.id) ?? null, { x: round1(e.x + dxPt), y: round1(e.y + dyPt) }); onWidgetEdit(m ?? { widgetId: w.id, revert: true }); continue; }
+      const hl = graph.highlights.find(x => x.id === nid);
+      if (hl) { const e = effectiveHighlightRect(hl, highlightEdits.get(hl.id) ?? null); const m = mergeHighlightEdit(hl, highlightEdits.get(hl.id) ?? null, { x: round1(e.x + dxPt), y: round1(e.y + dyPt) }); onHighlightEdit(m ?? { highlightId: hl.id, revert: true }); continue; }
+      const lk = graph.links.find(x => x.id === nid);
+      if (lk) { const e = effectiveLinkRect(lk, linkEdits.get(lk.id) ?? null); const m = mergeLinkEdit(lk, linkEdits.get(lk.id) ?? null, { x: round1(e.x + dxPt), y: round1(e.y + dyPt) }); onLinkEdit(m ?? { linkId: lk.id, revert: true }); }
     }
   };
 
@@ -222,6 +313,8 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
         allSegments.forEach(s => test(s.id));
         graph.images.forEach(im => test(im.id));
         graph.widgets.forEach(w => test(w.id));
+        graph.highlights.forEach(hl => { if (!gluedHlIds.has(hl.id)) test(hl.id); });
+        graph.links.forEach(lk => test(lk.id));
         setMultiSel(hit);
         // 1 nodo = selección normal (con su barra); 2+ = grupo (sin primario).
         onSelect(hit.size === 1 ? [...hit][0] : null);
@@ -273,10 +366,62 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           onDocOp={onDocOp}
           onRequestLink={onRequestLink}
           onAddText={onAddText}
+          highlights={hlBySeg.get(seg.id) ?? null}
+          savedHighlights={savedHlBySeg.get(seg.id) ?? null}
           highlightColor={highlightColor}
           onHighlightColor={onHighlightColor}
         />
       ))}
+      {/* Links GUARDADOS (nodos /Annots): boxes movibles/borrables. */}
+      {graph.links.map(lk => (
+        <LinkBox
+          key={lk.id}
+          link={lk}
+          pageHeight={graph.height}
+          scale={scale}
+          selected={selectedId === lk.id || multiSel.has(lk.id)}
+          edit={linkEdits.get(lk.id) ?? null}
+          isLocked={locked.has(lk.id)}
+          groupMode={multiSel.size > 1}
+          onSelect={() => selectNode(lk.id)}
+          onPatch={patch => {
+            const merged = mergeLinkEdit(lk, linkEdits.get(lk.id) ?? null, patch);
+            onLinkEdit(merged ?? { linkId: lk.id, revert: true });
+          }}
+        />
+      ))}
+      {/* Resaltados GUARDADOS HUÉRFANOS (sin texto debajo): box independiente,
+          movible/borrable. Los pegados a un segmento los dibuja su SegmentBox
+          (siguen al texto) — no acá. */}
+      {orphanSavedHls.map(hl => (
+        <HighlightBox
+          key={hl.id}
+          hl={hl}
+          pageHeight={graph.height}
+          scale={scale}
+          selected={selectedId === hl.id || multiSel.has(hl.id)}
+          edit={highlightEdits.get(hl.id) ?? null}
+          isLocked={locked.has(hl.id)}
+          groupMode={multiSel.size > 1}
+          onSelect={() => selectNode(hl.id)}
+          onPatch={patch => {
+            const merged = mergeHighlightEdit(hl, highlightEdits.get(hl.id) ?? null, patch);
+            onHighlightEdit(merged ?? { highlightId: hl.id, revert: true });
+          }}
+        />
+      ))}
+      {/* Resaltados PENDIENTES HUÉRFANOS (su segmento no está en esta página/grafo):
+          capa suelta, quieta, en su rect guardado. */}
+      {orphanHls.map((h, i) => {
+        const r = pdfRectToCss({ x: h.x, y: h.y, width: h.width, height: h.height }, graph.height, scale);
+        return (
+          <div
+            key={`hl-${i}`}
+            className="seg-hl"
+            style={{ position: 'absolute', left: r.left, top: r.top, width: r.width, height: r.height, background: h.color ?? '#ffd400' }}
+          />
+        );
+      })}
       {/* Los widgets al FINAL del DOM = arriba de todo para el mouse (como en
           el PDF: las anotaciones se dibujan sobre el contenido). Una imagen
           full-page nunca puede taparles los clicks. */}
@@ -321,7 +466,11 @@ export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit,
           const im = graph.images.find(x => x.id === nid);
           if (im) { const m = mergeImageEdit(im, imageEdits.get(im.id) ?? null, { remove: true }); if (m) onImageEdit(m); continue; }
           const w = graph.widgets.find(x => x.id === nid);
-          if (w) { const m = mergeWidgetEdit(w, widgetEdits.get(w.id) ?? null, { remove: true }); if (m) onWidgetEdit(m); }
+          if (w) { const m = mergeWidgetEdit(w, widgetEdits.get(w.id) ?? null, { remove: true }); if (m) onWidgetEdit(m); continue; }
+          const hl = graph.highlights.find(x => x.id === nid);
+          if (hl) { const m = mergeHighlightEdit(hl, highlightEdits.get(hl.id) ?? null, { remove: true }); if (m) onHighlightEdit(m); continue; }
+          const lk = graph.links.find(x => x.id === nid);
+          if (lk) { const m = mergeLinkEdit(lk, linkEdits.get(lk.id) ?? null, { remove: true }); if (m) onLinkEdit(m); }
         }
         setMultiSel(new Set());
       }} onClear={() => { setMultiSel(new Set()); onSelect(null); }} />}

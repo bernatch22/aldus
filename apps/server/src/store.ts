@@ -31,6 +31,12 @@ export interface DocStore {
   writeEdits(id: string, edits: unknown[]): number;
   /** Revision filenames, newest first. */
   revisions(id: string): string[];
+  /**
+   * Restores the newest revision over the current PDF and pops it — the
+   * server-side UNDO of the last write (instant ops: addText, insertImage,
+   * createField, watermark…). Returns false when there is nothing to revert.
+   */
+  popRevision(id: string): boolean;
 }
 
 export class FileDocStore implements DocStore {
@@ -100,6 +106,15 @@ export class FileDocStore implements DocStore {
       .filter(f => f.startsWith(`${id}.rev-`) && f.endsWith('.pdf'))
       .sort()
       .reverse();
+  }
+
+  popRevision(id: string): boolean {
+    const [latest] = this.revisions(id);
+    if (!latest) return false;
+    const revPath = path.join(this.dir, latest);
+    copyFileSync(revPath, this.pdfPath(id));
+    unlinkSync(revPath);
+    return true;
   }
 
   private snapshot(id: string): void {

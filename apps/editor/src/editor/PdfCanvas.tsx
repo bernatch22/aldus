@@ -8,8 +8,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
-import { extractPageGraph, type ImageEdit, type PageGraph, type PdfJsPage, type SegmentEdit, type SegmentNode, type WidgetEdit } from '@aldus/core';
-import { NodeOverlay, type AddTextRequest, type EditAction, type ImageEditAction, type WidgetEditAction } from './NodeOverlay';
+import { extractPageGraph, type HighlightEdit, type ImageEdit, type LinkEdit, type PageGraph, type PdfJsPage, type SegmentEdit, type SegmentNode, type WidgetEdit } from '@aldus/core';
+import { NodeOverlay, type AddTextRequest, type EditAction, type HighlightEditAction, type ImageEditAction, type LinkEditAction, type WidgetEditAction } from './NodeOverlay';
+import type { OverlayHighlight } from './overlay/types';
 import { sampleRunColors } from './sampleColor';
 import { extractImagePixels } from './imagePixels';
 import { registerPageFonts } from './fontRegistry';
@@ -34,6 +35,14 @@ interface Props {
   onDocOp: (action: string, params: Record<string, unknown>) => void;
   onRequestLink: (target: { page: number; x: number; y: number; width: number; height: number }) => void;
   onAddText: (req: AddTextRequest) => void;
+  /** Resaltados pendientes de la página (capa overlay, no horneada). */
+  highlights: OverlayHighlight[];
+  /** Ediciones (mover/borrar) de anotaciones guardadas de la página. */
+  highlightEdits: Map<string, HighlightEdit>;
+  onHighlightEdit: (action: HighlightEditAction) => void;
+  onSyncHighlightEdits: (actions: HighlightEditAction[]) => void;
+  linkEdits: Map<string, LinkEdit>;
+  onLinkEdit: (action: LinkEditAction) => void;
   highlightColor: string;
   onHighlightColor: (c: string) => void;
   phantomSegments: SegmentNode[];
@@ -66,6 +75,11 @@ async function renderToBackBuffer(doc: PDFDocumentProxy, pageNum: number, scale:
     canvasContext: ctx,
     viewport,
     transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
+    // annotationMode por DEFAULT (ENABLE): los widgets, links y cualquier
+    // anotación exótica preexistente (ink/stamp/notas) SÍ se pintan en el
+    // canvas — el snapshot de drags depende de eso. Los /Highlight NO se
+    // duplican con el HighlightBox porque el preview los oculta con el flag
+    // Hidden (ver hideHighlightAnnotations en useLocalPreview).
   });
   taskRef.current = task;
   try {
@@ -76,7 +90,7 @@ async function renderToBackBuffer(doc: PDFDocumentProxy, pageNum: number, scale:
   return back;
 }
 
-export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, lift, draggingId, areaWidths, onAreaWidth, onEditingChange }: Props) {
+export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, onDocOp, onRequestLink, onAddText, highlights, highlightEdits, onHighlightEdit, onSyncHighlightEdits, linkEdits, onLinkEdit, highlightColor, onHighlightColor, phantomSegments, onDragging, lift, draggingId, areaWidths, onAreaWidth, onEditingChange }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
   const liftTaskRef = useRef<RenderTask | null>(null);
@@ -225,6 +239,12 @@ export function PdfCanvas({ pdf, pageNum, scale, graph, onGraph, selectedId, onS
           onDocOp={onDocOp}
           onRequestLink={onRequestLink}
           onAddText={onAddText}
+          highlights={highlights}
+          highlightEdits={highlightEdits}
+          onHighlightEdit={onHighlightEdit}
+          onSyncHighlightEdits={onSyncHighlightEdits}
+          linkEdits={linkEdits}
+          onLinkEdit={onLinkEdit}
           highlightColor={highlightColor}
           onHighlightColor={onHighlightColor}
           phantomSegments={phantomSegments}

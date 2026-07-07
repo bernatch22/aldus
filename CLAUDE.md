@@ -89,9 +89,14 @@ los detalles viven en módulos por responsabilidad — ver Estructura):
   fuente de verdad compartida por el editor (bake) y el agente (EditSession.bake).
 - Imágenes: reubica el `Do` (solo Subtype /Image — JAMÁS un Form XObject: envuelve
   contenido); zOrder = re-emitir en el borde del stream. Widgets: /Annots → setRectangle/
-  removeField + updateFieldAppearances. `createNodes.ts`: addText/addFormField (firma FT
-  /Sig a mano, T como PDFString)/insertImage/addHighlight (multiply+alpha)/addLink/
-  watermark/headerFooter/setFieldOptions/addRadioOption.
+  removeField + updateFieldAppearances. **Highlights: /Annots (Subtype /Highlight) —
+  NO se queman en el contenido** (así, como widgets/links, se los extrae como
+  `HighlightNode`, se los mueve/borra incluso después de guardar, y el preview coincide
+  con lo guardado). `createNodes.addHighlight` crea la anotación (QuadPoints + /C + un
+  appearance stream Multiply para viewers externos); `bake/highlights.ts`
+  `applyHighlightEdits` mueve/borra los existentes (localiza por /Rect, como los widgets).
+  `createNodes.ts`: addText/addFormField (firma FT /Sig a mano, T como PDFString)/
+  insertImage/addHighlight/addLink/watermark/headerFooter/setFieldOptions/addRadioOption.
 
 ## El editor (apps/editor/src/)
 
@@ -129,6 +134,44 @@ los detalles viven en módulos por responsabilidad — ver Estructura):
 - Imagen ≥80% de página: no se enmascara el origen en drags (taparía todo) → ghost marco.
 - `/ops` endpoint: addText/watermark/headerFooter/addLink/removeLink/setFieldOptions/
   addRadioOption (instantáneas); highlight NO — acumula y va en el body de /bake.
+- **Highlights y LINKS = /Annots, objetos editables**: el resaltado NUEVO se acumula como
+  `pendingHighlight` (overlay hijo del SegmentBox → sigue al texto) y va en `highlights` del
+  /bake (server → addHighlight). Los YA GUARDADOS son nodos del grafo (`HighlightNode`/
+  `LinkNode`). Los LINKS y los highlights SIN texto debajo → boxes overlay independientes
+  (`LinkBox`/`HighlightBox`: drag/Supr/multi-select/Inspector) → `highlightEdits`/`linkEdits`
+  del /bake (`bake/annotEdits.ts` = localizador compartido por /Rect).
+- **HIGHLIGHT GUARDADO PEGADO AL TEXTO** (`NodeOverlay`): un `HighlightNode` se ASOCIA por
+  solape de rects ORIGINALES (estable, no cambia al mover) al segmento que resalta y se dibuja
+  como capa HIJA de ESE `SegmentBox` (como el pendiente → hereda el transform → sigue al texto
+  en vivo). Su /Rect se sincroniza con el movimiento del segmento vía `syncHighlightEdits`
+  (usePendingEdits) — SIN pushHistory: el snapshot del propio movimiento ya capturó los
+  highlightEdits previos, así UN Ctrl+Z revierte texto + resaltado juntos. Sin texto debajo =
+  "huérfano" → `HighlightBox` suelto. Select/borrar del pegado: por el Inspector (sección
+  Resaltados) o Supr con el nodo seleccionado.
+- El canvas rinde con annotationMode DEFAULT (widgets y annots exóticas SÍ se pintan — el
+  snapshot de drags depende de eso); los /Highlight se ocultan SOLO en la copia de display vía
+  flag Hidden (`hideHighlightAnnotations`) para no duplicarse con su box. ⚠️ NO hay fast-path
+  por scan de bytes buscando "/Highlight": pdf-lib guarda con OBJECT STREAMS (dicts comprimidos)
+  y el literal no aparece crudo → el scan saltaba el hide y los resaltados se DUPLICABAN.
+- **pdf-lib `lookup(name, Type)` LANZA si la clave falta** ("Expected instance of PDFArray, but
+  got instance of undefined") — NO devuelve undefined. En páginas sin /Annots reventaba el bake.
+  Usar `lookupMaybe` cuando la clave puede no estar (annotEdits, highlights, createNodes).
+- **CLIP: el texto movido FUERA del clip de su op se re-emite al FINAL del stream**: muchos
+  generadores envuelven la página en `q <rect> W n … Q`. Re-emitir un segmento movido IN-PLACE
+  dentro de ese clip lo RECORTA a nada (el texto "desaparece" aunque los ops existan). `textWalk`
+  trackea el clip rect activo (apilado con q/Q, intersección de `re W n`/polígono axis-aligned)
+  en cada `ShowOp.clip`; `text.ts` (`escapesClip`) detecta el escape y emite vía `appendBlocks`
+  (CTM identidad, sin clip) en vez de splice in-place. Las anotaciones (/Annots) nunca se
+  clippean → por eso quedaba solo el highlight y el texto negro se iba.
+- **SUBRAYADOS siguen a su texto**: `textWalk` trackea rects rellenos simples (`re` o
+  polígono m+3l — pdf-lib dibuja así) como `fillRects` con rango de bytes; el bake los
+  reubica al mover (path A), los extirpa al eliminar/reescribir. Antes quedaban huérfanos.
+- **UNDO TOTAL (Command+Memento)**: `useHistory` intercala snapshots (ediciones pendientes)
+  y COMANDOS (ops de server: crear texto/imagen/campo, watermark, enc/pie, links). Deshacer
+  un comando = POST /:id/revert (restaura y saca la última revisión); rehacer = re-ejecutar
+  la op. Aplicar limpia el historial (los comandos viejos no pueden revertir el bake).
+- **Watermark/header-footer** se dibujan como TEXTO del contenido → se extraen como
+  segmentos normales: editables/borrables con el pipeline estándar (test lo cubre).
 - El server persiste con revisiones (`<id>.rev-<ts>.pdf`, últimas 10) — ya no hay `.bak`.
 - Los mensajes de `applied`/`warnings` del bake son API de facto (el editor los muestra,
   los tests los matchean): NO traducirlos ni reformatearlos sin revisar consumidores.

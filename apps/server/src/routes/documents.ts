@@ -43,5 +43,14 @@ export function documentsRouter(store: DocStore): Router {
     res.json(store.readEdits(req.params.id));
   });
 
+  // UNDO of the last server write: restore the newest revision and pop it.
+  // The editor uses this to make instant ops (addText / insertImage /
+  // createField / watermark / header-footer / links) undoable with Ctrl+Z.
+  router.post('/:id/revert', requireDoc(store), (req, res) => {
+    const restored = store.popRevision(req.params.id);
+    if (!restored) return res.status(409).json({ error: 'No hay revisión para deshacer.' });
+    res.json({ ok: true });
+  });
+
   return router;
 }

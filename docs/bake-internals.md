@@ -49,7 +49,26 @@ last:
   that's **C**, always counted and reported in `warnings`.
 
 Underlines don't exist in PDF: they're drawn as thin rects appended at the end
-of the stream (identity CTM → absolute coords).
+of the stream (identity CTM → absolute coords). And they FOLLOW their text:
+`textWalk` records every simple filled rect (`re` or the m+3×l polygon pdf-lib
+emits) as a `FillRectOp` with its byte range; when a segment moves, its
+underline rects are spliced out and re-emitted with the same delta — when it's
+removed or rewritten, they're spliced out (fresh ones come from the runs).
+Without this, editing underlined text left orphan lines at the old position.
+
+### Clipping — moving text out of its clip
+
+Many generators wrap the whole page in a clip: `q <rect> W n … Q`. Re-emitting a
+moved segment IN PLACE (inside that `q…Q`) means the clip still applies — drag
+the text past the clip edge and it's cropped to **nothing** (the ops exist, but
+render blank). So `textWalk` tracks the active clip rect per `ShowOp.clip`
+(pushed/popped with `q`/`Q`, intersecting each `re W n` / axis-aligned polygon
+clip; a non-rect clip conservatively leaves the previous state). Both strategies
+call `escapesClip(op, x, y)`: if the destination falls outside, the original op
+is spliced out and the block goes to `appendBlocks` (stream end, identity CTM,
+no clip) instead of an in-place splice. Annotations (`/Annots`) are never
+clipped — that's why a moved highlight would survive while its black text
+vanished under the page clip.
 
 ## Images and widgets
 
@@ -62,6 +81,24 @@ of the stream (identity CTM → absolute coords).
   the front only on the final save (`promoteMovedImages`).
 - Widgets live in `/Annots`, not the stream: move = rewrite `/Rect`; delete =
   remove the field; appearances refreshed best-effort (`widgets.ts`).
+- **Highlights AND links are `/Annots`, never burned into `/Contents`** — a
+  separate, selectable, movable layer even after saving (and the editor preview
+  matches the saved file). `createNodes.addHighlight` writes the annotation
+  (QuadPoints + `/C` + a Multiply appearance stream for external viewers);
+  `annotEdits.ts` is the shared locate-by-`/Rect` machinery consumed by
+  `applyHighlightEdits` (also rewrites QuadPoints) and `applyLinkEdits` — the
+  same pattern as widgets. The editor draws both as overlay boxes; on the
+  display copy only, `/Highlight` annots get the Hidden flag
+  (`hideHighlightAnnotations`) so pdf.js doesn't double-paint them, while
+  widgets and any pre-existing exotic annotations still render on the canvas.
+  A **saved highlight that overlaps a segment is glued to it**: the editor draws
+  it as a child of that segment's box (follows the text live) and shifts its
+  `/Rect` by the same delta on move — see the app README/CLAUDE. Two footguns
+  live here: (1) `hideHighlightAnnotations` must NOT byte-scan for `"/Highlight"`
+  as a fast-path — pdf-lib saves dicts inside compressed object streams, so the
+  literal isn't in the raw bytes and the scan would skip the hide (highlights
+  double-paint). (2) pdf-lib's typed `lookup(name, Type)` **throws** on a missing
+  key, so a page without `/Annots` crashed the bake — use `lookupMaybe`.
 
 ## Honesty as an invariant
 

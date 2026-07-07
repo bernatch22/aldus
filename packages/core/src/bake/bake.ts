@@ -17,13 +17,15 @@
  * understood is never touched.
  */
 import { PDFDocument } from 'pdf-lib';
-import type { ImageEdit, SegmentEdit, WidgetEdit } from '../model.js';
+import type { HighlightEdit, ImageEdit, LinkEdit, SegmentEdit, WidgetEdit } from '../model.js';
 import { walkContent } from './textWalk.js';
 import { pageContentBytes, setPageContents } from './pageContent.js';
 import { rebuild, type Splice } from './splice.js';
 import { applyImageEditsToPage } from './images.js';
 import { applySegmentEditsToPage } from './text.js';
 import { applyWidgetEdits } from './widgets.js';
+import { applyHighlightEdits } from './highlights.js';
+import { applyLinkEdits } from './links.js';
 import { drawFallbackTexts, type FallbackDraw } from './fallback.js';
 import { BakeReport, type BakeResult } from './report.js';
 
@@ -42,6 +44,8 @@ export async function bakeSegmentEdits(
   edits: SegmentEdit[],
   imageEdits: ImageEdit[] = [],
   widgetEdits: WidgetEdit[] = [],
+  highlightEdits: HighlightEdit[] = [],
+  linkEdits: LinkEdit[] = [],
 ): Promise<BakeResult> {
   const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
   const pages = doc.getPages();
@@ -49,6 +53,10 @@ export async function bakeSegmentEdits(
   const fallbackDraws: FallbackDraw[] = [];
 
   applyWidgetEdits(doc, widgetEdits, report);
+  // Capa /Annots (resaltados y links): mover/borrar los existentes. Los NUEVOS
+  // se crean con addHighlight/addLink (rutas aparte, en el server).
+  applyHighlightEdits(doc, highlightEdits, report);
+  applyLinkEdits(doc, linkEdits, report);
 
   const byPage = groupByPage(edits);
   const imgByPage = groupByPage(imageEdits);
@@ -69,7 +77,7 @@ export async function bakeSegmentEdits(
       report.warn(`página ${pageNum}: ${err instanceof Error ? err.message : 'stream ilegible'}`);
       continue;
     }
-    const { shows, xobjects, backstop } = walkContent(src);
+    const { shows, xobjects, fillRects, backstop } = walkContent(src);
     const splices: Splice[] = [];
     // "To front" = block at the END of the stream (identity CTM there →
     // absolute matrix). "To back" does NOT go to byte 0: that would land
@@ -80,7 +88,7 @@ export async function bakeSegmentEdits(
     const appendBlocks: string[] = [];
 
     applyImageEditsToPage({ doc, page, pageImgEdits, xobjects, backstop, splices, appendBlocks, report });
-    applySegmentEditsToPage({ doc, page, pageNum, pageEdits, shows, src, splices, appendBlocks, fallbackDraws, report });
+    applySegmentEditsToPage({ doc, page, pageNum, pageEdits, shows, fillRects, src, splices, appendBlocks, fallbackDraws, report });
 
     if (splices.length || appendBlocks.length) {
       setPageContents(doc, page, rebuild(src, splices, '', appendBlocks.join('\n')));

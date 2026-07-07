@@ -79,7 +79,7 @@ export function useLocalPreview(opts: {
   // lift del que está por arrastrarse).
   const bakePending = useCallback(async (extraRemoval?: SegmentNode, extraImageRemoval?: ImageNode): Promise<Uint8Array> => {
     if (!baseBytes) throw new Error('documento no cargado');
-    const { bakeSegmentEdits, addHighlight } = await import('@aldus/core/bake');
+    const { bakeSegmentEdits } = await import('@aldus/core/bake');
     const textRemovals: SegmentEdit[] = [...edits.values()].map(e => ({
       segmentId: e.segmentId, page: e.page, text: e.original.text, remove: true, original: e.original,
     }));
@@ -101,11 +101,15 @@ export function useLocalPreview(opts: {
       const s = segCache.current.get(segId);
       if (s) s.runs.forEach(run => { run.color = hex; });
     }
-    let bytes = r.pdf;
-    for (const h of resolveHighlights()) ({ pdf: bytes } = await addHighlight(bytes, h));
-    return bytes;
-    // resolveHighlights es estable (lee refs) — NUNCA va en deps.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Los HIGHLIGHTS pendientes NO se hornean en el preview: se dibujan como
+    // capa overlay anclada al segmento (ver OverlayHighlight/SegmentBox), así
+    // acompañan al texto durante el arrastre. El server SÍ los hornea al
+    // Aplicar (resolveHighlights → api.bake).
+    // Los GUARDADOS (/Highlight en /Annots) se OCULTAN del canvas (flag
+    // Hidden, solo en la copia de display): el editor los dibuja él mismo como
+    // HighlightBox movibles — si pdf.js también los pintara, se duplicarían.
+    const { hideHighlightAnnotations } = await import('@aldus/core/bake');
+    return hideHighlightAnnotations(r.pdf);
   }, [baseBytes, edits, imageEdits, widgetEdits]);
 
   const pending = edits.size || imageEdits.size || widgetEdits.size || pendingHighlights.length;
@@ -116,7 +120,11 @@ export function useLocalPreview(opts: {
     // extirpar el original cuanto antes (debouncearlo prolongaba el
     // "duplicado" sobre imágenes). El lift cubre el gesto; el bake refina.
     (async () => {
-      const bytes = pending ? await bakePending() : baseBytes;
+      // Sin pendientes igual pasa por hideHighlightAnnotations: los resaltados
+      // guardados nunca se pintan en el canvas (los dibuja el HighlightBox).
+      const bytes = pending
+        ? await bakePending()
+        : await (await import('@aldus/core/bake')).hideHighlightAnnotations(baseBytes);
       if (cancelled) return;
       // pdf.js TRANSFIERE el buffer al worker → siempre una copia.
       // fontExtraProperties: el fontRegistry necesita font.data para

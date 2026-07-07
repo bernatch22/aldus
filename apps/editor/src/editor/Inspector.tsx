@@ -7,18 +7,20 @@
  */
 
 import {
-  effectiveImageRect, effectiveWidgetRect,
-  mergeImageEdit, mergeSegmentEdit, mergeWidgetEdit, originalStyledRuns,
-  type FontBucket, type ImageEdit, type ImageNode, type ImagePatch,
+  effectiveHighlightRect, effectiveImageRect, effectiveLinkRect, effectiveWidgetRect,
+  mergeHighlightEdit, mergeImageEdit, mergeLinkEdit, mergeSegmentEdit, mergeWidgetEdit, originalStyledRuns,
+  type FontBucket, type HighlightEdit, type HighlightNode, type HighlightPatch,
+  type ImageEdit, type ImageNode, type ImagePatch,
+  type LinkEdit, type LinkNode, type LinkPatch,
   type PageGraph, type SegmentEdit, type SegmentNode, type SegmentPatch,
   type WidgetEdit, type WidgetNode, type WidgetPatch,
 } from '@aldus/core';
 import { Fragment, type ReactNode } from 'react';
 import {
-  X, Trash2, RotateCcw, Lock, Unlock,
+  X, Trash2, RotateCcw, Lock, Unlock, Highlighter,
   SendToBack, BringToFront, Type, Image as ImageIcon, TextCursorInput, Link as LinkIcon,
 } from 'lucide-react';
-import type { EditAction, ImageEditAction, WidgetEditAction } from './NodeOverlay';
+import type { EditAction, HighlightEditAction, ImageEditAction, LinkEditAction, WidgetEditAction } from './NodeOverlay';
 import { Button, NumberInput, Select, TextInput, cx } from '../ui/primitives';
 
 interface Props {
@@ -31,6 +33,10 @@ interface Props {
   onImageEdit: (action: ImageEditAction) => void;
   widgetEdits: Map<string, WidgetEdit>;
   onWidgetEdit: (action: WidgetEditAction) => void;
+  highlightEdits: Map<string, HighlightEdit>;
+  onHighlightEdit: (action: HighlightEditAction) => void;
+  linkEdits: Map<string, LinkEdit>;
+  onLinkEdit: (action: LinkEditAction) => void;
   locked: Set<string>;
   onToggleLock: (nodeId: string) => void;
   onDocOp: (action: string, params: Record<string, unknown>) => void;
@@ -117,11 +123,13 @@ function OutlineItem({ icon, label, meta, active, edited, onClick, right, lockab
 
 // ── panel raíz ───────────────────────────────────────────────────────────────
 export function Inspector(props: Props) {
-  const { graph, selectedId, onSelect, edits, imageEdits, widgetEdits, locked, onToggleLock } = props;
+  const { graph, selectedId, onSelect, edits, imageEdits, widgetEdits, highlightEdits, linkEdits, locked, onToggleLock } = props;
   if (!graph) return <Panel />;
   const seg = graph.segments.find(s => s.id === selectedId) ?? null;
   const img = graph.images.find(i => i.id === selectedId) ?? null;
   const wid = graph.widgets.find(w => w.id === selectedId) ?? null;
+  const hl = graph.highlights.find(h => h.id === selectedId) ?? null;
+  const lnk = graph.links.find(l => l.id === selectedId) ?? null;
 
   const lockRow = (nodeId: string) => (
     <Section title="Estado">
@@ -148,10 +156,36 @@ export function Inspector(props: Props) {
     key: 'links', count: graph.links.length,
     node: (
       <Section title={`Links (${graph.links.length})`}>
-        {graph.links.map(l => (
-          <OutlineItem key={l.id} icon={<LinkIcon size={14} />} label={l.url} meta={`x ${n1(l.x)} · y ${n1(l.y)}`}
-            right={<button title="Borrar link" onClick={e => { e.stopPropagation(); props.onDocOp('removeLink', { page: l.page, x: l.x, y: l.y, width: l.width, height: l.height }); }}
+        {lockFirst(graph.links, l => l.id).map(l => (
+          <OutlineItem key={l.id} icon={<LinkIcon size={14} />} onClick={() => onSelect(l.id)}
+            active={selectedId === l.id}
+            edited={linkEdits.has(l.id)}
+            lockable={{ locked: locked.has(l.id), onToggle: () => onToggleLock(l.id) }}
+            label={`${l.url}${linkEdits.get(l.id)?.remove ? ' · eliminado' : ''}`}
+            meta={`x ${n1(l.x)} · y ${n1(l.y)}`}
+            // Borrado PENDIENTE (mismo pipeline que el canvas; Ctrl+Z lo restaura).
+            right={<button title="Borrar link (se escribe con Aplicar)" onClick={e => {
+              e.stopPropagation();
+              const m = mergeLinkEdit(l, linkEdits.get(l.id) ?? null, { remove: true });
+              if (m) props.onLinkEdit(m);
+            }}
               className="grid h-6 w-6 shrink-0 place-items-center rounded text-neutral-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={13} /></button>} />
+        ))}
+      </Section>
+    ),
+  });
+  if (graph.highlights.length > 0) sections.push({
+    key: 'highlights', count: graph.highlights.length,
+    node: (
+      <Section title={`Resaltados (${graph.highlights.length})`}>
+        {lockFirst(graph.highlights, h => h.id).map(h => (
+          <OutlineItem key={h.id} onClick={() => onSelect(h.id)}
+            active={selectedId === h.id}
+            edited={highlightEdits.has(h.id)}
+            lockable={{ locked: locked.has(h.id), onToggle: () => onToggleLock(h.id) }}
+            icon={<span className="grid place-items-center"><span className="h-3.5 w-3.5 rounded-[3px]" style={{ background: h.color }} /></span>}
+            label={`${Math.round(h.width)}×${Math.round(h.height)} pt${highlightEdits.get(h.id)?.remove ? ' · eliminado' : ''}`}
+            meta={`x ${n1(h.x)} · y ${n1(h.y)}`} />
         ))}
       </Section>
     ),
@@ -222,6 +256,22 @@ export function Inspector(props: Props) {
       <Header title="Texto" subtitle={`${n1(seg.fontSize)} pt`} onClose={() => onSelect(null)} />
       <TextProps seg={seg} edit={edits.get(seg.id) ?? null} onEdit={props.onEdit} />
       {lockRow(seg.id)}
+      {outline}
+    </Panel>
+  );
+  if (hl) return (
+    <Panel>
+      <Header title="Resaltado" subtitle={hl.color} onClose={() => onSelect(null)} />
+      <HighlightProps hl={hl} edit={highlightEdits.get(hl.id) ?? null} onHighlightEdit={props.onHighlightEdit} />
+      {lockRow(hl.id)}
+      {outline}
+    </Panel>
+  );
+  if (lnk) return (
+    <Panel>
+      <Header title="Link" subtitle={lnk.url} onClose={() => onSelect(null)} />
+      <LinkProps link={lnk} edit={linkEdits.get(lnk.id) ?? null} onLinkEdit={props.onLinkEdit} />
+      {lockRow(lnk.id)}
       {outline}
     </Panel>
   );
@@ -314,6 +364,61 @@ function ImageProps({ img, edit, onImageEdit }: { img: ImageNode; edit: ImageEdi
           {eff.removed ? <><RotateCcw size={14} /> Restaurar imagen</> : <><Trash2 size={14} /> Eliminar imagen</>}
         </Button>
         {edit && <Button variant="ghost" className="w-full" onClick={() => onImageEdit({ imageId: img.id, revert: true })}><RotateCcw size={14} /> Revertir</Button>}
+      </Section>
+    </>
+  );
+}
+
+// ── propiedades de RESALTADO (anotación /Highlight — capa aparte) ────────────
+function HighlightProps({ hl, edit, onHighlightEdit }: { hl: HighlightNode; edit: HighlightEdit | null; onHighlightEdit: (a: HighlightEditAction) => void }) {
+  const commit = (patch: HighlightPatch) => { const m = mergeHighlightEdit(hl, edit, patch); onHighlightEdit(m ?? { highlightId: hl.id, revert: true }); };
+  const eff = effectiveHighlightRect(hl, edit);
+  const num = (key: 'x' | 'y' | 'width' | 'height', original: number) => (v: number) => {
+    const r = Math.round(v * 10) / 10;
+    commit({ [key]: r === Math.round(original * 10) / 10 ? null : r });
+  };
+  return (
+    <>
+      <Section title="Anotación">
+        <div className="flex justify-between text-[12px]"><span className="text-neutral-400">Color</span><span className="flex items-center gap-1.5 text-neutral-700"><span className="h-3.5 w-3.5 rounded-[3px]" style={{ background: hl.color }} />{hl.color}</span></div>
+        <div className="text-[11px] text-neutral-400">Capa /Annots: se mueve y borra sin tocar el contenido — incluso después de Aplicar.</div>
+      </Section>
+      <Section title="Geometría (pt)">
+        <Row><NumberInput label="X" defaultValue={eff.x} onCommit={num('x', hl.x)} /><NumberInput label="Y" defaultValue={eff.y} onCommit={num('y', hl.y)} /></Row>
+        <Row><NumberInput label="W" defaultValue={eff.width} onCommit={num('width', hl.width)} /><NumberInput label="H" defaultValue={eff.height} onCommit={num('height', hl.height)} /></Row>
+      </Section>
+      <Section title="Acciones">
+        <Button variant="danger" className="w-full" onClick={() => commit({ remove: eff.removed ? null : true })}>
+          {eff.removed ? <><RotateCcw size={14} /> Restaurar resaltado</> : <><Highlighter size={14} /> Eliminar resaltado</>}
+        </Button>
+        {edit && <Button variant="ghost" className="w-full" onClick={() => onHighlightEdit({ highlightId: hl.id, revert: true })}><RotateCcw size={14} /> Revertir</Button>}
+      </Section>
+    </>
+  );
+}
+
+// ── propiedades de LINK (anotación /Link — capa aparte) ──────────────────────
+function LinkProps({ link, edit, onLinkEdit }: { link: LinkNode; edit: LinkEdit | null; onLinkEdit: (a: LinkEditAction) => void }) {
+  const commit = (patch: LinkPatch) => { const m = mergeLinkEdit(link, edit, patch); onLinkEdit(m ?? { linkId: link.id, revert: true }); };
+  const eff = effectiveLinkRect(link, edit);
+  const num = (key: 'x' | 'y' | 'width' | 'height', original: number) => (v: number) => {
+    const r = Math.round(v * 10) / 10;
+    commit({ [key]: r === Math.round(original * 10) / 10 ? null : r });
+  };
+  return (
+    <>
+      <Section title="Destino">
+        <a href={link.url} target="_blank" rel="noreferrer" className="block truncate text-[12.5px] text-blue-600 hover:underline">{link.url}</a>
+      </Section>
+      <Section title="Geometría (pt)">
+        <Row><NumberInput label="X" defaultValue={eff.x} onCommit={num('x', link.x)} /><NumberInput label="Y" defaultValue={eff.y} onCommit={num('y', link.y)} /></Row>
+        <Row><NumberInput label="W" defaultValue={eff.width} onCommit={num('width', link.width)} /><NumberInput label="H" defaultValue={eff.height} onCommit={num('height', link.height)} /></Row>
+      </Section>
+      <Section title="Acciones">
+        <Button variant="danger" className="w-full" onClick={() => commit({ remove: eff.removed ? null : true })}>
+          {eff.removed ? <><RotateCcw size={14} /> Restaurar link</> : <><Trash2 size={14} /> Eliminar link</>}
+        </Button>
+        {edit && <Button variant="ghost" className="w-full" onClick={() => onLinkEdit({ linkId: link.id, revert: true })}><RotateCcw size={14} /> Revertir</Button>}
       </Section>
     </>
   );

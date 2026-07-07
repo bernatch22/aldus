@@ -181,7 +181,49 @@ export interface LinkNode {
   height: number;
 }
 
-export type PdfNode = TextRunNode | SegmentNode | LineNode | ImageNode | WidgetNode | LinkNode;
+/** Una edición pendiente sobre un link: mover/escalar/eliminar la anotación. */
+export interface LinkEdit {
+  linkId: string;
+  page: number;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  remove?: boolean;
+  /** Snapshot para que el bake localice la anotación sin ambigüedad. */
+  original: { url: string; x: number; y: number; width: number; height: number };
+}
+
+/** Un resaltado (annotation /Highlight). Vive en /Annots — una CAPA aparte, no
+ *  en el content stream — así que, como los widgets, se lo puede seleccionar,
+ *  mover y borrar incluso después de guardar (editarlo = actualizar /Rect y
+ *  /QuadPoints). Rect en puntos PDF, origen abajo-izquierda. */
+export interface HighlightNode {
+  id: string;
+  kind: 'highlight';
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Color hex "#rrggbb" (leído de /C). */
+  color: string;
+}
+
+/** Una edición pendiente sobre un resaltado: mover/escalar/eliminar. */
+export interface HighlightEdit {
+  highlightId: string;
+  page: number;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  remove?: boolean;
+  /** Snapshot para que el bake localice la anotación sin ambigüedad. */
+  original: { x: number; y: number; width: number; height: number; color: string };
+}
+
+export type PdfNode = TextRunNode | SegmentNode | LineNode | ImageNode | WidgetNode | LinkNode | HighlightNode;
 
 /** El grafo completo de una página. */
 export interface PageGraph {
@@ -196,6 +238,7 @@ export interface PageGraph {
   images: ImageNode[];
   widgets: WidgetNode[];
   links: LinkNode[];
+  highlights: HighlightNode[];
 }
 
 /** Un tramo de texto con su estilo, DENTRO de una edición. El estilo vive a

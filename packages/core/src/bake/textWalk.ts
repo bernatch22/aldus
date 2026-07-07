@@ -62,6 +62,11 @@ export interface ShowOp {
   fillColorRaw: string;
   /** true: x desconocida (show consecutivo sin reposicionar; la y sí se conoce). */
   stale: boolean;
+  /** CLIP rect activo (device space) en el op, si el walk pudo computarlo
+   *  (solo clips `re W n` / polígono rect con CTM sin rotación — el caso de
+   *  los generadores comunes). Re-emitir IN-PLACE un texto movido FUERA de
+   *  este rect lo recorta a nada: el bake debe emitirlo al FINAL del stream. */
+  clip: { x: number; y: number; width: number; height: number } | null;
 }
 
 /** Un `Do` de XObject (imagen/form) con la CTM vigente y su rango de bytes. */
@@ -73,9 +78,27 @@ export interface XObjectOp {
   matrix: Matrix;
 }
 
+/** Un RECT RELLENO simple (path de un solo `re` + fill, sin rotación) con su
+ *  rango de bytes y su geometría absoluta. El bake lo usa para localizar
+ *  SUBRAYADOS (rects finos bajo una baseline) y hacer que sigan a su texto al
+ *  mover/reescribir/eliminar — sin esto quedaban huérfanos en el lugar viejo. */
+export interface FillRectOp {
+  /** Rango a extirpar: del `re` al final del operador de pintado. */
+  start: number;
+  end: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Operador de color de relleno vigente, verbatim ('' = negro). */
+  fillColorRaw: string;
+}
+
 export interface ContentWalk {
   shows: ShowOp[];
   xobjects: XObjectOp[];
+  /** Rects rellenos simples (candidatos a subrayado) — ver {@link FillRectOp}. */
+  fillRects: FillRectOp[];
   /** Punto de inserción para "enviar al fondo": justo antes del PRIMER op que
    *  dibuja contenido real (fill no-blanco, Do, BT, sh) — es decir DESPUÉS del
    *  "papel" (los fills blancos full-page con que muchos generadores pintan la
@@ -92,9 +115,40 @@ export function walkContent(src: Uint8Array): ContentWalk {
   const ops = tokenizeContentStream(src);
   const shows: ShowOp[] = [];
   const xobjects: XObjectOp[] = [];
+  const fillRects: FillRectOp[] = [];
+  // Path "simple" candidato a rect: o UN `re`, o UN subpath poligonal
+  // rectangular (m + 3×l [+ h] — así dibuja pdf-lib drawRectangle). Cualquier
+  // otra construcción (dos subpaths, curvas, >4 puntos) lo invalida.
+  interface SimplePath {
+    start: number;
+    ctm: Matrix;
+    fill: string;
+    rect?: [number, number, number, number];
+    pts: Array<[number, number]>;
+    valid: boolean;
+  }
+  let simple: SimplePath | null = null;
+  /** ¿Los 4 puntos forman un rectángulo alineado a los ejes? */
+  const isRectPoly = (pts: Array<[number, number]>): boolean => {
+    if (pts.length !== 4) return false;
+    for (let i = 0; i < 4; i++) {
+      const [x1, y1] = pts[i];
+      const [x2, y2] = pts[(i + 1) % 4];
+      if (Math.abs(y2 - y1) > 0.01 && Math.abs(x2 - x1) > 0.01) return false;
+    }
+    return true;
+  };
 
   let ctm: Matrix = IDENTITY;
-  const stack: Matrix[] = [];
+  // CLIP rect activo (device space) — null = sin clip conocido/computable.
+  // Se salva/restaura con q/Q junto al CTM. `W`/`W*` marca el path actual
+  // como clip pendiente; el paint op que lo consume (`n` normalmente) lo
+  // intersecta si es un rect simple con CTM axis-aligned; un clip no-rect
+  // deja el estado anterior (v1 honesta: mejor no clip que un clip inventado).
+  type ClipRect = { x: number; y: number; width: number; height: number };
+  let clip: ClipRect | null = null;
+  let clipPending = false;
+  const stack: Array<{ ctm: Matrix; clip: ClipRect | null }> = [];
   let tm: Matrix = IDENTITY;
   let tlm: Matrix = IDENTITY;
   let fontName = '';
@@ -139,27 +193,88 @@ export function walkContent(src: Uint8Array): ContentWalk {
       fontName, fontSize, charSpacing, wordSpacing, hScale,
       fillColorRaw,
       stale,
+      clip,
     });
     stale = true; // el ancho del texto mostrado desplaza Tm y no lo trackeamos
   };
 
+  /** Rect ABSOLUTO (device) de un path simple, si es un rect axis-aligned. */
+  const absRectOf = (p: SimplePath): ClipRect | null => {
+    const m = p.ctm;
+    const corners: Array<[number, number]> = p.rect
+      ? [[p.rect[0], p.rect[1]], [p.rect[0] + p.rect[2], p.rect[1] + p.rect[3]]]
+      : isRectPoly(p.pts)
+        ? p.pts
+        : [];
+    if (!corners.length || Math.abs(m[1]) > 0.01 || Math.abs(m[2]) > 0.01) return null;
+    const xs = corners.map(([px]) => m[0] * px + m[4]);
+    const ys = corners.map(([, py]) => m[3] * py + m[5]);
+    const x = Math.min(...xs);
+    const y = Math.min(...ys);
+    return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+  };
+  /** El paint op consume un `W` pendiente: intersectar el clip si el path es
+   *  un rect computable; si no, conservar el estado anterior (v1). */
+  const consumeClip = () => {
+    if (!clipPending) return;
+    clipPending = false;
+    const r = simple?.valid ? absRectOf(simple) : null;
+    if (!r) return;
+    if (!clip) { clip = r; return; }
+    const x = Math.max(clip.x, r.x);
+    const y = Math.max(clip.y, r.y);
+    clip = {
+      x, y,
+      width: Math.max(0, Math.min(clip.x + clip.width, r.x + r.width) - x),
+      height: Math.max(0, Math.min(clip.y + clip.height, r.y + r.height) - y),
+    };
+  };
+
   for (const rec of ops) {
     switch (rec.op) {
-      case 'q': stack.push(ctm); break;
-      case 'Q': ctm = stack.pop() ?? IDENTITY; break;
+      case 'q': stack.push({ ctm, clip }); break;
+      case 'Q': { const s = stack.pop(); ctm = s?.ctm ?? IDENTITY; clip = s?.clip ?? null; break; }
       case 'cm': ctm = mul([num(rec, 0), num(rec, 1), num(rec, 2), num(rec, 3), num(rec, 4), num(rec, 5)], ctm); break;
       // ── backstop: construcción y pintado de paths ──
-      case 'm': case 're':
+      case 'm':
         if (!pathStart) pathStart = { offset: rec.start, ctm };
+        if (simple) simple.valid = false; // segundo subpath = compuesto
+        else simple = { start: rec.start, ctm, fill: fillColorRaw, pts: [[num(rec, 0), num(rec, 1)]], valid: true };
         break;
-      case 'n': pathStart = null; break; // path descartado (solo clip) — no es contenido
-      case 'f': case 'F': case 'f*': case 'b': case 'b*': case 'B': case 'B*':
+      case 'l':
+        if (simple && simple.valid && !simple.rect && simple.pts.length < 5) simple.pts.push([num(rec, 0), num(rec, 1)]);
+        else if (simple) simple.valid = false;
+        break;
+      case 'c': case 'v': case 'y': // curvas: no es un rect
+        if (simple) simple.valid = false;
+        break;
+      case 'h': break; // cerrar el subpath no cambia el bbox
+      case 're':
+        if (!pathStart) pathStart = { offset: rec.start, ctm };
+        if (simple) simple.valid = false; // re + algo más = compuesto
+        else simple = { start: rec.start, ctm, fill: fillColorRaw, rect: [num(rec, 0), num(rec, 1), num(rec, 2), num(rec, 3)], pts: [], valid: true };
+        break;
+      case 'W': case 'W*': clipPending = true; break;
+      case 'n': consumeClip(); pathStart = null; simple = null; break; // solo clip — no es contenido
+      case 'f': case 'F': case 'f*': case 'b': case 'b*': case 'B': case 'B*': {
+        consumeClip();
         if (!isWhiteFill(fillColorRaw)) markContent(pathStart ?? { offset: rec.start, ctm });
+        // Rect relleno SIMPLE (re, o polígono rectangular m+3l) con CTM sin
+        // rotación: registrarlo con su geometría absoluta — candidato a
+        // subrayado para el bake.
+        if (simple?.valid) {
+          const r = absRectOf(simple);
+          if (r) fillRects.push({ start: simple.start, end: rec.end, ...r, fillColorRaw: simple.fill });
+        }
         pathStart = null;
+        simple = null;
         break;
+      }
       case 'S': case 's': // un trazo visible es contenido (conservador)
+        consumeClip();
         markContent(pathStart ?? { offset: rec.start, ctm });
         pathStart = null;
+        simple = null;
         break;
       case 'sh': markContent({ offset: rec.start, ctm }); break;
       case 'BI': markContent({ offset: rec.start, ctm }); break;
@@ -199,5 +314,5 @@ export function walkContent(src: Uint8Array): ContentWalk {
       default: break;
     }
   }
-  return { shows, xobjects, backstop: backstop ?? { offset: 0, ctm: IDENTITY } };
+  return { shows, xobjects, fillRects, backstop: backstop ?? { offset: 0, ctm: IDENTITY } };
 }

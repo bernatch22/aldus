@@ -9,6 +9,7 @@ import { useEffect } from 'react';
 import {
   effectiveGeometry,
   pdfRectToCss,
+  type HighlightNode,
   type SegmentEdit,
   type SegmentNode,
   type SegmentPatch,
@@ -18,7 +19,7 @@ import { clampX, containerStyle, dbgStyles } from './helpers';
 import { FloatingBar } from './FloatingBar';
 import { useDragGesture } from './useDragGesture';
 import { useGripResize } from './useGripResize';
-import type { AddTextRequest } from './types';
+import type { AddTextRequest, OverlayHighlight } from './types';
 
 interface SegmentBoxProps {
   seg: SegmentNode;
@@ -47,11 +48,19 @@ interface SegmentBoxProps {
   onDocOp: (action: string, params: Record<string, unknown>) => void;
   onRequestLink: (target: { page: number; x: number; y: number; width: number; height: number }) => void;
   onAddText: (req: AddTextRequest) => void;
+  /** Resaltados pendientes de ESTE segmento (capa hija, detrás del texto): al
+   *  ser hijos del box heredan su transform y lo siguen al arrastrar. */
+  highlights: OverlayHighlight[] | null;
+  /** Resaltados GUARDADOS (/Annots) PEGADOS a este segmento: capa hija (como
+   *  los pendientes) → heredan el transform y lo siguen al arrastrar; su /Rect
+   *  se sincroniza aparte (ver NodeOverlay). Se ubican por su offset ORIGINAL
+   *  respecto del segmento (constante → quedan pegados aunque el box se mueva). */
+  savedHighlights: HighlightNode[] | null;
   highlightColor: string;
   onHighlightColor: (c: string) => void;
 }
 
-export function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, onCanvas, isLocked, onDragging, area, onArea, groupMode, onSelect, onStartEdit, onPatch, onDocOp, onRequestLink, highlightColor, onHighlightColor }: SegmentBoxProps) {
+export function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, onCanvas, isLocked, onDragging, area, onArea, groupMode, onSelect, onStartEdit, onPatch, onDocOp, onRequestLink, highlights, savedHighlights, highlightColor, onHighlightColor }: SegmentBoxProps) {
   const eff = effectiveGeometry(seg, edit);
   const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
 
@@ -179,10 +188,32 @@ export function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editin
         {...gesture.handlers}
         title={editing ? undefined : (edit?.text ?? seg.text)}
       >
+        {/* Capa de RESALTADO (detrás del texto): cubre la línea del segmento;
+            al ser hija hereda el transform del drag → sigue al texto. */}
+        {highlights?.map((h, i) => (
+          <div
+            key={`hl-${i}`}
+            className="seg-hl"
+            style={{ width: rect.width + 2, height: rect.height + 2, background: h.color ?? '#ffd400' }}
+          />
+        ))}
+        {/* Resaltados GUARDADOS pegados: ubicados por su offset ORIGINAL respecto
+            del segmento (no del box efectivo) → quedan glued al moverse. */}
+        {savedHighlights?.map(hl => {
+          const segOrig = pdfRectToCss({ x: seg.x, y: seg.y, width: seg.width, height: seg.height }, pageHeight, scale);
+          const hlCss = pdfRectToCss({ x: hl.x, y: hl.y, width: hl.width, height: hl.height }, pageHeight, scale);
+          return (
+            <div
+              key={hl.id}
+              className="seg-hl"
+              style={{ left: hlCss.left - segOrig.left, top: hlCss.top - segOrig.top, width: hlCss.width, height: hlCss.height, background: hl.color || '#ffd400' }}
+            />
+          );
+        })}
         {masked && (
           <div
             className="seg-text"
-            style={{ ...containerStyle(seg, edit, scale), ...(edit?.align ? { width: '100%', textAlign: edit.align } : {}) }}
+            style={{ position: 'relative', zIndex: 1, ...containerStyle(seg, edit, scale), ...(edit?.align ? { width: '100%', textAlign: edit.align } : {}) }}
             dangerouslySetInnerHTML={{ __html: html }}
           />
         )}

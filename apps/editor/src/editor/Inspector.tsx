@@ -44,7 +44,7 @@ const WIDGET_TYPE_LABEL: Record<WidgetNode['widgetType'], string> = {
 const n1 = (v: number) => (Math.round(v * 10) / 10).toString();
 
 // ── átomos del panel ─────────────────────────────────────────────────────────
-function Panel({ children }: { children: ReactNode }) {
+function Panel({ children }: { children?: ReactNode }) {
   return <aside className="thin-scroll flex w-[300px] shrink-0 flex-col overflow-y-auto border-l border-neutral-200 bg-white">{children}</aside>;
 }
 function Header({ title, subtitle, onClose }: { title: string; subtitle?: string; onClose?: () => void }) {

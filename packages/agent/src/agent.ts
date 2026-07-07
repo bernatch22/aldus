@@ -10,10 +10,9 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { buildToolServer } from './tools.js';
 import { serializeDoc } from './serialize.js';
+import { config } from './config.js';
 import type { DocGraph } from './graph.js';
 import type { EditSession } from './session.js';
-
-const MODEL = process.env.ALDUS_MODEL || 'claude-sonnet-5';
 
 function systemPrompt(doc: DocGraph): string {
   const pages = doc.pages.length;
@@ -68,7 +67,7 @@ export async function runTurn(opts: {
   for await (const message of query({
     prompt: opts.prompt,
     options: {
-      model: MODEL,
+      model: config.model,
       systemPrompt: systemPrompt(opts.doc),
       mcpServers: { aldus: server },
       // Deltas token a token → el panel muestra la respuesta escribiéndose y las
@@ -81,7 +80,7 @@ export async function runTurn(opts: {
         name.startsWith('mcp__aldus__')
           ? { behavior: 'allow', updatedInput: input }
           : { behavior: 'deny', message: 'Aldus solo permite sus propias tools de edición.' },
-      maxTurns: 24,
+      maxTurns: config.maxTurns,
       ...(opts.resume ? { resume: opts.resume } : {}),
     },
   })) {

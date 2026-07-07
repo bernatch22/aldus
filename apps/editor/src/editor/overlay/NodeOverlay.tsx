@@ -1,0 +1,333 @@
+/**
+ * NodeOverlay — los nodos del grafo como boxes sobre el canvas.
+ *
+ * La unidad de edición es el SEGMENTO (modelo Acrobat/Foxit): runs contiguos
+ * anclados a su x; los gaps de columna son FRONTERAS entre segmentos. El estilo
+ * (bold/italic) vive POR TRAMO (StyledRun) y siempre viaja por el modelo — ver
+ * styledDom.ts (proyección modelo↔DOM) y core/edits.ts (semántica).
+ *
+ * Interacción: click = seleccionar · seleccionado + arrastrar = mover ·
+ *  doble click = editar in situ (Cmd/Ctrl+B/I = estilo a la selección) ·
+ *  grip = escalar. El panel de propiedades aplica estilo a la selección vía
+ *  el evento SELECTION_STYLE_EVENT cuando hay un box en edición.
+ *
+ * Este archivo es la RAÍZ de composición: orquesta los boxes (SegmentBox,
+ * ImageBox, WidgetBox, GroupBox), el editor singleton (TextEditLayer) y el
+ * marquee de selección múltiple. Cada pieza vive en su propio módulo.
+ */
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  cssPointToPdf,
+  effectiveGeometry,
+  effectiveImageRect,
+  effectiveWidgetRect,
+  mergeImageEdit,
+  mergeSegmentEdit,
+  mergeWidgetEdit,
+  pdfRectToCss,
+  type ImageEdit,
+  type PageGraph,
+  type SegmentEdit,
+  type SegmentNode,
+  type WidgetEdit,
+} from '@aldus/core';
+import { activeEditingBox, round1 } from '../styledDom';
+import { log } from './helpers';
+import { GroupBox } from './GroupBox';
+import { ImageBox } from './ImageBox';
+import { SegmentBox } from './SegmentBox';
+import { WidgetBox } from './WidgetBox';
+import { TextEditLayer, type TextEditLayerHandle } from './TextEditLayer';
+import type { AddTextRequest, EditAction, ImageEditAction, WidgetEditAction } from './types';
+
+export type { AddTextRequest, EditAction, ImageEditAction, WidgetEditAction } from './types';
+
+interface Props {
+  graph: PageGraph;
+  scale: number;
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+  edits: Map<string, SegmentEdit>;
+  onEdit: (action: EditAction) => void;
+  imageEdits: Map<string, ImageEdit>;
+  onImageEdit: (action: ImageEditAction) => void;
+  widgetEdits: Map<string, WidgetEdit>;
+  onWidgetEdit: (action: WidgetEditAction) => void;
+  /** Nodos bloqueados: invisibles al mouse (ni hover ni drag). */
+  locked: Set<string>;
+  /** Modo colocación: el próximo click en la página crea un nodo. */
+  placing: boolean;
+  onPlace: (x: number, y: number) => void;
+  /** Snapshot de la página renderizada (para previews de imágenes movidas). */
+  snapshot: { url: string; width: number; height: number } | null;
+  /** imageId → dataURL de píxeles limpios (transparencia real) para el ghost. */
+  imagePixels: Map<string, string>;
+  /** Operación de documento instantánea (highlight, addLink…). */
+  onDocOp: (action: string, params: Record<string, unknown>) => void;
+  /** Abre el modal de link para un rect. */
+  onRequestLink: (target: { page: number; x: number; y: number; width: number; height: number }) => void;
+  /** Enter al final de un ítem de lista → crear el siguiente. */
+  onAddText: (req: AddTextRequest) => void;
+  /** Color del resaltador (persistido) + su setter. */
+  highlightColor: string;
+  onHighlightColor: (c: string) => void;
+  /** Segmentos editados (extirpados del preview): se dibujan desde el cache. */
+  phantomSegments: SegmentNode[];
+  /** Arranque/fin del arrastre de un segmento. En el fin, `committed` dice si
+      el drop produjo una edición (false = no-op → restaurar el canvas). */
+  onDragging: (segId: string, active: boolean, committed?: boolean) => void;
+  /** Ancho de ÁREA tipeable por segmento (pt) — el grip la amplía. */
+  areaWidths: Map<string, { w?: number; h?: number }>;
+  onAreaWidth: (segId: string, area: { w?: number; h?: number } | null) => void;
+  /** Hay un editor de texto abierto (se usa para saltear el lift). */
+  onEditingChange: (active: boolean) => void;
+}
+
+export function NodeOverlay({ graph, scale, selectedId, onSelect, edits, onEdit, imageEdits, onImageEdit, widgetEdits, onWidgetEdit, locked, placing, onPlace, snapshot, imagePixels, onDocOp, onRequestLink, onAddText, highlightColor, onHighlightColor, phantomSegments, onDragging, areaWidths, onAreaWidth, onEditingChange }: Props) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  useEffect(() => { onEditingChange(editingId != null); }, [editingId, onEditingChange]);
+  // Cambio de página con editor abierto: cerrarlo (con commit) via blur.
+  useEffect(() => { activeEditingBox()?.blur(); }, [graph.page]);
+
+  // EL editor (singleton, imperativo). Los boxes solo piden abrirlo.
+  const layerRef = useRef<TextEditLayerHandle>(null);
+  const editsRef = useRef(edits);
+  editsRef.current = edits;
+  const onLayerClosed = useCallback(() => setEditingId(null), []);
+  const openSegEditor = (seg: SegmentNode) => {
+    const edit = editsRef.current.get(seg.id) ?? null;
+    setEditingId(seg.id);
+    layerRef.current?.open({
+      seg,
+      edit,
+      scale,
+      pageHeight: graph.height,
+      minWidthCss: (areaWidths.get(seg.id)?.w ?? 0) * scale,
+      minHeightCss: (areaWidths.get(seg.id)?.h ?? 0) * scale,
+      onPatch: patch => {
+        const merged = mergeSegmentEdit(seg, editsRef.current.get(seg.id) ?? null, patch);
+        onEdit(merged ?? { segmentId: seg.id, revert: true });
+      },
+    });
+  };
+
+  // Cuando una FontFace termina de cargar (las estables del fontRegistry son
+  // async), re-render: los fantasmas re-siembran su HTML midiendo con la
+  // fuente REAL — sin esto quedaban medidos/renderizados con el fallback.
+  const [, setFontsTick] = useState(0);
+  useEffect(() => {
+    const bump = () => setFontsTick(t => t + 1);
+    document.fonts.addEventListener('loadingdone', bump);
+    return () => document.fonts.removeEventListener('loadingdone', bump);
+  }, []);
+
+  // Segmentos a dibujar: los del grafo del preview + los FANTASMAS editados
+  // (extirpados del preview). Dedupe defensivo por id.
+  const inGraph = new Set(graph.segments.map(s => s.id));
+  const allSegments = [...graph.segments, ...phantomSegments.filter(s => !inGraph.has(s.id))];
+
+  // Seleccionar OTRO nodo cierra (con commit) el editor de texto abierto — el
+  // preventDefault de los pointerdown impide el blur natural, así que lo
+  // forzamos acá. Sin esto, la B de la toolbar le pegaba al editor viejo.
+  const selectNode = (nodeId: string | null) => {
+    if (editingId && editingId !== nodeId) {
+      log('[aldus:forceblur] cierro editor de', editingId, 'por selección de', nodeId ?? '(nada)');
+      activeEditingBox()?.blur();
+    }
+    if (multiSel.size) setMultiSel(new Set());
+    onSelect(nodeId);
+  };
+
+  // ── MULTI-SELECCIÓN (marquee sobre el fondo → grupo movible) ──
+  const [multiSel, setMultiSel] = useState<Set<string>>(new Set());
+  useEffect(() => setMultiSel(new Set()), [graph.page]);
+  const [marquee, setMarquee] = useState<{ l: number; t: number; w: number; h: number } | null>(null);
+  const marqueeStart = useRef<{ x: number; y: number; hostL: number; hostT: number } | null>(null);
+
+  // Rect CSS de CUALQUIER nodo por id (segmento/imagen/campo), con su edición.
+  const nodeCssRect = (nid: string): { left: number; top: number; width: number; height: number } | null => {
+    const s = allSegments.find(x => x.id === nid);
+    if (s) { const e = effectiveGeometry(s, edits.get(s.id) ?? null); return pdfRectToCss({ x: e.x, y: e.y, width: e.width, height: e.height }, graph.height, scale); }
+    const im = graph.images.find(x => x.id === nid);
+    if (im) { const e = effectiveImageRect(im, imageEdits.get(im.id) ?? null); return pdfRectToCss({ x: e.x, y: e.y, width: e.width, height: e.height }, graph.height, scale); }
+    const w = graph.widgets.find(x => x.id === nid);
+    if (w) { const e = effectiveWidgetRect(w, widgetEdits.get(w.id) ?? null); return pdfRectToCss({ x: e.x, y: e.y, width: e.width, height: e.height }, graph.height, scale); }
+    return null;
+  };
+
+  // Mover TODO el grupo (delta CSS): a cada nodo su patch de posición. CSS
+  // hacia abajo = y del PDF baja (baseline/y decrecen).
+  const moveGroup = (dxCss: number, dyCss: number) => {
+    const dxPt = round1(dxCss / scale);
+    const dyPt = round1(-dyCss / scale);
+    for (const nid of multiSel) {
+      const s = allSegments.find(x => x.id === nid);
+      if (s) { const e = effectiveGeometry(s, edits.get(s.id) ?? null); const m = mergeSegmentEdit(s, edits.get(s.id) ?? null, { x: round1(e.x + dxPt), baseline: round1(e.baseline + dyPt) }); onEdit(m ?? { segmentId: s.id, revert: true }); continue; }
+      const im = graph.images.find(x => x.id === nid);
+      if (im) { const e = effectiveImageRect(im, imageEdits.get(im.id) ?? null); const m = mergeImageEdit(im, imageEdits.get(im.id) ?? null, { x: round1(e.x + dxPt), y: round1(e.y + dyPt) }); onImageEdit(m ?? { imageId: im.id, revert: true }); continue; }
+      const w = graph.widgets.find(x => x.id === nid);
+      if (w) { const e = effectiveWidgetRect(w, widgetEdits.get(w.id) ?? null); const m = mergeWidgetEdit(w, widgetEdits.get(w.id) ?? null, { x: round1(e.x + dxPt), y: round1(e.y + dyPt) }); onWidgetEdit(m ?? { widgetId: w.id, revert: true }); }
+    }
+  };
+
+  const groupBBox = () => {
+    let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+    for (const nid of multiSel) {
+      const cr = nodeCssRect(nid);
+      if (!cr) continue;
+      l = Math.min(l, cr.left); t = Math.min(t, cr.top);
+      r = Math.max(r, cr.left + cr.width); b = Math.max(b, cr.top + cr.height);
+    }
+    return l === Infinity ? null : { left: l, top: t, width: r - l, height: b - t };
+  };
+
+  return (
+    <div
+      className={`node-overlay${placing ? ' placing' : ''}`}
+      onClick={e => {
+        if (placing) {
+          const r = e.currentTarget.getBoundingClientRect();
+          const p = cssPointToPdf(e.clientX - r.left, e.clientY - r.top, graph.height, scale);
+          onPlace(p.x, p.y);
+        }
+      }}
+      onPointerDown={e => {
+        // Solo en el FONDO (los nodos hacen stopPropagation): arranca marquee.
+        if (placing || e.button !== 0 || e.target !== e.currentTarget) return;
+        const host = e.currentTarget.getBoundingClientRect();
+        marqueeStart.current = { x: e.clientX - host.left, y: e.clientY - host.top, hostL: host.left, hostT: host.top };
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }}
+      onPointerMove={e => {
+        const st = marqueeStart.current;
+        if (!st) return;
+        const x = e.clientX - st.hostL, y = e.clientY - st.hostT;
+        setMarquee({ l: Math.min(st.x, x), t: Math.min(st.y, y), w: Math.abs(x - st.x), h: Math.abs(y - st.y) });
+      }}
+      onPointerUp={e => {
+        const st = marqueeStart.current;
+        marqueeStart.current = null;
+        if (!st) return;
+        const x = e.clientX - st.hostL, y = e.clientY - st.hostT;
+        const dragged = Math.abs(x - st.x) + Math.abs(y - st.y) > 4;
+        setMarquee(null);
+        if (!dragged) { selectNode(null); return; } // click vacío = deseleccionar
+        const box = { l: Math.min(st.x, x), t: Math.min(st.y, y), r: Math.max(st.x, x), b: Math.max(st.y, y) };
+        const hit = new Set<string>();
+        const test = (nid: string) => {
+          if (locked.has(nid)) return;
+          const cr = nodeCssRect(nid);
+          if (cr && cr.left < box.r && cr.left + cr.width > box.l && cr.top < box.b && cr.top + cr.height > box.t) hit.add(nid);
+        };
+        allSegments.forEach(s => test(s.id));
+        graph.images.forEach(im => test(im.id));
+        graph.widgets.forEach(w => test(w.id));
+        setMultiSel(hit);
+        // 1 nodo = selección normal (con su barra); 2+ = grupo (sin primario).
+        onSelect(hit.size === 1 ? [...hit][0] : null);
+      }}
+    >
+      {graph.images.map(img => (
+        <ImageBox
+          key={img.id}
+          groupMode={multiSel.size > 1}
+          img={img}
+          pageWidth={graph.width}
+          pageHeight={graph.height}
+          scale={scale}
+          selected={selectedId === img.id || multiSel.has(img.id)}
+          edit={imageEdits.get(img.id) ?? null}
+          isLocked={locked.has(img.id)}
+          snapshot={snapshot}
+          cleanPixels={imagePixels.get(img.id) ?? null}
+          onSelect={() => selectNode(img.id)}
+          onPatch={patch => {
+            const merged = mergeImageEdit(img, imageEdits.get(img.id) ?? null, patch);
+            onImageEdit(merged ?? { imageId: img.id, revert: true });
+          }}
+          onDragging={onDragging}
+        />
+      ))}
+      {allSegments.map(seg => (
+        <SegmentBox
+          key={seg.id}
+          groupMode={multiSel.size > 1}
+          seg={seg}
+          pageWidth={graph.width}
+          pageHeight={graph.height}
+          scale={scale}
+          selected={selectedId === seg.id || multiSel.has(seg.id)}
+          editing={editingId === seg.id}
+          edit={edits.get(seg.id) ?? null}
+          onCanvas={inGraph.has(seg.id)}
+          isLocked={locked.has(seg.id)}
+          onDragging={(active, committed) => onDragging(seg.id, active, committed)}
+          area={areaWidths.get(seg.id) ?? null}
+          onArea={a => onAreaWidth(seg.id, a)}
+          onSelect={() => selectNode(seg.id)}
+          onStartEdit={() => { selectNode(seg.id); openSegEditor(seg); }}
+          onPatch={patch => {
+            const merged = mergeSegmentEdit(seg, edits.get(seg.id) ?? null, patch);
+            onEdit(merged ?? { segmentId: seg.id, revert: true });
+          }}
+          onDocOp={onDocOp}
+          onRequestLink={onRequestLink}
+          onAddText={onAddText}
+          highlightColor={highlightColor}
+          onHighlightColor={onHighlightColor}
+        />
+      ))}
+      {/* Los widgets al FINAL del DOM = arriba de todo para el mouse (como en
+          el PDF: las anotaciones se dibujan sobre el contenido). Una imagen
+          full-page nunca puede taparles los clicks. */}
+      {graph.widgets.map(w => (
+        <WidgetBox
+          key={w.id}
+          groupMode={multiSel.size > 1}
+          widget={w}
+          pageWidth={graph.width}
+          pageHeight={graph.height}
+          scale={scale}
+          selected={selectedId === w.id || multiSel.has(w.id)}
+          edit={widgetEdits.get(w.id) ?? null}
+          isLocked={locked.has(w.id)}
+          snapshot={snapshot}
+          onSelect={() => selectNode(w.id)}
+          onPatch={patch => {
+            const merged = mergeWidgetEdit(w, widgetEdits.get(w.id) ?? null, patch);
+            onWidgetEdit(merged ?? { widgetId: w.id, revert: true });
+          }}
+        />
+      ))}
+      {/* Marquee de selección múltiple (mientras se arrastra en el fondo). */}
+      {marquee && (
+        <div className="marquee" style={{ left: marquee.l, top: marquee.t, width: marquee.w, height: marquee.h }} />
+      )}
+      {/* Caja de GRUPO (2+ seleccionados): arrastrar mueve todos; resalta los
+          segmentos (UN solo item de historial — { items }); borra todos. */}
+      {multiSel.size > 1 && <GroupBox bbox={groupBBox()} count={multiSel.size} onMove={moveGroup} onHighlight={(() => {
+        const segs = [...multiSel].map(nid => allSegments.find(x => x.id === nid)).filter((s): s is SegmentNode => !!s);
+        if (!segs.length) return undefined;
+        return () => onDocOp('highlight', {
+          items: segs.map(s => {
+            const e = effectiveGeometry(s, edits.get(s.id) ?? null);
+            return { page: s.page, segmentId: s.id, x: e.x, y: e.y, width: e.width, height: e.height, color: highlightColor };
+          }),
+        });
+      })()} onDelete={() => {
+        for (const nid of multiSel) {
+          const s = allSegments.find(x => x.id === nid);
+          if (s) { const m = mergeSegmentEdit(s, edits.get(s.id) ?? null, { remove: true }); if (m) onEdit(m); continue; }
+          const im = graph.images.find(x => x.id === nid);
+          if (im) { const m = mergeImageEdit(im, imageEdits.get(im.id) ?? null, { remove: true }); if (m) onImageEdit(m); continue; }
+          const w = graph.widgets.find(x => x.id === nid);
+          if (w) { const m = mergeWidgetEdit(w, widgetEdits.get(w.id) ?? null, { remove: true }); if (m) onWidgetEdit(m); }
+        }
+        setMultiSel(new Set());
+      }} onClear={() => { setMultiSel(new Set()); onSelect(null); }} />}
+      {/* EL editor de texto: singleton imperativo, SIEMPRE montado — inmune al
+          churn de grafos/previews (ver TextEditLayer). */}
+      <TextEditLayer ref={layerRef} onClosed={onLayerClosed} />
+    </div>
+  );
+}

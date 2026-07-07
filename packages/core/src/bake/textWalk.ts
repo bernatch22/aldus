@@ -11,6 +11,7 @@
  */
 
 import { tokenizeContentStream, type OpRecord } from './tokenizer.js';
+import { isWhiteFill } from './color.js';
 
 export type Matrix = [number, number, number, number, number, number];
 
@@ -81,22 +82,6 @@ export interface ContentWalk {
    *  hoja). Insertar en el byte 0 dejaría el bloque bajo ese papel opaco.
    *  `ctm` = CTM vigente ahí (la matriz emitida debe ser relativa: abs×inv). */
   backstop: { offset: number; ctm: Matrix };
-}
-
-/** ¿El operador de relleno crudo pinta blanco (papel)? '' = negro por defecto. */
-function isWhiteFill(rawFill: string): boolean {
-  const toks = rawFill.trim().split(/\s+/);
-  if (toks.length < 2) return false;
-  const nums = toks.filter(t => /^[-+.\d]/.test(t)).map(Number).filter(Number.isFinite);
-  const op = toks[toks.length - 1];
-  if (op === 'g' && nums.length >= 1) return nums[nums.length - 1] >= 0.99;
-  if (op === 'rg' && nums.length >= 3) return nums.slice(-3).every(v => v >= 0.99);
-  if (op === 'k' && nums.length >= 4) return nums.slice(-4).every(v => v <= 0.01);
-  if ((op === 'sc' || op === 'scn') && nums.length >= 1) {
-    const vals = nums.slice(-Math.min(nums.length, 3));
-    return vals.every(v => v >= 0.99);
-  }
-  return false;
 }
 
 export function walkTextOps(src: Uint8Array): ShowOp[] {

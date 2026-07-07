@@ -14,7 +14,9 @@
  * Necesita `fontExtraProperties: true` en getDocument (pdf.js conserva
  * font.data). styledDom la usa como fallback inmediato del loadedName.
  */
-import type { PageGraph } from '@aldus/core';
+import { createLogger, type PageGraph } from '@aldus/core';
+
+const log = createLogger('aldus:fonts');
 
 const registered = new Set<string>();
 
@@ -37,16 +39,16 @@ export function registerPageFonts(
       try {
         const obj = page.commonObjs.get(f.loadedName) as { data?: Uint8Array } | null;
         if (!obj?.data) {
-          console.warn('[aldus:fonts] SIN BYTES para', f.loadedName, f.postScriptName, '— fantasma caerá al bucket', f.bucket);
+          log('SIN BYTES para', f.loadedName, f.postScriptName, '— fantasma caerá al bucket', f.bucket);
           continue;
         }
         const ff = new FontFace(fam, obj.data.slice());
         document.fonts.add(ff);
         void ff.load()
-          .then(() => console.log('[aldus:fonts] registrada', fam, '←', f.loadedName))
-          .catch(err => { document.fonts.delete(ff); console.warn('[aldus:fonts] load FALLÓ', fam, err); });
+          .then(() => log('registrada', fam, '←', f.loadedName))
+          .catch(err => { document.fonts.delete(ff); log('load FALLÓ', fam, err); });
       } catch (err) {
-        console.warn('[aldus:fonts] commonObjs sin', f.loadedName, '(', f.postScriptName, ')', err);
+        log('commonObjs sin', f.loadedName, '(', f.postScriptName, ')', err);
       }
     }
   }

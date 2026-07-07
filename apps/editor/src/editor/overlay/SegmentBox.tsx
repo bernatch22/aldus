@@ -1,0 +1,200 @@
+/**
+ * SegmentBox — el box del SEGMENTO (la unidad de edición). Seleccionar,
+ * arrastrar (mover), doble click (editar in situ vía el TextEditLayer), grip
+ * (ampliar el área tipeable). La edición vive en el TextEditLayer (singleton
+ * imperativo) — este box solo la solicita (onStartEdit) y se cubre con el layer
+ * mientras dura.
+ */
+import { useEffect } from 'react';
+import {
+  effectiveGeometry,
+  pdfRectToCss,
+  type SegmentEdit,
+  type SegmentNode,
+  type SegmentPatch,
+} from '@aldus/core';
+import { round1, seedHtml } from '../styledDom';
+import { clampX, containerStyle, dbgStyles } from './helpers';
+import { FloatingBar } from './FloatingBar';
+import { useDragGesture } from './useDragGesture';
+import { useGripResize } from './useGripResize';
+import type { AddTextRequest } from './types';
+
+interface SegmentBoxProps {
+  seg: SegmentNode;
+  pageWidth: number;
+  pageHeight: number;
+  scale: number;
+  selected: boolean;
+  editing: boolean;
+  edit: SegmentEdit | null;
+  /** El segmento sigue en el grafo del preview (el canvas AÚN lo muestra) — el
+   *  extirpado del re-bake no llegó todavía. Con edición pendiente, ese lapso
+   *  necesita una máscara OPACA (si no, el original del canvas se transparenta
+   *  bajo el fantasma y se ve "roto" unos ms). */
+  onCanvas: boolean;
+  isLocked: boolean;
+  onDragging: (active: boolean, committed?: boolean) => void;
+  /** Ancho de área tipeable (pt) fijado por el grip, o null (= ancho natural). */
+  area: { w?: number; h?: number } | null;
+  onArea: (a: { w?: number; h?: number } | null) => void;
+  /** Selección múltiple activa: el box solo muestra highlight (la barra y el
+   *  grip los maneja la caja de grupo). */
+  groupMode?: boolean;
+  onSelect: () => void;
+  onStartEdit: () => void;
+  onPatch: (patch: SegmentPatch) => void;
+  onDocOp: (action: string, params: Record<string, unknown>) => void;
+  onRequestLink: (target: { page: number; x: number; y: number; width: number; height: number }) => void;
+  onAddText: (req: AddTextRequest) => void;
+  highlightColor: string;
+  onHighlightColor: (c: string) => void;
+}
+
+export function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editing, edit, onCanvas, isLocked, onDragging, area, onArea, groupMode, onSelect, onStartEdit, onPatch, onDocOp, onRequestLink, highlightColor, onHighlightColor }: SegmentBoxProps) {
+  const eff = effectiveGeometry(seg, edit);
+  const rect = pdfRectToCss({ x: eff.x, y: eff.y, width: eff.width, height: eff.height }, pageHeight, scale);
+
+  // La EDICIÓN vive en el TextEditLayer (singleton imperativo, arriba) — este
+  // box solo la solicita (onStartEdit) y se cubre con el layer mientras dura.
+
+  // Multilínea (breaklines) + área tipeable: derivados usados por el render Y
+  // por el grip (su map/commit clampea a estos límites).
+  const html = seedHtml(seg, edit, scale);
+  // MULTILÍNEA (breaklines): la caja debe cubrir TODAS las líneas — si no, el
+  // click/mask solo tomaba la primera. Alto = n × leading (1.2×size, el mismo
+  // del bake); una sola línea usa el alto natural del segmento.
+  const nLines = (edit?.text ?? seg.text).split('\n').length;
+  const lineHpx = eff.fontSize * 1.2 * scale;
+  const contentH = nLines > 1 ? nLines * lineHpx : rect.height;
+  const boxLineH = nLines > 1 ? lineHpx : rect.height;
+  // Área tipeable (afordance): el grip la amplía ancho Y ALTO más allá del
+  // contenido. En vivo = gripSize; persistido = area {w,h} (pt).
+  const areaWpx = Math.max(rect.width, area?.w != null ? area.w * scale : 0);
+  const areaHpx = Math.max(contentH, area?.h != null ? area.h * scale : 0);
+
+  const gesture = useDragGesture({
+    onDown: () => {
+      // Arrastrar directo, sin pre-seleccionar: el pointerdown selecciona
+      // Y arma el drag en el mismo gesto.
+      if (editing) return false;
+      if (!selected) onSelect();
+    },
+    onStart: () => {
+      dbgStyles('drag-start', seg, edit);
+      // El gesto arrancó: PdfCanvas blitea el lift pre-horneado (la
+      // página sin este texto) — el original se esfuma al "levantarlo".
+      onDragging(true);
+    },
+    onDrop: (_e, { dx, dy }) => {
+      const nx = round1(clampX(eff.x + dx / scale, eff.width, pageWidth));
+      const nb = round1(Math.min(Math.max(eff.baseline - dy / scale, 8), pageHeight - 4));
+      const noop = edit == null && nx === round1(seg.x) && nb === round1(seg.baseline);
+      if (noop) {
+        // Soltó donde estaba: nada que commitear — cancelar el lift.
+        onDragging(false, false);
+        return;
+      }
+      dbgStyles('drop', seg, edit, { drop: { nx, nb } });
+      // El commit y el fin del arrastre van en el MISMO lote de estado: el
+      // preview re-horneado tendrá píxeles idénticos al lift ya visible.
+      onPatch({
+        x: nx === round1(seg.x) ? null : nx,
+        baseline: nb === round1(seg.baseline) ? null : nb,
+      });
+      onDragging(false, true);
+    },
+    onCancel: () => { onDragging(false, false); },
+  });
+  const drag = gesture.delta;
+
+  const grip = useGripResize<{ w: number; h: number }>({
+    map: (dx, dy) => ({
+      w: Math.max(rect.width, areaWpx + dx),
+      h: Math.max(contentH, areaHpx + dy),
+    }),
+    onCommit: (dx, dy) => {
+      const w = Math.max(rect.width, areaWpx + dx);
+      const h = Math.max(contentH, areaHpx + dy);
+      const wPt = round1(w / scale);
+      const hPt = round1(h / scale);
+      // Volver al tamaño natural (o menos) limpia esa dimensión.
+      onArea({
+        w: wPt <= round1(eff.width) + 1 ? undefined : wPt,
+        h: hPt <= round1(contentH / scale) + 1 ? undefined : hPt,
+      });
+    },
+  });
+  const gripSize = grip.size;
+
+  // DEBUG temporal: cada vez que un segmento EDITADO se re-renderiza (cambia
+  // el edit o llega el seg fantasma del grafo nuevo), volcar sus estilos.
+  useEffect(() => {
+    if (edit) dbgStyles('render-edited', seg, edit, { editing, drag: drag != null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edit, seg]);
+
+  // Sin velos ni masks: la extirpación del original arranca CON el gesto
+  // (onDragging) — para cuando el usuario suelta, el canvas ya no tiene los
+  // glifos viejos. El único transitorio es el original desvaneciéndose una
+  // fracción de segundo al arrancar el drag (el bake local aterrizando).
+
+  // Segmento eliminado: el preview local lo extirpa — nada que dibujar
+  // (Ctrl+Z lo restaura).
+  if (edit?.remove) return null;
+
+  // Un segmento con edición pendiente fue EXTIRPADO del preview: este box
+  // fantasma dibuja el estado nuevo (transparente — flota sobre lo que haya).
+  // Mientras el TextEditLayer está abierto sobre él, su fondo blanco lo cubre.
+  const masked = editing || edit != null || drag != null;
+  const boxHeight = gripSize?.h ?? areaHpx;
+  // ¿La edición MUEVE el segmento? El box está en la posición NUEVA — su fondo
+  // NO debe ser blanco (taparía el destino con un flash). Solo un edit EN EL
+  // LUGAR (texto/estilo, misma posición) usa el fondo opaco para tapar lo viejo
+  // hasta el extirpado; el original de un movido lo oculta el lift.
+  const moved = !!edit && (edit.x != null || edit.baseline != null);
+
+  return (
+    <>
+      {selected && !isLocked && !groupMode && (
+        <FloatingBar seg={seg} edit={edit} rect={rect} pageWidth={pageWidth} frameWpt={areaWpx / scale} onPatch={onPatch} onDocOp={onDocOp} onRequestLink={onRequestLink} highlightColor={highlightColor} onHighlightColor={onHighlightColor} />
+      )}
+      <div
+        className={`seg-box${selected ? ' selected' : ''}${masked ? ' masked' : ''}${edit ? ' edited' : ''}${editing ? ' editing' : ''}${isLocked ? ' locked' : ''}${edit && onCanvas && !moved ? ' on-canvas' : ''}`}
+        style={{
+          left: rect.left,
+          top: rect.top,
+          // El ÁREA tipeable: el grip la amplía más allá del contenido (ancho
+          // y alto — espacio para escribir sin que "salte"). Alineado = ancho
+          // DEFINIDO (el frame del text-align).
+          minWidth: gripSize?.w ?? areaWpx,
+          ...(edit?.align ? { width: gripSize?.w ?? areaWpx } : {}),
+          height: boxHeight,
+          lineHeight: `${boxLineH}px`,
+          transform: drag ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined,
+          transformOrigin: 'left bottom',
+        }}
+        onClick={e => { e.stopPropagation(); onSelect(); }}
+        onDoubleClick={e => { e.stopPropagation(); onStartEdit(); }}
+        {...gesture.handlers}
+        title={editing ? undefined : (edit?.text ?? seg.text)}
+      >
+        {masked && (
+          <div
+            className="seg-text"
+            style={{ ...containerStyle(seg, edit, scale), ...(edit?.align ? { width: '100%', textAlign: edit.align } : {}) }}
+            dangerouslySetInnerHTML={{ __html: html }}
+          />
+        )}
+        {!editing && !isLocked && !groupMode && (
+          <div
+            className="seg-grip"
+            title="Ampliar el área de texto (ancho y alto; la letra no cambia)"
+            {...grip.handlers}
+            onDoubleClick={e => e.stopPropagation()}
+          />
+        )}
+      </div>
+    </>
+  );
+}

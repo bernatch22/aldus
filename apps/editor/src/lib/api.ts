@@ -1,6 +1,7 @@
 /** Cliente del server de Aldus. Un solo origen (/api, proxied por Vite). */
 
 import type { ImageEdit, SegmentEdit, WidgetEdit, WidgetKind } from '@aldus/core';
+import { readNdjson } from './ndjson';
 
 export interface DocMeta {
   id: string;
@@ -13,6 +14,19 @@ export interface DocMeta {
 export type AgentEvent =
   | { type: 'text'; delta: string }
   | { type: 'tool'; name: string };
+
+interface AgentDone {
+  sessionId?: string;
+  toolCalls: number;
+  edits: SegmentEdit[];
+  imageEdits: ImageEdit[];
+}
+
+/** El protocolo completo del wire: eventos en vivo + terminales. */
+type AgentWireEvent =
+  | AgentEvent
+  | { type: 'done'; sessionId?: string; toolCalls?: number; edits?: SegmentEdit[]; imageEdits?: ImageEdit[] }
+  | { type: 'error'; error?: string };
 
 async function ok<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -80,7 +94,7 @@ export const api = {
     imageEdits: ImageEdit[] = [],
     resume: string | undefined,
     onEvent: (ev: AgentEvent) => void,
-  ): Promise<{ sessionId?: string; toolCalls: number; edits: SegmentEdit[]; imageEdits: ImageEdit[] }> => {
+  ): Promise<AgentDone> => {
     const res = await fetch(`/api/documents/${id}/agent`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -90,26 +104,14 @@ export const api = {
       const body = await res.json().catch(() => null) as { error?: string } | null;
       throw new Error(body?.error || `${res.status} ${res.statusText}`);
     }
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    let final: { sessionId?: string; toolCalls: number; edits: SegmentEdit[]; imageEdits: ImageEdit[] } | undefined;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let nl: number;
-      while ((nl = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (!line) continue;
-        let ev: AgentEvent & { error?: string; sessionId?: string; toolCalls?: number; edits?: SegmentEdit[]; imageEdits?: ImageEdit[] };
-        try { ev = JSON.parse(line); } catch { continue; }
-        if (ev.type === 'done') final = { sessionId: ev.sessionId, toolCalls: ev.toolCalls ?? 0, edits: ev.edits ?? [], imageEdits: ev.imageEdits ?? [] };
-        else if (ev.type === 'error') throw new Error(ev.error || 'El agente falló.');
-        else onEvent(ev);
-      }
-    }
+    let final: AgentDone | undefined;
+    let failure: Error | undefined;
+    await readNdjson<AgentWireEvent>(res.body, ev => {
+      if (ev.type === 'done') final = { sessionId: ev.sessionId, toolCalls: ev.toolCalls ?? 0, edits: ev.edits ?? [], imageEdits: ev.imageEdits ?? [] };
+      else if (ev.type === 'error') failure = new Error(ev.error || 'El agente falló.');
+      else onEvent(ev);
+    });
+    if (failure) throw failure;
     if (!final) throw new Error('El agente no devolvió un resultado.');
     return final;
   },

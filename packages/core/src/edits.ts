@@ -291,7 +291,7 @@ export function mergeSegmentEdit(
     const value = patch[key];
     if (value === undefined) continue;
     if (value === null) delete next[key];
-    else (next as Record<string, unknown>)[key] = value;
+    else (next as unknown as Record<string, unknown>)[key] = value;
   }
 
   const noop =
@@ -325,9 +325,23 @@ export function mergeImageEdit(img: ImageNode, prev: ImageEdit | null, patch: Im
     const value = patch[key];
     if (value === undefined) continue;
     if (value === null) delete next[key];
-    else (next as Record<string, unknown>)[key] = value;
+    else (next as unknown as Record<string, unknown>)[key] = value;
   }
   return IMAGE_KEYS.every(k => next[k] === undefined) ? null : next;
+}
+
+/**
+ * Al HORNEAR: las imágenes movidas/escaladas (sin zOrder explícito) se
+ * promueven a zOrder 'front' — el bake reubica EN SU LUGAR, así que sin esto
+ * podrían quedar tapadas por contenido posterior ("se mueven y desaparecen").
+ * ÚNICA fuente de verdad de la regla: la usan el editor (Aplicar) y el agente
+ * (EditSession.bake) — no la dupliques.
+ */
+export function promoteMovedImages(edits: ImageEdit[]): ImageEdit[] {
+  return edits.map(e =>
+    !e.remove && !e.zOrder && (e.x != null || e.y != null || e.width != null || e.height != null)
+      ? { ...e, zOrder: 'front' as const }
+      : e);
 }
 
 /** Rect EFECTIVO de una imagen con su edición aplicada. */
@@ -365,7 +379,7 @@ export function mergeWidgetEdit(w: WidgetNode, prev: WidgetEdit | null, patch: W
     const value = patch[key];
     if (value === undefined) continue;
     if (value === null) delete next[key];
-    else (next as Record<string, unknown>)[key] = value;
+    else (next as unknown as Record<string, unknown>)[key] = value;
   }
   return WIDGET_KEYS.every(k => next[k] === undefined) ? null : next;
 }

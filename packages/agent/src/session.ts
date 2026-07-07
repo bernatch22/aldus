@@ -7,7 +7,7 @@
  */
 import { writeFile } from 'node:fs/promises';
 import {
-  mergeSegmentEdit, mergeImageEdit, applyTextDiff, originalStyledRuns,
+  mergeSegmentEdit, mergeImageEdit, applyTextDiff, originalStyledRuns, promoteMovedImages,
   type SegmentEdit, type ImageEdit, type SegmentNode, type ImageNode,
 } from '@aldus/core';
 import { bakeSegmentEdits } from '@aldus/core/bake';
@@ -102,13 +102,9 @@ export class EditSession {
 
   /** Hornea las ediciones sobre el PDF original y devuelve los BYTES nuevos. */
   async bake(): Promise<{ pdf: Uint8Array; applied: string[]; warnings: string[] }> {
-    // AL HORNEAR: las imágenes movidas/escaladas van AL FRENTE (como el editor),
-    // si no podrían quedar tapadas por contenido posterior. El bake reubica EN SU
-    // LUGAR, así que sin esto "se mueven y desaparecen".
-    const imgs = [...this.imageEdits.values()].map(e =>
-      !e.remove && !e.zOrder && (e.x != null || e.y != null || e.width != null || e.height != null)
-        ? { ...e, zOrder: 'front' as const }
-        : e);
+    // La regla "movidas → zOrder front" vive en core (promoteMovedImages),
+    // compartida con el editor UI — una sola fuente de verdad.
+    const imgs = promoteMovedImages([...this.imageEdits.values()]);
     return bakeSegmentEdits(this.doc.bytes.slice(), [...this.edits.values()], imgs, []);
   }
 

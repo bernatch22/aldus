@@ -1,6 +1,7 @@
 node_modules/
 dist/
 apps/server/data/
+.drift-audit/
 *.log
 .DS_Store
 trades-2026-screenshot.png

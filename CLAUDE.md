@@ -3,8 +3,10 @@
 Editor de PDF que parsea el **grafo de contenido real** (operadores del content stream)
 y lo edita **in situ** — nunca pinta blanco encima ni redibuja con fuentes aproximadas.
 Nació como extracción/rewrite del editor de signwax (`~/signwax/packages/pdfkit`).
-Fase final pendiente: agente LLM (Claude Agent SDK + suscripción; spike verde en
-`packages/agent/src/spike.mjs`) e integración de vuelta en signwax (punto 5 del backlog).
+El agente LLM (CASPER: Claude Agent SDK + suscripción, streaming NDJSON) ya está
+integrado; fase final pendiente: integración de vuelta en signwax (punto 5 del backlog).
+Arquitectura estilo vscode-js-debug (skill global `art-of-code`): strategies, repository,
+memento — ver `docs/architecture.md`. Docs públicos EN (`README.md`, `docs/`); LICENSE MIT.
 
 ## Descubrimiento — megabrain PRIMERO (repo ya indexado)
 
@@ -20,12 +22,32 @@ Si conocés el string exacto (label, clase css, endpoint) → grep directo gana.
 
 ```
 packages/core    @aldus/core    modelo + extracción + BAKE (subpath ./bake trae pdf-lib)
-packages/agent   @aldus/agent   spike Agent SDK (tool custom + suscripción Claude Code)
+  src/bake/                     bake.ts = ORQUESTADOR (~100 líneas); módulos: tokenizer,
+                                textWalk, locate, splice, color, fonts, textEmit,
+                                text (STRATEGIES A/B/C), images, widgets, fallback,
+                                report (BakeReport), pageContent, createNodes, toUnicode
+packages/agent   @aldus/agent   agente Claude Agent SDK (config.ts = knobs env;
+                                examples/spike.mjs = el spike histórico)
 apps/editor      @aldus/editor  Vite+React+Tailwind v4+lucide (:5190, proxy /api→4100)
-apps/server      @aldus/server  Express+tsx (:4100) — upload, bake, ops, fields, images
+  src/pages/editor/             hooks de EditorPage: usePendingEdits+useHistory (Memento),
+                                useLocalPreview, useLift, useLocks, useAreaWidths,
+                                usePlacement, useEditorHotkeys
+  src/editor/overlay/           NodeOverlay descompuesto: SegmentBox/ImageBox/WidgetBox/
+                                GroupBox, FloatingBar/ObjectBar/toolbar, TextEditLayer
+                                (singleton), useDragGesture/useGripResize; el path viejo
+                                NodeOverlay.tsx es un re-export shim
+apps/server      @aldus/server  Express+tsx (:4100) — index.ts = boot (banner MAGI,
+                                localhost-only salvo ALDUS_ALLOW_REMOTE); routes/
+                                {documents,bake,ops,agent}; store.ts = DocStore
+                                (Repository, N revisiones .rev-<ts>.pdf, ALDUS_REVISIONS);
+                                validate.ts (requireDoc)
 ```
 Dev: `pnpm dev` (ambos). Tests: `pnpm -r test` (core: vitest ciclo REAL crear→extraer→
-bake→re-extraer; editor: jsdom sobre styledDom). Verificar SIEMPRE con build/test, no tsc.
+bake→re-extraer; editor: jsdom sobre styledDom + ndjson). Verificar SIEMPRE con build/test,
+no tsc (vite no typechequea; los errores de tsc --noEmit que existen son pre-existentes y
+conocidos). Debug logs SIEMPRE vía `createLogger('aldus:…')` de core, gateado por
+ALDUS_DEBUG / localStorage.aldusDebug — jamás console.log crudo en paths de producción.
+CI: `.github/workflows/ci.yml` (pnpm -r test + build del editor).
 
 ## El modelo (core/src/model.ts) — coordenadas: puntos PDF, origen abajo-izq, SIEMPRE
 
@@ -49,14 +71,22 @@ bake→re-extraer; editor: jsdom sobre styledDom). Verificar SIEMPRE con build/t
 
 `tokenizer.ts` (content stream completo con offsets de bytes) → `textWalk.ts` (máquina
 ISO 32000 §9.4: Tm/Td/TD/T*/TL/Tf/q/Q/cm + fill color + Do de XObjects; shows encadenados
-sin reposicionar = `stale` → el bake NO los toca, warning honesto) → `bake.ts`:
-- Localiza ops por GEOMETRÍA (original snapshot, tolerancia ~1.8pt) — nunca por índice.
-- Reemplazo IN-PLACE (`Splice {start,end,text}`) = z-order intacto. La matriz emitida es
-  RELATIVA al CTM del punto (`M_rel = M_abs × inv(ctm)` — invert() en textWalk).
-- Texto: (A) mover/escalar/reestilar → re-emite VERBATIM (bytes/kerning/color intactos,
-  Tc/Tz/color overridables); (B) texto nuevo → re-codifica con la fuente ORIGINAL vía
-  mapa inverso del /ToUnicode (`toUnicode.ts`); (C) subset insuficiente o cambio de
-  familia/estilo → fuente estándar (stdFontFor) PRESERVANDO color (rawFillToRgb del op).
+sin reposicionar = `stale` → el bake NO los toca, warning honesto) → `bake.ts` (orquestador;
+los detalles viven en módulos por responsabilidad — ver Estructura):
+- `locate.ts`: localiza ops por GEOMETRÍA (original snapshot, tolerancia ~1.8pt) — nunca
+  por índice. Resultados en `report.ts` (BakeReport: applied/warnings/colors — Builder).
+- `splice.ts`: reemplazo IN-PLACE (`Splice {start,end,text}`) = z-order intacto. La matriz
+  emitida es RELATIVA al CTM del punto (`M_rel = M_abs × inv(ctm)` — invert() en textWalk).
+- Texto en `text.ts` como **STRATEGIES** (`ITextEmitStrategy` {canHandle, emit}, probing
+  first-to-claim, catch-all al final — agregar un path = una clase + una entrada en
+  `textEmitStrategies`, NUNCA editar una hermana): (A) `VerbatimReemit` — mover/escalar/
+  reestilar → re-emite VERBATIM (bytes/kerning/color intactos, Tc/Tz/color overridables);
+  (B/C) `StyledRunsReemit` — texto nuevo → re-codifica con la fuente ORIGINAL vía mapa
+  inverso del /ToUnicode (`toUnicode.ts`); subset insuficiente o cambio de familia/estilo
+  → fuente estándar (`fonts.ts` stdFontFor, cola en `fallback.ts`) PRESERVANDO color
+  (`color.ts` rawFillToRgb del op).
+- `promoteMovedImages` (edits.ts): la regla "movida → zOrder front al guardar", ÚNICA
+  fuente de verdad compartida por el editor (bake) y el agente (EditSession.bake).
 - Imágenes: reubica el `Do` (solo Subtype /Image — JAMÁS un Form XObject: envuelve
   contenido); zOrder = re-emitir en el borde del stream. Widgets: /Annots → setRectangle/
   removeField + updateFieldAppearances. `createNodes.ts`: addText/addFormField (firma FT
@@ -65,20 +95,25 @@ sin reposicionar = `stale` → el bake NO los toca, warning honesto) → `bake.t
 
 ## El editor (apps/editor/src/)
 
-- `EditorPage`: estado = 4 colecciones pendientes (edits/imageEdits/widgetEdits/
-  pendingHighlights — NADA se guarda solo; el botón Aplicar manda todo a POST /bake) +
-  historial unificado undo/redo (snapshots de las 4, Ctrl+Z/Ctrl+Shift+Z) + locks
-  (localStorage, nodo bloqueado = pointer-events none, se administra desde el esquema) +
-  paleta de inserción (crosshair→click) + modales (ui/dialogs, NUNCA window.prompt).
+- `EditorPage` = SOLO composición y layout; cada comportamiento es un hook en
+  `pages/editor/`: `usePendingEdits` (4 colecciones pendientes edits/imageEdits/
+  widgetEdits/pendingHighlights — NADA se guarda solo; Aplicar manda todo a POST /bake —
+  + historial unificado `useHistory` (Memento, Ctrl+Z/Ctrl+Shift+Z) + segCache de
+  fantasmas), `useLocalPreview` (bytes base + bake local), `useLift` (la máquina de drag),
+  `useLocks` (localStorage, nodo bloqueado = pointer-events none), `useAreaWidths`,
+  `usePlacement` (paleta crosshair→click) y `useEditorHotkeys`. Modales en ui/dialogs,
+  NUNCA window.prompt.
 - **PREVIEW LOCAL**: imágenes/campos/highlights pendientes se hornean EN EL BROWSER
   (import dinámico de @aldus/core/bake) sobre `baseBytes` y se renderiza eso — WYSIWYG
   sin duplicados. ⚠️ el effect del preview NO puede depender de `graph` ni de funciones
   que lo capturen (loop de re-render = pantalla parpadeando); usar refs.
 - `PdfCanvas`: render HiDPI → snapshot jpeg (crops de drag) → extractPageGraph →
-  sampleRunColors (color por run desde píxeles). `NodeOverlay`: boxes por nodo (drag
-  directo con clamp, grips, `selectNode` fuerza blur del editor abierto al cambiar) +
+  sampleRunColors (color por run desde píxeles). `editor/overlay/`: boxes por nodo
+  (SegmentBox/ImageBox/WidgetBox/GroupBox — drag directo con clamp vía `useDragGesture`,
+  grips vía `useGripResize`, `selectNode` fuerza blur del editor abierto al cambiar) +
   `FloatingBar` (B/I/tamaño/color/align/highlight/link/trash — con editor abierto, estilo
-  y color van A LA SELECCIÓN vía SELECTION_STYLE_EVENT). `styledDom.ts` = puente
+  y color van A LA SELECCIÓN vía SELECTION_STYLE_EVENT) + `TextEditLayer` (singleton
+  imperativo, inmune al churn de grafos). `styledDom.ts` = puente
   modelo↔DOM (sin React, testeado en jsdom): spans data-b/data-i/data-c, serializeStyled
   (NUNCA innerText), fit horizontal por letter-spacing (técnica pdf.js), NBSP vía
   String.fromCharCode(0xa0) (el carácter crudo se corrompe al editar archivos).
@@ -94,3 +129,6 @@ sin reposicionar = `stale` → el bake NO los toca, warning honesto) → `bake.t
 - Imagen ≥80% de página: no se enmascara el origen en drags (taparía todo) → ghost marco.
 - `/ops` endpoint: addText/watermark/headerFooter/addLink/removeLink/setFieldOptions/
   addRadioOption (instantáneas); highlight NO — acumula y va en el body de /bake.
+- El server persiste con revisiones (`<id>.rev-<ts>.pdf`, últimas 10) — ya no hay `.bak`.
+- Los mensajes de `applied`/`warnings` del bake son API de facto (el editor los muestra,
+  los tests los matchean): NO traducirlos ni reformatearlos sin revisar consumidores.

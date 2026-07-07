@@ -30,10 +30,14 @@ export function HomePage() {
   return (
     <div className="mx-auto max-w-2xl px-6 py-16">
       <header className="mb-8 flex items-center gap-3">
-        <span className="grid h-11 w-11 place-items-center rounded-xl bg-blue-600 text-lg font-bold text-white">A</span>
+        <span
+          className="grid h-11 w-11 place-items-center bg-blue-600 text-lg font-bold text-white"
+          style={{ clipPath: 'polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)' }}
+        >A</span>
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-neutral-900">Aldus</h1>
           <p className="text-[13px] text-neutral-500">Edición pixel-perfect del grafo de contenido de un PDF.</p>
+          <p className="text-[11px] italic text-neutral-400">God's in his heaven. All's right with the PDF.</p>
         </div>
       </header>
 

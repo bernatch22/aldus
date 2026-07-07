@@ -1,5 +1,12 @@
 export { bakeSegmentEdits } from './bake.js';
-export type { BakeResult } from './bake.js';
+export type { BakeResult } from './report.js';
+export { BakeReport } from './report.js';
+export { textEmitStrategies } from './text.js';
+export type { ITextEmitStrategy, SegmentEmitContext } from './text.js';
+export { rebuild } from './splice.js';
+export type { Splice } from './splice.js';
+export { stdFontFor } from './fonts.js';
+export { hexToRg, rawFillToRgb, isWhiteFill } from './color.js';
 export { tokenizeContentStream } from './tokenizer.js';
 export type { OpRecord, Token } from './tokenizer.js';
 export { walkTextOps, walkContent } from './textWalk.js';

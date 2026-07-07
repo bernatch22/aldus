@@ -20,7 +20,7 @@ import {
   type PDFPage,
 } from 'pdf-lib';
 import { FIELD_DEFAULT_SIZE, type FontBucket, type WidgetKind } from '../model.js';
-import { stdFontFor } from './bake.js';
+import { stdFontFor } from './fonts.js';
 export { FIELD_DEFAULT_SIZE };
 
 const hexToRgb = (hex: string) => {

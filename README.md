@@ -1,94 +1,91 @@
-# Aldus
+# Aldus // MAGI SYSTEM
 
-**Aldus** es un agente de edición de PDF **pixel-perfect**: parsea el grafo de contenido
-real del PDF (operadores de texto, gráficos, imágenes, forms) y lo edita **in situ** —
-no pinta blanco encima ni redibuja con fuentes aproximadas. El agente (Claude Agent SDK,
-Sonnet 5) ve el grafo del documento en su contexto y lo edita como si editara código.
+> *God's in his heaven. All's right with the PDF.*
 
-> Aldus Manutius inventó la itálica; Aldus Corp. creó PageMaker, el padre del
-> desktop publishing. Este Aldus edita PDFs con esa misma obsesión tipográfica.
+**Aldus is a pixel-perfect PDF editor that edits the document's real content
+graph — it never paints white boxes over your text and never redraws it with
+approximated fonts.** It parses the actual content-stream operators, lets you
+edit them in place (UI or LLM agent), and splices the result back byte-by-byte.
 
-## Por qué existe
+> Aldus Manutius invented italics; Aldus Corp. created PageMaker, the father
+> of desktop publishing. This Aldus edits PDFs with that same typographic
+> obsession.
 
-Extraído de `~/signwax` (`packages/pdfkit` + el editor de `apps/app`). La versión
-original funcionaba pero con dos límites de fondo:
+[Léeme en español](README.es.md) · [Architecture](docs/architecture.md) ·
+[Bake internals](docs/bake-internals.md) · [Coordinates](docs/coordinate-system.md) ·
+[Roadmap](docs/roadmap.md)
 
-1. **No es pixel-perfect.** `applyPdfEdits` nunca toca los operadores de contenido
-   (`Tj`/`TJ`) — enmascara con un rect blanco y redibuja encima con Helvetica estándar
-   (pdf-lib). Métricas distintas a la fuente embebida, baseline aproximada
-   (`baseline − height·0.3`), texto que "salta" al engancharse el `contentEditable`
-   (el browser layoutea con SUS fuentes, no con la del PDF).
-2. **El LLM era un solo tool-call** (`plan_edits`, SDK crudo + API key), sin loop de
-   agente ni verificación. Lo que SÍ funcionaba bien — y es la tesis de Aldus — es
-   darle al modelo el grafo serializado con geometría (`<line x y w h>`) para que
-   edite el documento como código.
+## Why this exists
 
-## Arquitectura (monorepo pnpm)
+Every web PDF "editor" cheats: it rasterizes, or it paints a white rectangle
+over the old text and draws new text on top with whatever font it has. Aldus
+does what Acrobat does — and is honest when it can't:
 
-```
-packages/core    @aldus/core    — el motor: modelo tipado del grafo (TextRunNode/LineNode
-                                  → PageGraph), extracción con geometría exacta (baseline
-                                  de la text matrix, métricas del font embebido), helpers
-                                  de coordenadas (pdfRectToCss, ÚNICA conversión). Próximo:
-                                  edición in-place del content stream, save incremental.
-packages/agent   @aldus/agent   — el agente: Claude Agent SDK + Sonnet, corre con la
-                                  suscripción de Claude Code (sin API key). Tools sobre
-                                  @aldus/core; el grafo del PDF entra al contexto y el
-                                  agente emite ediciones verificables. (spike verde)
-apps/editor      @aldus/editor  — el editor (Vite+React, :5190): upload → render pdf.js →
-                                  overlay de nodos. Los boxes usan el FontFace EMBEBIDO
-                                  que pdf.js registra (font.loadedName) + line-height =
-                                  ascent−descent ⇒ la baseline del browser cae sobre la
-                                  del PDF (sin corrimiento al click). Click = seleccionar,
-                                  doble click = editar in situ; Inspector muestra el grafo.
-apps/server      @aldus/server  — Express (:4100): upload de PDFs, servir bytes, persistir
-                                  ediciones (el bake sobre el content stream llega en core).
-```
+- **Move / scale / restyle text** → the original show operators are re-emitted
+  **verbatim** (same bytes, same font, same TJ kerning) with a relocated
+  matrix. Pixel-perfect.
+- **New text, same font** → re-encoded through the embedded font's reverse
+  `/ToUnicode` map. If a character is missing from the subset → explicit,
+  *reported* fallback.
+- **Font/style change** → embedded standard font, preserving the original
+  color. Explicit substitution, the Acrobat policy — never a silent guess.
+- **Can't locate a segment unambiguously?** It refuses to touch it and tells
+  you why. What isn't understood is never modified.
 
-Dev: `pnpm install && pnpm dev` (server :4100 + editor :5190).
+## The MAGI
 
-## Roadmap (tiers según el research de editores pro — Acrobat/Foxit/PDF Expert/Nitro)
-
-Hecho ✅: grafo tipado (run→segmento→línea), editor por segmentos anclados (gaps =
-fronteras, tab-stop gratis), fuente embebida + fit por letter-spacing, object
-properties (texto/B/I/tamaño/familia/x/baseline), mover por drag + nudge, grip de
-resize, **BAKE del content stream con tests** (extirpar ops + re-emitir verbatim;
-texto nuevo re-codificado vía /ToUnicode; sustitución explícita si el subset no
-alcanza — "Aplicar al PDF" en el editor).
-
-- **Tier 0 — restante:** reflow multi-línea DENTRO del bounding box del párrafo
-  (hoy el bake es por segmento/línea); exponer la **matriz de fuentes de 3 niveles**
-  en el picker (embebida-subset: solo atributos / sustitución con warning — el bake
-  ya la implementa por abajo).
-- **Tier 1 — table-stakes:** toolbar de formato (font/size/color/B/I/alineación; panel
-  fijo + floating mínima sobre selección), panel derecho con Geometría+Apariencia,
-  8 handles de resize, nudge por teclado, multi-select; **imágenes** (insert/replace/
-  move/resize/delete).
-- **Tier 2 — edición seria:** underline/sub-superscript/spacings; **listas** (Enter =
-  nuevo ítem + renumeración, Tab = indent — alcance Acrobat, no Word); **Link/Join/
-  Split de segmentos** (el feature estrella de Foxit — natural con nuestro modelo);
-  smart guides + align/distribute.
-- **Tier 3 — anotaciones (/Annots, ortogonal al bake):** highlight/underline/strikeout/
-  squiggly anclados a quads de segmentos; shapes; FreeText; links (go-to-page/URL).
-- **Tier 4 — form fields:** los 7 tipos AcroForm (text/checkbox/radio/combo/list/
-  button/signature; date = text+format) con propiedades General/Appearance/Options
-  (export values de radios incl.); luego Format/Validate/Calculate.
-- **Tier 5 — pro batch:** watermark, header/footer, page numbers, crop/rotate/opacity
-  de imagen, z-order, redacción (exige bake maduro), Bates.
-
-Clave arquitectural del spec (ISO 32000): **`/Contents` (content stream) y `/Annots`
-son capas distintas** — el bake solo aplica a la primera; el grafo distingue
-content-nodes de annotation-nodes desde el modelo.
-
-## Origen (mapa de extracción desde signwax)
-
-| De signwax | Hacia | Notas |
+| Unit | Package | Role |
 |---|---|---|
-| `packages/pdfkit/src/{extractPages,lineExtract}.ts` | `@aldus/core` | extracción de líneas + geometría; base del grafo |
-| `packages/pdfkit/src/{edit,runEditor,reflowParagraph}.ts` | `@aldus/core` | se REEMPLAZA el paint-over por edición real de operadores |
-| `apps/app/src/client/lib/pdfParagraphs.ts` | `@aldus/ui` | extractor browser-side (runs estilados + field chips) |
-| `apps/app/src/client/components/{EditableTextLayer,PdfPlacer}.tsx` | `@aldus/ui` | el overlay editor; se corrige el corrimiento |
-| `packages/pdfkit/src/{aiEdit,llm}.ts` | `@aldus/agent` | se REEMPLAZA por Claude Agent SDK + suscripción |
+| **MELCHIOR·1** | `packages/core` (`@aldus/core`) | The scientist — model, extraction, and the content-stream **bake** |
+| **BALTHASAR·2** | `apps/server` (`@aldus/server`) | The mother — Express API, document store with revisions |
+| **CASPER·3** | `packages/agent` (`@aldus/agent`) | The woman — LLM agent (Claude Agent SDK) with the PDF graph embedded in its prompt |
+| **NERV HQ** | `apps/editor` (`@aldus/editor`) | The UI — Vite + React, WYSIWYG local preview (the same bake, run in the browser) |
 
-Lo que NO viene: sealing, versioning, scan/validación, Wax — eso queda en signwax,
-que pasa a consumir Aldus.
+## Quickstart
+
+```bash
+pnpm install
+pnpm dev          # server :4100 + editor :5190
+```
+
+Open http://localhost:5190, drop a PDF, double-click any text.
+
+**The AI panel (CASPER)** talks to the document through the Claude Code
+subscription — run the server *without* `ANTHROPIC_API_KEY`. Every knob is
+documented in [`packages/agent/src/config.ts`](packages/agent/src/config.ts).
+
+## Testing philosophy
+
+```bash
+pnpm -r test
+```
+
+Core tests run the **real cycle**: create a PDF → extract its graph → bake
+edits into the content stream → re-extract → assert the world matches. No
+mocked PDFs, no golden pixels — the parser itself is the oracle. The editor's
+DOM bridge (`styledDom`) is tested headless in jsdom.
+
+## Project layout
+
+```
+packages/core     model + extraction + bake (./bake subpath isolates pdf-lib)
+  src/bake/       tokenizer → textWalk (ISO 32000 §9.4 machine) → splice
+                  text.ts holds the emit STRATEGIES (A/B/C above)
+packages/agent    the LLM agent + CLI (bin/aldus)
+apps/server       routes/ + DocStore (repository with N revisions)
+apps/editor       React editor; behaviors live in hooks (pages/editor/*)
+```
+
+The server is **localhost-only by design** (`ALDUS_ALLOW_REMOTE=1` to opt
+out — put your own auth in front). Debug logging is gated: `ALDUS_DEBUG=1`
+(Node) or `localStorage.aldusDebug = '1'` (browser).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). The short version: dependency
+direction is law, coordinates convert only in `coords.ts`, gap thresholds live
+only in `tokens.ts`, and the bake never guesses.
+
+## License
+
+[MIT](LICENSE) — Bernardo Castro.

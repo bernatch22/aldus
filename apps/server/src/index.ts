@@ -1,251 +1,43 @@
 /**
- * El server de Aldus. Fase 1: documentos como archivos en disco.
+ * BALTHASAR — the Aldus server. Boot only: composition of the store and the
+ * routes lives here; every behavior lives in its route module.
  *
- *   POST /api/documents            multipart {pdf}  → sube un PDF, devuelve la meta
- *   GET  /api/documents            lista (más reciente primero)
- *   GET  /api/documents/:id/pdf    los bytes
- *   PUT  /api/documents/:id/edits  persiste las ediciones del editor (JSON)
- *   GET  /api/documents/:id/edits  las ediciones guardadas
- *
- * El bake de ediciones sobre el content stream llega con @aldus/core fase de
- * escritura; hasta entonces el server es la fuente de verdad de PDF + edits.
+ * Security posture: localhost-only BY DESIGN (documents are baked on disk
+ * with no auth). Set ALDUS_ALLOW_REMOTE=1 to bind 0.0.0.0 — only do that
+ * behind your own auth/reverse proxy.
  */
-
 import express from 'express';
-import multer from 'multer';
-import { randomUUID } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  addFormField,
-  addHeaderFooter,
-  addHighlight,
-  addLink,
-  addRadioOption,
-  addText,
-  addWatermark,
-  bakeSegmentEdits,
-  insertImage,
-  removeLink,
-  setFieldOptions,
-} from '@aldus/core/bake';
-import { loadDoc, EditSession, runTurn } from '@aldus/agent';
+import { FileDocStore } from './store.js';
+import { documentsRouter } from './routes/documents.js';
+import { bakeRouter } from './routes/bake.js';
+import { opsRouter } from './routes/ops.js';
+import { agentRouter } from './routes/agent.js';
 
 const PORT = Number(process.env.ALDUS_PORT || 4100);
+const HOST = process.env.ALDUS_ALLOW_REMOTE ? '0.0.0.0' : '127.0.0.1';
 const DATA_DIR = process.env.ALDUS_DATA || path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
-mkdirSync(DATA_DIR, { recursive: true });
 
-interface DocMeta {
-  id: string;
-  name: string;
-  size: number;
-  uploadedAt: string;
-}
-
-const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const pdfPath = (id: string) => path.join(DATA_DIR, `${id}.pdf`);
-const metaPath = (id: string) => path.join(DATA_DIR, `${id}.json`);
-const editsPath = (id: string) => path.join(DATA_DIR, `${id}.edits.json`);
+const store = new FileDocStore(DATA_DIR);
 
 const app = express();
 app.use(express.json({ limit: '4mb' }));
 
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 },
-});
+app.use('/api/documents', documentsRouter(store));
+app.use('/api/documents', bakeRouter(store));
+app.use('/api/documents', opsRouter(store));
+app.use('/api/documents', agentRouter(store));
 
-app.post('/api/documents', upload.single('pdf'), (req, res) => {
-  const file = req.file;
-  if (!file) return res.status(400).json({ error: 'Falta el archivo (campo "pdf").' });
-  if (!file.buffer.subarray(0, 5).equals(Buffer.from('%PDF-'))) {
-    return res.status(400).json({ error: 'El archivo no es un PDF.' });
-  }
-  const meta: DocMeta = {
-    id: randomUUID(),
-    name: file.originalname || 'documento.pdf',
-    size: file.size,
-    uploadedAt: new Date().toISOString(),
-  };
-  writeFileSync(pdfPath(meta.id), file.buffer);
-  writeFileSync(metaPath(meta.id), JSON.stringify(meta, null, 2));
-  res.status(201).json(meta);
-});
-
-app.get('/api/documents', (_req, res) => {
-  const metas: DocMeta[] = readdirSync(DATA_DIR)
-    .filter(f => f.endsWith('.json') && !f.endsWith('.edits.json'))
-    .map(f => JSON.parse(readFileSync(path.join(DATA_DIR, f), 'utf8')) as DocMeta)
-    .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
-  res.json(metas);
-});
-
-app.get('/api/documents/:id/pdf', (req, res) => {
-  const { id } = req.params;
-  if (!ID_RE.test(id) || !existsSync(pdfPath(id))) return res.status(404).json({ error: 'No existe.' });
-  res.type('application/pdf').send(readFileSync(pdfPath(id)));
-});
-
-app.put('/api/documents/:id/edits', (req, res) => {
-  const { id } = req.params;
-  if (!ID_RE.test(id) || !existsSync(pdfPath(id))) return res.status(404).json({ error: 'No existe.' });
-  const edits = req.body?.edits;
-  if (!Array.isArray(edits)) return res.status(400).json({ error: 'Body esperado: { edits: [...] }.' });
-  writeFileSync(editsPath(id), JSON.stringify({ edits, savedAt: new Date().toISOString() }, null, 2));
-  res.json({ ok: true, count: edits.length });
-});
-
-// Bake: aplica las ediciones AL PDF (content stream) y persiste el resultado.
-// El PDF anterior queda en .bak (un nivel de undo grueso).
-app.post('/api/documents/:id/bake', async (req, res) => {
-  const { id } = req.params;
-  if (!ID_RE.test(id) || !existsSync(pdfPath(id))) return res.status(404).json({ error: 'No existe.' });
-  const edits = Array.isArray(req.body?.edits) ? req.body.edits : [];
-  const imageEdits = Array.isArray(req.body?.imageEdits) ? req.body.imageEdits : [];
-  const widgetEdits = Array.isArray(req.body?.widgetEdits) ? req.body.widgetEdits : [];
-  const highlights = Array.isArray(req.body?.highlights) ? req.body.highlights : [];
-  if (edits.length === 0 && imageEdits.length === 0 && widgetEdits.length === 0 && highlights.length === 0) {
-    return res.status(400).json({ error: 'Body esperado: { edits, imageEdits, widgetEdits, highlights } con al menos una edición.' });
-  }
-  try {
-    const original = readFileSync(pdfPath(id));
-    let { pdf, applied, warnings } = await bakeSegmentEdits(new Uint8Array(original), edits, imageEdits, widgetEdits);
-    for (const h of highlights) {
-      ({ pdf } = await addHighlight(pdf, h));
-      applied.push(`highlight en p${h.page}`);
-    }
-    copyFileSync(pdfPath(id), `${pdfPath(id)}.bak`);
-    writeFileSync(pdfPath(id), Buffer.from(pdf));
-    res.json({ ok: true, applied, warnings });
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : 'No se pudo aplicar el bake.' });
-  }
-});
-
-// El AGENTE: corre un turno del LLM con el grafo del documento embebido en el
-// prompt. NO hornea — devuelve las ediciones acumuladas para que el editor las
-// aplique a su estado (mismo pipeline preview/guardar que una edición manual).
-// Auth por suscripción de Claude Code: el server debe correr SIN ANTHROPIC_API_KEY.
-app.post('/api/documents/:id/agent', async (req, res) => {
-  const { id } = req.params;
-  if (!ID_RE.test(id) || !existsSync(pdfPath(id))) return res.status(404).json({ error: 'No existe.' });
-  const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : '';
-  if (!prompt) return res.status(400).json({ error: 'Body esperado: { prompt } (+ edits, imageEdits, resume opcionales).' });
-  const edits = Array.isArray(req.body?.edits) ? req.body.edits : [];
-  const imageEdits = Array.isArray(req.body?.imageEdits) ? req.body.imageEdits : [];
-  const resume = typeof req.body?.resume === 'string' ? req.body.resume : undefined;
-  const t0 = Date.now();
-  console.log(`[agent] ← id=${id.slice(0, 8)} prompt=${JSON.stringify(prompt.slice(0, 60))} seed=${edits.length}+${imageEdits.length} resume=${resume ? 'sí' : 'no'}`);
-
-  // STREAMING NDJSON: una línea JSON por evento. El panel muestra la respuesta
-  // escribiéndose + las tools ejecutándose en vez de esperar mudo 20-40s.
-  res.setHeader('content-type', 'application/x-ndjson; charset=utf-8');
-  res.setHeader('cache-control', 'no-cache, no-transform');
-  res.setHeader('x-accel-buffering', 'no');
-  const write = (obj: unknown) => res.write(JSON.stringify(obj) + '\n');
-
-  try {
-    const doc = await loadDoc(pdfPath(id));
-    console.log(`[agent]   grafo cargado (${doc.pages.length} pág, ${Date.now() - t0}ms) — corriendo LLM…`);
-    const session = new EditSession(doc);
-    session.seed(edits, imageEdits);
-    const { sessionId, toolCalls } = await runTurn({ doc, session, prompt, resume, onEvent: write });
-    const out = session.getEdits();
-    console.log(`[agent] → OK ${Date.now() - t0}ms · toolCalls=${toolCalls} · edits=${out.edits.length}+${out.imageEdits.length}`);
-    write({ type: 'done', sessionId, toolCalls, edits: out.edits, imageEdits: out.imageEdits });
-  } catch (err) {
-    console.error(`[agent] ✗ ${Date.now() - t0}ms:`, err instanceof Error ? err.message : err);
-    write({ type: 'error', error: err instanceof Error ? err.message : 'El agente falló.' });
-  }
-  res.end();
-});
-
-// Crear un campo de formulario nuevo (texto/checkbox/radio/select/lista/botón/firma).
-app.post('/api/documents/:id/fields', async (req, res) => {
-  const { id } = req.params;
-  if (!ID_RE.test(id) || !existsSync(pdfPath(id))) return res.status(404).json({ error: 'No existe.' });
-  const { type, page, x, y, width, height, name } = req.body ?? {};
-  if (!type || !Number.isFinite(page) || !Number.isFinite(x) || !Number.isFinite(y)) {
-    return res.status(400).json({ error: 'Body esperado: { type, page, x, y, width?, height?, name? }.' });
-  }
-  try {
-    const original = readFileSync(pdfPath(id));
-    const { pdf, name: assigned } = await addFormField(new Uint8Array(original), { type, page, x, y, width, height, name });
-    copyFileSync(pdfPath(id), `${pdfPath(id)}.bak`);
-    writeFileSync(pdfPath(id), Buffer.from(pdf));
-    res.json({ ok: true, name: assigned });
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : 'No se pudo crear el campo.' });
-  }
-});
-
-// Operaciones de documento: texto nuevo, watermark, header/footer, highlight, links.
-app.post('/api/documents/:id/ops', async (req, res) => {
-  const { id } = req.params;
-  if (!ID_RE.test(id) || !existsSync(pdfPath(id))) return res.status(404).json({ error: 'No existe.' });
-  const { action, ...params } = req.body ?? {};
-  try {
-    const original = new Uint8Array(readFileSync(pdfPath(id)));
-    let pdf: Uint8Array;
-    switch (action) {
-      case 'addText': ({ pdf } = await addText(original, params)); break;
-      case 'watermark': ({ pdf } = await addWatermark(original, params)); break;
-      case 'headerFooter': ({ pdf } = await addHeaderFooter(original, params)); break;
-      case 'highlight': ({ pdf } = await addHighlight(original, params)); break;
-      case 'addLink': ({ pdf } = await addLink(original, params)); break;
-      case 'setFieldOptions': ({ pdf } = await setFieldOptions(original, params)); break;
-      case 'addRadioOption': ({ pdf } = await addRadioOption(original, params)); break;
-      case 'removeLink': {
-        const r = await removeLink(original, params);
-        if (!r.removed) return res.status(404).json({ error: 'Link no encontrado.' });
-        pdf = r.pdf;
-        break;
-      }
-      default: return res.status(400).json({ error: `Acción desconocida: ${action}` });
-    }
-    copyFileSync(pdfPath(id), `${pdfPath(id)}.bak`);
-    writeFileSync(pdfPath(id), Buffer.from(pdf));
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : 'No se pudo aplicar la operación.' });
-  }
-});
-
-// Insertar una imagen (PNG/JPEG) en el punto clickeado.
-app.post('/api/documents/:id/images', upload.single('image'), async (req, res) => {
-  const { id } = req.params;
-  if (!ID_RE.test(id) || !existsSync(pdfPath(id))) return res.status(404).json({ error: 'No existe.' });
-  const file = req.file;
-  const page = Number(req.body?.page);
-  const x = Number(req.body?.x);
-  const y = Number(req.body?.y);
-  if (!file || !Number.isFinite(page) || !Number.isFinite(x) || !Number.isFinite(y)) {
-    return res.status(400).json({ error: 'Esperado: multipart {image} + page/x/y.' });
-  }
-  if (!/^image\/(png|jpe?g)$/i.test(file.mimetype)) {
-    return res.status(400).json({ error: 'Solo PNG o JPEG.' });
-  }
-  try {
-    const original = readFileSync(pdfPath(id));
-    const { pdf, rect } = await insertImage(new Uint8Array(original), {
-      page, x, y, bytes: new Uint8Array(file.buffer), mime: file.mimetype,
-    });
-    copyFileSync(pdfPath(id), `${pdfPath(id)}.bak`);
-    writeFileSync(pdfPath(id), Buffer.from(pdf));
-    res.json({ ok: true, rect });
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : 'No se pudo insertar la imagen.' });
-  }
-});
-
-app.get('/api/documents/:id/edits', (req, res) => {
-  const { id } = req.params;
-  if (!ID_RE.test(id)) return res.status(404).json({ error: 'No existe.' });
-  if (!existsSync(editsPath(id))) return res.json({ edits: [], savedAt: null });
-  res.json(JSON.parse(readFileSync(editsPath(id), 'utf8')));
-});
-
-app.listen(PORT, () => {
-  console.log(`[aldus-server] listo en http://localhost:${PORT} (data: ${DATA_DIR})`);
+app.listen(PORT, HOST, () => {
+  console.log([
+    '┌─────────────────────────────────────────────┐',
+    '│  A L D U S  //  M A G I   S Y S T E M       │',
+    '│                                             │',
+    '│  MELCHIOR·1  (core)    ............... OK   │',
+    '│  BALTHASAR·2 (server)  ............... OK   │',
+    '│  CASPER·3    (agent)   ........... STANDBY  │',
+    '└─────────────────────────────────────────────┘',
+  ].join('\n'));
+  console.log(`[aldus-server] listo en http://${HOST === '0.0.0.0' ? '0.0.0.0' : 'localhost'}:${PORT} (data: ${DATA_DIR})`);
 });

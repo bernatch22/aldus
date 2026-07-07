@@ -86,8 +86,8 @@ export function AgentPanel({ docId, edits, imageEdits, onApply, onClose }: Props
       <style>{MD_STYLES}</style>
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-3">
         <Sparkles size={16} className="text-blue-600" />
-        <span className="text-[13px] font-semibold text-neutral-900">Aldus AI</span>
-        <span className="text-[11px] text-neutral-400">· preguntá o pedí cambios</span>
+        <span className="text-[13px] font-semibold tracking-wide text-neutral-900">CASPER</span>
+        <span className="text-[11px] text-neutral-400">· MAGI-3 · preguntá o pedí cambios</span>
         <div className="flex-1" />
         <button onClick={onClose} title="Cerrar" className="grid h-7 w-7 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100">
           <X size={15} />
@@ -127,7 +127,7 @@ export function AgentPanel({ docId, edits, imageEdits, onApply, onClose }: Props
               )}
               {m.role === 'assistant'
                 ? (m.streaming && !m.text && (!m.tools || m.tools.length === 0)
-                    ? <span className="text-neutral-400">Pensando…</span>
+                    ? <span className="font-mono text-[11px] tracking-widest text-neutral-400">PATTERN: ANALYZING…</span>
                     : <StreamingMarkdown text={m.text} active={!!m.streaming} />)
                 : m.text}
               {m.role === 'assistant' && !m.error && !m.streaming && typeof m.edits === 'number' && m.edits > 0 && (

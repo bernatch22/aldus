@@ -44,6 +44,32 @@ function streamToStdout(ev: AgentEvent): void {
   else if (ev.type === 'tool') process.stdout.write(`\n  · ${TOOL_LABEL[ev.name.replace('mcp__aldus__', '')] ?? ev.name}…\n`);
 }
 
+/** Spinner "pensando… Ns" mientras el modelo razona ANTES del primer token (un
+ *  doc grande + una tarea compleja tardan; sin esto parecía trancado). Solo en
+ *  TTY; en pipe no imprime nada. */
+function startSpinner(): { stop: () => void } {
+  if (!process.stdout.isTTY) return { stop() {} };
+  const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  const t0 = Date.now();
+  let i = 0;
+  const id = setInterval(() => {
+    process.stdout.write(`\r${frames[i++ % frames.length]} pensando… ${Math.round((Date.now() - t0) / 1000)}s`);
+  }, 120);
+  return { stop() { clearInterval(id); process.stdout.write('\r\x1b[K'); } };
+}
+
+/** Corre un turno mostrando el spinner hasta el PRIMER evento, luego streamea. */
+async function runTurnLive(opts: Parameters<typeof runTurn>[0]): Promise<Awaited<ReturnType<typeof runTurn>>> {
+  const spin = startSpinner();
+  let stopped = false;
+  const stop = () => { if (!stopped) { spin.stop(); stopped = true; } };
+  try {
+    return await runTurn({ ...opts, onEvent: ev => { stop(); opts.onEvent?.(ev); } });
+  } finally {
+    stop();
+  }
+}
+
 function usage(): never {
   console.error(`aldus — agente sobre el grafo de un PDF
 
@@ -125,7 +151,7 @@ async function main(): Promise<void> {
 
   // ── one-shot ──
   if (prompt) {
-    await runTurn({ doc, session, prompt, onEvent: streamToStdout });
+    await runTurnLive({ doc, session, prompt, onEvent: streamToStdout });
     process.stdout.write('\n');
     const out = values.out || defaultOut(file);
     if (session.count > 0) await save(session, out);
@@ -152,7 +178,7 @@ async function main(): Promise<void> {
         continue;
       }
       process.stdout.write('\n');
-      const { sessionId } = await runTurn({ doc, session, prompt: line, resume, onEvent: streamToStdout });
+      const { sessionId } = await runTurnLive({ doc, session, prompt: line, resume, onEvent: streamToStdout });
       resume = sessionId ?? resume;
       process.stdout.write('\n');
       if (session.count > 0) console.log(`  · ${session.count} edición(es) pendiente(s) — /save para hornear`);

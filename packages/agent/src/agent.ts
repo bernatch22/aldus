@@ -8,14 +8,15 @@
  * ANTHROPIC_API_KEY). Modelo override con ALDUS_MODEL.
  */
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { buildToolServer } from './tools.js';
+import { buildRouterServer, buildToolServer, type RouteRequest } from './tools.js';
 import { serializeDoc } from './serialize.js';
 import { config } from './config.js';
 import type { DocGraph } from './graph.js';
 import type { EditSession } from './session.js';
 
-export function systemPrompt(doc: DocGraph, page?: number): string {
+export function systemPrompt(doc: DocGraph, page?: number | number[]): string {
   const pages = doc.pages.length;
+  const scoped = page == null ? null : (Array.isArray(page) ? page : [page]);
   return [
     'Sos Aldus, un agente experto en documentos PDF. Tenés EMBEBIDO abajo el',
     'contenido completo del documento como un grafo. Sos CONSCIENTE de TODO:',
@@ -83,10 +84,43 @@ export function systemPrompt(doc: DocGraph, page?: number): string {
     'Respondé en el idioma del usuario, conciso. Si una edición es ambigua o el id',
     'no existe, decilo en vez de adivinar.',
     '',
-    page != null
-      ? `=== DOCUMENTO: ${doc.path} — MOSTRANDO SOLO LA PÁGINA ${page} (la que el usuario está viendo). Trabajá sobre ESA página; si el pedido es claramente de otra, pedile que la abra. ===`
+    scoped
+      ? `=== DOCUMENTO: ${doc.path} (${pages} páginas en total) — MOSTRANDO SOLO ${scoped.length === 1 ? `LA PÁGINA ${scoped[0]}` : `LAS PÁGINAS ${scoped.join(', ')}`}. Trabajá sobre esas páginas. ===`
       : `=== DOCUMENTO: ${doc.path} (${pages} ${pages === 1 ? 'página' : 'páginas'}) ===`,
     serializeDoc(doc, page),
+  ].join('\n');
+}
+
+/**
+ * System prompt del modelo CHAT (barato, primer nivel): describe/contesta desde
+ * el grafo de la página actual, y ante CUALQUIER modificación delega en el
+ * EDITOR vía edit_document({pages, request}) — no edita nada él mismo.
+ */
+export function chatSystemPrompt(doc: DocGraph, page?: number): string {
+  const total = doc.pages.length;
+  const current = page ?? 1;
+  return [
+    'Sos CASPER, el asistente del editor de PDF Aldus. Tenés embebido abajo el',
+    `grafo de la página ${current} (el documento tiene ${total} en total; el usuario está viendo la ${current}).`,
+    '',
+    'Cómo trabajás:',
+    '- PREGUNTAS sobre el contenido (resumir, extraer, listar campos, explicar) →',
+    '  respondé DIRECTO leyendo el grafo, en el formato que pida (JSON, tabla…).',
+    '- CUALQUIER MODIFICACIÓN del PDF (editar/mover/borrar texto, resaltar, links,',
+    '  imágenes, watermark, encabezados, campos, completar formularios) → NO la',
+    '  hagas vos: llamá edit_document UNA sola vez con TODO el pedido.',
+    '  · pages = páginas a tocar, p. ej. [1] o [1,3,4]. Si el usuario no nombra',
+    `    otra, es la que está viendo: [${current}].`,
+    '  · request = la instrucción COMPLETA y autocontenida para el editor:',
+    '    repetí todos los datos/valores/textos que dio el usuario, en su idioma.',
+    '  Después de delegar, contale en UNA frase qué se está haciendo.',
+    '- No inventes contenido de páginas que no ves. Si necesitás otra página para',
+    '  RESPONDER una pregunta, pedile al usuario que la abra.',
+    '',
+    'Respondé en el idioma del usuario, conciso.',
+    '',
+    `=== DOCUMENTO: ${doc.path} — página ${current} de ${total} ===`,
+    serializeDoc(doc, current),
   ].join('\n');
 }
 
@@ -119,16 +153,57 @@ export async function runTurn(opts: TurnOpts): Promise<TurnResult> {
     const { runTurnOpenRouter } = await import('./openrouter.js');
     return runTurnOpenRouter(opts);
   }
-  const server = buildToolServer(opts.session);
+
+  // ── FASE 1 — CHAT (barato, p. ej. Haiku): responde/describe; si hay que
+  // modificar, delega vía edit_document({pages, request}). Sonnet no se gasta
+  // en charla.
+  let route: RouteRequest | null = null;
   let text = '';
   let sessionId: string | undefined;
-  let toolCalls = 0;
 
   for await (const message of query({
     prompt: opts.prompt,
     options: {
+      model: config.chatModel,
+      systemPrompt: chatSystemPrompt(opts.doc, opts.page),
+      mcpServers: { aldus: buildRouterServer(r => { route = r; }) },
+      includePartialMessages: true,
+      canUseTool: async (name, input) =>
+        name === 'mcp__aldus__edit_document'
+          ? { behavior: 'allow', updatedInput: input }
+          : { behavior: 'deny', message: 'El chat solo puede delegar con edit_document.' },
+      maxTurns: 4,
+      ...(opts.resume ? { resume: opts.resume } : {}),
+    },
+  })) {
+    if (message.type === 'stream_event') {
+      const ev = message.event as { type: string; delta?: { type?: string; text?: string }; content_block?: { type?: string; name?: string } };
+      if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta' && ev.delta.text) {
+        text += ev.delta.text;
+        opts.onEvent?.({ type: 'text', delta: ev.delta.text });
+      } else if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use' && ev.content_block.name === 'mcp__aldus__edit_document') {
+        opts.onEvent?.({ type: 'tool', name: 'mcp__aldus__edit_document' });
+      }
+    } else if (message.type === 'result') {
+      sessionId = message.session_id;
+    }
+  }
+
+  if (!route) return { text, sessionId, toolCalls: 0 };
+
+  // ── FASE 2 — EDITOR (fuerte, Sonnet): corre con los grafos de LAS PÁGINAS
+  // pedidas por el chat y las tools reales de edición.
+  const routed = route as RouteRequest;
+  const pages = routed.pages.length ? routed.pages : (opts.page != null ? [opts.page] : undefined);
+  const editorPrompt = `${opts.prompt}\n\n[Plan del asistente]: ${routed.request}`;
+  const server = buildToolServer(opts.session);
+  let toolCalls = 0;
+
+  for await (const message of query({
+    prompt: editorPrompt,
+    options: {
       model: config.model,
-      systemPrompt: systemPrompt(opts.doc, opts.page),
+      systemPrompt: systemPrompt(opts.doc, pages),
       mcpServers: { aldus: server },
       // Deltas token a token → el panel muestra la respuesta escribiéndose y las
       // tools ejecutándose, en vez de quedarse mudo 20-40s en "Pensando".
@@ -141,7 +216,8 @@ export async function runTurn(opts: TurnOpts): Promise<TurnResult> {
           ? { behavior: 'allow', updatedInput: input }
           : { behavior: 'deny', message: 'Aldus solo permite sus propias tools de edición.' },
       maxTurns: config.maxTurns,
-      ...(opts.resume ? { resume: opts.resume } : {}),
+      // SIN resume: la fase editora es una conversación propia (el hilo del
+      // chat vive en la fase 1 — su sessionId es el que se devuelve).
     },
   })) {
     if (message.type === 'stream_event') {
@@ -159,10 +235,6 @@ export async function runTurn(opts: TurnOpts): Promise<TurnResult> {
           opts.onEvent?.({ type: 'tool', name });
         }
       }
-    } else if (message.type === 'result') {
-      sessionId = message.session_id;
-      // No pisamos `text` con message.result: el acumulado de deltas ya trae la
-      // narrativa completa (texto intermedio entre tools incluido).
     }
   }
   return { text, sessionId, toolCalls };

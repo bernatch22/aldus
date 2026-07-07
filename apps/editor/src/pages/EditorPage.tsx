@@ -69,7 +69,9 @@ export function EditorPage() {
   const graphRef = useRef(graph);
   graphRef.current = graph;
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [aiOpen, setAiOpen] = useState(false);
+  // El panel del agente arranca ABIERTO (es el corazón del producto); el toggle
+  // de la toolbar sigue permitiendo cerrarlo.
+  const [aiOpen, setAiOpen] = useState(true);
   // Editor de texto ABIERTO: el lift se congela (ver useLift).
   const [editingActive, setEditingActive] = useState(false);
   const [baking, setBaking] = useState(false);

@@ -26,14 +26,17 @@ packages/core    @aldus/core    modelo + extracción + BAKE (subpath ./bake trae
                                 textWalk, locate, splice, color, fonts, textEmit,
                                 text (STRATEGIES A/B/C), images, widgets, fallback,
                                 report (BakeReport), pageContent, createNodes, toUnicode
-packages/agent   @aldus/agent   agente Claude Agent SDK + CLI `aldus` (config.ts =
-                                knobs env; cli.ts one-shot/chat + --fields/--fill
-                                (formularios determinístico, sin LLM); tools.ts =
-                                PARIDAD con la UI: texto/imagen/highlight/link/
-                                insertar/watermark/header-footer/campos/fill_field;
-                                session.ts hornea ediciones + cola de creaciones +
-                                fills post-bake). Formularios en core: bake/forms.ts
-                                (readFormFields/setFieldValues) + WidgetNode.value
+packages/agent   @aldus/agent   agente DOS NIVELES + CLI `aldus`: modelo CHAT barato
+                                (Haiku subscription / qwen3-next OpenRouter) responde
+                                y describe; ante modificaciones llama edit_document
+                                ({pages:[…], request}) → el EDITOR (Sonnet) corre con
+                                los grafos de ESAS páginas + tools reales (config.ts =
+                                knobs env, chatModel/model por proveedor; cli.ts
+                                one-shot/chat + --fields/--fill determinístico;
+                                tools.ts = PARIDAD con la UI + buildRouterServer/
+                                openaiRouterTool; session.ts hornea ediciones + cola
+                                de creaciones + fills post-bake). Formularios en core:
+                                bake/forms.ts (readFormFields/setFieldValues)
 apps/editor      @aldus/editor  Vite+React+Tailwind v4+lucide (:5190, proxy /api→4100)
   src/pages/editor/             hooks de EditorPage: usePendingEdits+useHistory (Memento),
                                 useLocalPreview, useLift, useLocks, useAreaWidths,

@@ -14,9 +14,16 @@ import { cx } from '../ui/primitives';
 import { StreamingMarkdown, MD_STYLES } from './Markdown';
 
 const TOOL_LABEL: Record<string, string> = {
+  edit_document: 'delegando al editor',
   edit_text: 'editando texto', move_text: 'moviendo texto', set_text_color: 'coloreando texto',
   set_text_size: 'cambiando tamaño', delete_text: 'eliminando texto',
   move_image: 'moviendo imagen', delete_image: 'eliminando imagen',
+  highlight_text: 'resaltando', set_highlight_color: 'recoloreando resaltado', delete_highlight: 'quitando resaltado',
+  add_link: 'creando link', delete_link: 'quitando link',
+  add_text: 'agregando texto', insert_image: 'insertando imagen',
+  add_watermark: 'poniendo watermark', add_header_footer: 'encabezado/pie',
+  add_form_field: 'creando campo', fill_field: 'completando campo', fill_fields: 'completando campos',
+  move_field: 'moviendo campo', delete_field: 'eliminando campo',
 };
 const toolLabel = (name: string) => TOOL_LABEL[name.replace('mcp__aldus__', '')] ?? name;
 
@@ -126,31 +133,35 @@ export function AgentPanel({ docId, page, edits, imageEdits, onApply, onReload, 
           </div>
         )}
         {messages.map((m, i) => (
-          <div key={i} className={cx('flex', m.role === 'user' ? 'justify-end' : 'justify-start')}>
-            <div className={cx(
-              'max-w-[85%] rounded-2xl px-3 py-2 text-[12.5px] leading-relaxed',
-              m.role === 'user' ? 'whitespace-pre-wrap bg-blue-600 text-white' : m.error ? 'bg-red-50 text-red-700' : 'bg-neutral-100 text-neutral-800',
-            )}>
-              {/* Tools ejecutándose (chips) */}
-              {m.role === 'assistant' && m.tools && m.tools.length > 0 && (
-                <div className="mb-1.5 flex flex-wrap gap-1">
-                  {m.tools.map((t, j) => (
-                    <span key={j} className="rounded-full bg-blue-100 px-2 py-0.5 text-[10.5px] font-medium text-blue-700">✎ {toolLabel(t)}</span>
-                  ))}
-                </div>
-              )}
-              {m.role === 'assistant'
-                ? (m.streaming && !m.text && (!m.tools || m.tools.length === 0)
-                    ? <span className="font-mono text-[11px] tracking-widest text-neutral-400">PATTERN: ANALYZING…</span>
-                    : <StreamingMarkdown text={m.text} active={!!m.streaming} />)
-                : m.text}
-              {m.role === 'assistant' && !m.error && !m.streaming && typeof m.edits === 'number' && m.edits > 0 && (
-                <div className="mt-1.5 text-[11px] font-medium text-blue-600">✎ {m.edits} edición(es) activa(s) — revisá y guardá</div>
-              )}
-              {m.role === 'assistant' && !m.error && !m.streaming && m.saved && (
-                <div className="mt-1.5 text-[11px] font-medium text-emerald-600">✓ Aplicado y guardado en el documento</div>
-              )}
-            </div>
+          <div key={i} className={cx('flex flex-col gap-1.5', m.role === 'user' ? 'items-end' : 'items-start')}>
+            {/* Tool bubbles ARRIBA del mensaje (burbujas propias); el texto/
+                followup del asistente va DEBAJO. */}
+            {m.role === 'assistant' && m.tools && m.tools.length > 0 && (
+              <div className="flex max-w-[85%] flex-wrap gap-1">
+                {m.tools.map((t, j) => (
+                  <span key={j} className="rounded-full border border-blue-200 bg-blue-100 px-2 py-0.5 text-[10.5px] font-medium text-blue-700">✎ {toolLabel(t)}</span>
+                ))}
+              </div>
+            )}
+            {/* La burbuja de texto se omite mientras SOLO corren tools (sin texto). */}
+            {!(m.role === 'assistant' && m.streaming && !m.text && (m.tools?.length ?? 0) > 0) && (
+              <div className={cx(
+                'max-w-[85%] rounded-2xl px-3 py-2 text-[12.5px] leading-relaxed',
+                m.role === 'user' ? 'whitespace-pre-wrap bg-blue-600 text-white' : m.error ? 'bg-red-50 text-red-700' : 'bg-neutral-100 text-neutral-800',
+              )}>
+                {m.role === 'assistant'
+                  ? (m.streaming && !m.text
+                      ? <span className="font-mono text-[11px] tracking-widest text-neutral-400">PATTERN: ANALYZING…</span>
+                      : <StreamingMarkdown text={m.text} active={!!m.streaming} />)
+                  : m.text}
+                {m.role === 'assistant' && !m.error && !m.streaming && typeof m.edits === 'number' && m.edits > 0 && (
+                  <div className="mt-1.5 text-[11px] font-medium text-blue-600">✎ {m.edits} edición(es) activa(s) — revisá y guardá</div>
+                )}
+                {m.role === 'assistant' && !m.error && !m.streaming && m.saved && (
+                  <div className="mt-1.5 text-[11px] font-medium text-emerald-600">✓ Aplicado y guardado en el documento</div>
+                )}
+              </div>
+            )}
           </div>
         ))}
       </div>

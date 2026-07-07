@@ -1,17 +1,20 @@
 /**
  * openrouter.ts — el MISMO agente, pero contra un endpoint OpenAI-compatible
  * (OpenRouter directo, o el llm-proxy del .dev que esconde la key real). Reusa
- * el system prompt (agent.ts), las tools (tools.ts) y la EditSession — solo
+ * los system prompts (agent.ts), las tools (tools.ts) y la EditSession — solo
  * cambia el transporte. Para el demo público: la suscripción de Claude Code no
  * se puede exponer en un server, OpenRouter sí (con budget en el proxy).
  *
- * Loop clásico de function-calling: chat/completions con `tools` → si el modelo
- * pide tool_calls, se ejecutan contra la sesión y se re-inyectan como mensajes
- * `role:tool` → hasta que responde sin tools. Streaming SSE token a token.
+ * DOS NIVELES (misma arquitectura que el path suscripción):
+ *   FASE 1 — CHAT (config.openrouter.chatModel, barato): responde preguntas y
+ *   describe contenido leyendo el grafo de la página actual; ante cualquier
+ *   modificación llama edit_document({pages, request}).
+ *   FASE 2 — EDITOR (config.openrouter.model, fuerte): corre el loop clásico de
+ *   function-calling con los grafos de ESAS páginas y las tools reales.
  */
 import { config } from './config.js';
-import { systemPrompt, type AgentEvent, type TurnOpts, type TurnResult } from './agent.js';
-import { openaiTools, runTool } from './tools.js';
+import { chatSystemPrompt, systemPrompt, type AgentEvent, type TurnOpts, type TurnResult } from './agent.js';
+import { openaiRouterTool, openaiTools, runTool, type RouteRequest } from './tools.js';
 
 interface ToolCall { id: string; type: 'function'; function: { name: string; arguments: string } }
 interface Msg {
@@ -20,11 +23,14 @@ interface Msg {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
 }
+type OpenAITool = ReturnType<typeof openaiRouterTool>;
 
 /** Una llamada streameada a chat/completions: acumula texto (emitido en vivo) y
  *  las tool_calls (que llegan en deltas por índice). */
 async function streamCompletion(
+  model: string,
   messages: Msg[],
+  tools: OpenAITool[],
   onEvent?: (ev: AgentEvent) => void,
 ): Promise<{ content: string; toolCalls: ToolCall[] }> {
   const res = await fetch(`${config.openrouter.baseUrl}/chat/completions`, {
@@ -36,9 +42,9 @@ async function streamCompletion(
       'x-title': 'Aldus PDF Agent',
     },
     body: JSON.stringify({
-      model: config.openrouter.model,
+      model,
       messages,
-      tools: openaiTools(),
+      tools,
       tool_choice: 'auto',
       stream: true,
     }),
@@ -83,15 +89,38 @@ async function streamCompletion(
 
 export async function runTurnOpenRouter(opts: TurnOpts): Promise<TurnResult> {
   if (!config.openrouter.key) throw new Error('falta OPENROUTER_API_KEY (o un token de sesión del llm-proxy)');
-  const messages: Msg[] = [
-    { role: 'system', content: systemPrompt(opts.doc, opts.page) },
+
+  // ── FASE 1 — CHAT (barato): responde directo, o delega con edit_document.
+  const chatMsgs: Msg[] = [
+    { role: 'system', content: chatSystemPrompt(opts.doc, opts.page) },
     { role: 'user', content: opts.prompt },
   ];
-  let text = '';
+  const r1 = await streamCompletion(config.openrouter.chatModel, chatMsgs, [openaiRouterTool()], opts.onEvent);
+  const routeCall = r1.toolCalls.find(c => c.function.name === 'edit_document');
+  if (!routeCall) return { text: r1.content, toolCalls: 0 };
+
+  opts.onEvent?.({ type: 'tool', name: 'mcp__aldus__edit_document' });
+  let route: RouteRequest = { pages: [], request: opts.prompt };
+  try {
+    const args = JSON.parse(routeCall.function.arguments || '{}') as Partial<RouteRequest>;
+    route = {
+      pages: Array.isArray(args.pages) ? args.pages.filter(n => Number.isFinite(n)) : [],
+      request: typeof args.request === 'string' && args.request ? args.request : opts.prompt,
+    };
+  } catch { /* args rotos → defaults */ }
+  const pages = route.pages.length ? route.pages : (opts.page != null ? [opts.page] : undefined);
+
+  // ── FASE 2 — EDITOR (fuerte): loop de function-calling con las tools reales,
+  // scopeado a las páginas que pidió el chat.
+  const messages: Msg[] = [
+    { role: 'system', content: systemPrompt(opts.doc, pages) },
+    { role: 'user', content: `${opts.prompt}\n\n[Plan del asistente]: ${route.request}` },
+  ];
+  let text = r1.content;
   let toolCalls = 0;
 
   for (let turn = 0; turn < config.maxTurns; turn++) {
-    const { content, toolCalls: calls } = await streamCompletion(messages, opts.onEvent);
+    const { content, toolCalls: calls } = await streamCompletion(config.openrouter.model, messages, openaiTools(), opts.onEvent);
     text += content;
     if (!calls.length) break; // el modelo respondió sin pedir tools → listo
 

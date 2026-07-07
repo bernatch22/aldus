@@ -195,3 +195,39 @@ export function runTool(session: EditSession, name: string, args: Record<string,
   if (!d) return `⚠️ tool desconocida: ${name}`;
   try { return d.run(session, args); } catch (err) { return `⚠️ ${name}: ${err instanceof Error ? err.message : 'error'}`; }
 }
+
+/* ── Router (arquitectura en dos niveles) ─────────────────────────────────────
+ * El modelo CHAT (barato) NO edita: su única tool es edit_document, que delega
+ * las modificaciones al modelo EDITOR con las páginas a tocar. */
+
+const ROUTE_SHAPE = {
+  pages: z.array(z.number().int().min(1)).min(1)
+    .describe('números de página del PDF donde van las ediciones, p. ej. [1,3,4]'),
+  request: z.string()
+    .describe('la instrucción COMPLETA y autocontenida para el editor (incluí todos los datos/valores que dio el usuario, en su idioma)'),
+};
+const ROUTE_DESC =
+  'Delegá TODA modificación del PDF (editar/mover/borrar texto, resaltar, links, imágenes, ' +
+  'watermark, encabezados, campos de formulario, completar valores) al agente EDITOR. ' +
+  'Llamala UNA sola vez con todas las páginas a tocar y el pedido completo.';
+
+export interface RouteRequest { pages: number[]; request: string }
+
+/** Tool edit_document en formato OpenAI (fase chat del path OpenRouter). */
+export function openaiRouterTool(): { type: 'function'; function: { name: string; description: string; parameters: unknown } } {
+  return { type: 'function', function: { name: 'edit_document', description: ROUTE_DESC, parameters: z.toJSONSchema(z.object(ROUTE_SHAPE)) } };
+}
+
+/** Servidor MCP con SOLO edit_document (fase chat del path suscripción). */
+export function buildRouterServer(onRoute: (r: RouteRequest) => void) {
+  return createSdkMcpServer({
+    name: 'aldus',
+    version: '0.0.1',
+    tools: [
+      tool('edit_document', ROUTE_DESC, ROUTE_SHAPE, async (args: Record<string, unknown>) => {
+        onRoute({ pages: (args.pages as number[]) ?? [], request: String(args.request ?? '') });
+        return { content: [{ type: 'text' as const, text: '✓ delegado al editor — las ediciones corren a continuación; no repitas la llamada.' }] };
+      }),
+    ],
+  });
+}

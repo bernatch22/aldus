@@ -198,6 +198,13 @@ export class EditSession {
     return `✓ Campo "${fieldName}" ← ${JSON.stringify(value)}`;
   }
 
+  /** COMPLETA VARIOS campos de una (por fieldName o id de widget) — UNA sola tool
+   *  call en vez de N idas y vueltas con el modelo (clave para forms grandes). */
+  fillFields(entries: Array<{ name: string; value: string | boolean | string[] }>): string {
+    const lines = entries.map(e => this.fillField(e.name, e.value));
+    return lines.join('\n');
+  }
+
   /** Precarga ediciones ya existentes (p. ej. las pendientes del editor UI). */
   seed(edits: SegmentEdit[] = [], imageEdits: ImageEdit[] = []): void {
     for (const e of edits) this.edits.set(e.segmentId, e);

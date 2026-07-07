@@ -17,7 +17,7 @@ export const TOOL_NAMES = [
   'highlight_text', 'set_highlight_color', 'delete_highlight',
   'add_link', 'delete_link',
   'add_text', 'insert_image', 'add_watermark', 'add_header_footer',
-  'add_form_field', 'fill_field', 'move_field', 'delete_field',
+  'add_form_field', 'fill_field', 'fill_fields', 'move_field', 'delete_field',
 ].map(n => `mcp__aldus__${n}`);
 
 const FIELD_TYPES = ['text', 'checkbox', 'radio', 'select', 'list', 'button', 'signature'] as const;
@@ -151,6 +151,14 @@ export function buildToolServer(session: EditSession) {
         const v = value === 'true' ? true : value === 'false' ? false : value;
         return ok(session.fillField(name, v));
       },
+    ),
+    tool(
+      'fill_fields',
+      'Completa VARIOS campos DE UNA SOLA VEZ (preferí esta sobre llamar fill_field N veces — es mucho más rápido). Pasá una lista {name, value}; name = fieldName o id de widget ([[p1-w3]]); para checkbox value = "true"/"false".',
+      { fields: z.array(z.object({ name: z.string(), value: z.string() })).describe('lista de campos a completar') },
+      async ({ fields }) => ok(session.fillFields(
+        fields.map(f => ({ name: f.name, value: f.value === 'true' ? true : f.value === 'false' ? false : f.value })),
+      )),
     ),
     tool(
       'move_field',

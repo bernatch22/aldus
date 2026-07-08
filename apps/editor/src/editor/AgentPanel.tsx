@@ -15,6 +15,7 @@ import { StreamingMarkdown, MD_STYLES } from './Markdown';
 
 const TOOL_LABEL: Record<string, string> = {
   edit_document: 'delegando al editor',
+  verify_layout: 'verificando layout',
   edit_text: 'editando texto', move_text: 'moviendo texto', set_text_color: 'coloreando texto',
   set_text_size: 'cambiando tamaño', delete_text: 'eliminando texto',
   move_image: 'moviendo imagen', delete_image: 'eliminando imagen',
@@ -22,7 +23,8 @@ const TOOL_LABEL: Record<string, string> = {
   add_link: 'creando link', delete_link: 'quitando link',
   add_text: 'agregando texto', insert_image: 'insertando imagen',
   add_watermark: 'poniendo watermark', add_header_footer: 'encabezado/pie',
-  add_form_field: 'creando campo', fill_field: 'completando campo', fill_fields: 'completando campos',
+  add_form_field: 'creando campo', placeholders_to_fields: 'convirtiendo a inputs',
+  fill_field: 'completando campo', fill_fields: 'completando campos',
   move_field: 'moviendo campo', delete_field: 'eliminando campo',
 };
 const toolLabel = (name: string) => TOOL_LABEL[name.replace('mcp__aldus__', '')] ?? name;

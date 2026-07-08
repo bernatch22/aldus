@@ -27,9 +27,15 @@ export const TOOL_DEFS: ToolDef[] = [
   // ── texto existente ──
   {
     name: 'edit_text',
-    description: 'Reemplaza el CONTENIDO de un nodo de texto (conserva su estilo). Usá el id exacto del grafo.',
+    description: 'Reemplaza el CONTENIDO de un nodo de texto (conserva su estilo). Si el texto nuevo es MÁS LARGO que el renglón, el párrafo se reconstruye solo (reflow) — no calcules nada, escribí el texto final.',
     shape: { id: z.string().describe('id del nodo de texto, p. ej. p1-y708-x72'), text: z.string().describe('texto nuevo') },
     run: (s, { id, text }) => s.editText(id as string, text as string),
+  },
+  {
+    name: 'set_text_style',
+    description: 'Pone o saca NEGRITA/ITÁLICA a un nodo de texto entero. Si el PDF no trae embebida esa variante de la fuente, se usa la estándar equivalente (se reporta).',
+    shape: { id: z.string(), bold: z.boolean().optional(), italic: z.boolean().optional() },
+    run: (s, { id, bold, italic }) => s.styleText(id as string, { bold: bold as boolean | undefined, italic: italic as boolean | undefined }),
   },
   {
     name: 'move_text',
@@ -107,7 +113,7 @@ export const TOOL_DEFS: ToolDef[] = [
   // ── creación de contenido nuevo ──
   {
     name: 'add_text',
-    description: 'Agrega un párrafo de texto NUEVO. (x,y) = esquina superior-izquierda en puntos PDF (origen abajo-izq). Se re-extrae como un nodo editable.',
+    description: 'Agrega un párrafo de texto NUEVO. (x,y) = esquina superior-izquierda en puntos PDF (origen abajo-izq). Si la posición pisa texto existente, BAJA sola hasta un hueco libre (se reporta). Se re-extrae como un nodo editable.',
     shape: {
       page: z.number().int().min(1), x: z.number(), y: z.number(), text: z.string(),
       size: z.number().positive().optional(), bold: z.boolean().optional(), italic: z.boolean().optional(), color: z.string().optional().describe('#rrggbb'),

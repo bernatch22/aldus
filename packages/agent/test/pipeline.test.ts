@@ -55,7 +55,7 @@ describe('agent pipeline (integración real, sin LLM)', () => {
     const doc = await graphFromBytes(await makePdf());
     const seg = doc.pages[0].segments.find(s => s.text.includes('CONTRATO'))!;
     const session = new EditSession(doc);
-    expect(session.editText(seg.id, 'CONTRATO FIRMADO')).toContain('✓');
+    expect(await session.editText(seg.id, 'CONTRATO FIRMADO')).toContain('✓');
     expect(session.count).toBe(1);
 
     const { pdf, applied } = await session.bake();
@@ -81,7 +81,7 @@ describe('agent pipeline (integración real, sin LLM)', () => {
   it('un id inexistente NO rompe: devuelve aviso y no acumula edición', async () => {
     const doc = await graphFromBytes(await makePdf());
     const session = new EditSession(doc);
-    expect(session.editText('p1-noexiste', 'x')).toContain('⚠️');
+    expect(await session.editText('p1-noexiste', 'x')).toContain('⚠️');
     expect(session.count).toBe(0);
   });
 
@@ -96,7 +96,7 @@ describe('agent pipeline (integración real, sin LLM)', () => {
       [{ segmentId: a.id, page: 1, text: 'X', original: { text: a.text, x: a.x, baseline: a.baseline, width: a.width, fontSize: a.fontSize } }],
       [],
     );
-    session.editText(b.id, 'Segundo cambio');
+    await session.editText(b.id, 'Segundo cambio');
     const out = session.getEdits();
     expect(out.edits.map(e => e.segmentId).sort()).toEqual([a.id, b.id].sort());
   });

@@ -25,6 +25,7 @@ import {
   bakeSegmentEdits, addHighlight, addLink, addText, addWatermark, addHeaderFooter, addFormField, insertImage, setFieldValues,
 } from '@aldus/core/bake';
 import type { DocGraph } from './graph.js';
+import { graphFromBytes } from './graph.js';
 
 /** Una CREACIÓN pendiente: se aplica después del bake (bytes→bytes). El
  *  highlight/link "sobre un texto" guarda el segId y resuelve su rect al hornear. */
@@ -182,6 +183,107 @@ export class EditSession {
   addField(fieldType: WidgetKind, page: number, x: number, y: number, width?: number, height?: number, name?: string): string {
     this.creates.push({ kind: 'field', fieldType, page, x, y, width, height, name });
     return `✓ Campo ${fieldType} en p${page} @(${x},${y})`;
+  }
+
+  /**
+   * DETERMINÍSTICO — el LLM DETECTA (pasa los substrings de placeholder que
+   * encontró + un nombre para cada uno) y el CÓDIGO hace la geometría: reemplaza
+   * cada placeholder por espacios del MISMO largo (layout y estilo intactos, sin
+   * corrimiento) y ubica un campo de texto EXACTAMENTE sobre el hueco, calculado
+   * de la geometría real de los tramos (x por carácter). El widget se extiende a
+   * los espacios contiguos (el ancho disponible real) sin pisar NUNCA texto — por
+   * construcción no puede haber solapamiento. `fields` en orden de aparición;
+   * placeholders repetidos se emparejan secuencialmente.
+   */
+  async placeholdersToFields(id: string, fields: Array<{ placeholder: string; name: string }>): Promise<string> {
+    const s = this.seg(id);
+    if (!s) return `⚠️ No existe el nodo de texto "${id}".`;
+    if (!fields.length) return `⚠️ placeholders_to_fields necesita al menos un {placeholder,name}.`;
+
+    // x por CARÁCTER del texto ORIGINAL (para medir el ancho de cada placeholder).
+    const charXOf = (seg: SegmentNode): number[] => {
+      const cx = new Array<number>(seg.text.length + 1).fill(seg.x);
+      let cur = 0, lastEnd = seg.x;
+      for (const r of seg.runs) {
+        const at = seg.text.indexOf(r.text, cur);
+        if (at < 0) continue;
+        for (let k = cur; k <= at; k++) cx[k] = lastEnd + ((r.x - lastEnd) * (k - cur)) / Math.max(1, at - cur);
+        const w = r.width / Math.max(1, r.text.length);
+        for (let k = 0; k <= r.text.length; k++) cx[at + k] = r.x + w * k;
+        cur = at + r.text.length; lastEnd = r.x + r.width;
+      }
+      for (let k = cur; k <= seg.text.length; k++) cx[k] = lastEnd;
+      return cx;
+    };
+    const charX = charXOf(s);
+
+    // Localizar cada placeholder por búsqueda LITERAL (indexOf del string que dio
+    // el LLM — no un patrón), secuencial para emparejar repetidos en orden.
+    const spans: Array<{ from: number; to: number; name: string }> = [];
+    let scan = 0;
+    for (const f of fields) {
+      if (!f.placeholder) return `⚠️ un field vino sin placeholder.`;
+      const at = s.text.indexOf(f.placeholder, scan);
+      if (at < 0) return `⚠️ no encontré ${JSON.stringify(f.placeholder)} en ${id} (usá el texto EXACTO del nodo, sin editarlo antes).`;
+      spans.push({ from: at, to: at + f.placeholder.length, name: (f.name || '').trim() || `campo_${spans.length + 1}` });
+      scan = at + f.placeholder.length;
+    }
+
+    // Reemplazar cada placeholder por espacios. Como el espacio es MÁS ANGOSTO que
+    // una X/x/*, uso MÁS espacios para que el hueco conserve ~el ancho original
+    // (así el texto que sigue casi no se corre). El ancho REAL igual se mide abajo.
+    const spaceEst = s.fontSize * 0.28;
+    let newText = '';
+    let prev = 0;
+    for (const sp of spans) {
+      const targetW = charX[sp.to] - charX[sp.from];
+      const nSpaces = Math.max(sp.to - sp.from, Math.round(targetW / spaceEst));
+      newText += s.text.slice(prev, sp.from) + ' '.repeat(nSpaces);
+      prev = sp.to;
+    }
+    newText += s.text.slice(prev);
+    this.putSeg(s, { runs: applyTextDiff(originalStyledRuns(s), newText) });
+
+    // MEDIR el layout real: horneo un preview y re-extraigo. Cada blanco (run de
+    // espacios) supera el umbral de columna → PARTE la línea, así que los huecos
+    // quedan como GAPS entre los segmentos resultantes. Ubico un campo en cada gap
+    // dentro del x-span original — imposible que pise texto (no hay glifos ahí).
+    const { pdf } = await this.bake();
+    const re = await graphFromBytes(pdf.slice());
+    const line = (re.pages.find(p => p.page === s.page)?.segments ?? [])
+      .filter(x => Math.abs(x.baseline - s.baseline) < 6 && x.x >= s.x - 3 && x.x <= s.x + s.width + 8)
+      .sort((a, b) => a.x - b.x);
+
+    const gaps: Array<{ from: number; to: number }> = [];
+    const GAP_MIN = 8; // los word-spaces (~0.28×size) no llegan; los placeholders sí
+    if (line.length && line[0].x - s.x > GAP_MIN) gaps.push({ from: s.x, to: line[0].x }); // placeholder al inicio
+    for (let i = 0; i < line.length; i++) {
+      const from = line[i].x + line[i].width;
+      const to = i + 1 < line.length ? line[i + 1].x : s.x + s.width;
+      if (to - from > GAP_MIN) gaps.push({ from, to });
+    }
+
+    const baseline = line[0]?.baseline ?? s.baseline;
+    const size = line[0]?.fontSize ?? s.fontSize;
+    const n = Math.min(gaps.length, spans.length);
+    const made: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const g = gaps[i];
+      const x0 = g.from + 1;
+      const width = Math.max(20, g.to - g.from - 2);
+      // Altura ajustada al interlineado: size+2 (no size+5) para que los campos
+      // de líneas contiguas no se toquen verticalmente.
+      const y = baseline - 2;
+      this.creates.push({
+        kind: 'field', fieldType: 'text', page: s.page,
+        x: Math.round(x0 * 100) / 100, y: Math.round(y * 100) / 100,
+        width: Math.round(width * 100) / 100, height: Math.round((size + 2) * 100) / 100,
+        name: spans[i].name,
+      });
+      made.push(`${spans[i].name} @(${Math.round(x0)},${Math.round(y)}) ${Math.round(width)}pt`);
+    }
+    const warn = gaps.length !== spans.length ? ` (⚠ ${spans.length} placeholders → ${gaps.length} huecos medidos)` : '';
+    return `✓ ${made.length} campo(s) sobre los huecos REALES de ${id} (medido tras hornear, sin solapamiento): ${made.join(' · ')}${warn}`;
   }
 
   /** COMPLETA un campo de formulario por su NOMBRE o por su id de widget

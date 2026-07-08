@@ -10,6 +10,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { buildRouterServer, buildToolServer, type RouteRequest } from './tools.js';
 import { serializeDoc } from './serialize.js';
+import { overlapReport, verifyMessage } from './verify.js';
 import { config } from './config.js';
 import type { DocGraph } from './graph.js';
 import type { EditSession } from './session.js';
@@ -63,35 +64,15 @@ export function systemPrompt(doc: DocGraph, page?: number | number[]): string {
     'línea (mal). Si el hueco está a la derecha del label, x = x del label + su',
     'ancho + ~6pt. El texto va SOBRE los "____", no en otro renglón.',
     '',
-    'CONVERTIR PLACEHOLDERS EN INPUTS ("XXXX", "xxx", "____", "***", "..." o',
-    'cualquier relleno de plantilla — detectalos VOS leyendo el texto). Por nodo:',
-    '1) edit_text reemplazando CADA placeholder por ESPACIOS (misma cantidad de',
-    '   caracteres). El relleno es SIEMPRE " " (espacios): NUNCA dejes ni pongas',
-    '   "XXXX"/"xxx"/"***" (el hueco debe quedar VACÍO — el input va encima), y',
-    '   NUNCA "____" (los "_" suelen faltar en el subset de la fuente embebida y',
-    '   el texto caería a otra fuente, desalineando todo). Verificá: el texto que',
-    '   pases a edit_text no debe contener NINGÚN placeholder. El RESTO del texto',
-    '   se copia LITERAL, carácter por carácter — no corrijas ortografía, género,',
-    '   mayúsculas ni tildes: cualquier letra cambiada corrompe el documento.',
-    '2) add_form_field (name en snake_case) cubriendo el hueco EXACTO, calculado',
-    '   de la geometría REAL:',
-    '   los nodos con varios tramos listan `tramos: @x w ancho "texto"` — ubicá el',
-    '   placeholder en su tramo; charW = ancho_tramo / caracteres_tramo;',
-    '   x = x_tramo + charW × offset_en_el_tramo; width = charW × largo del',
-    '   placeholder (sumá los espacios pegados); y = baseline − 3; height =',
-    '   fontSize + 5. NO estimes a ojo: usá esos números.',
-    '3) SPAN — el input debe tener ancho ÚTIL para su contenido (un nombre o una',
-    '   dirección necesita ≥70pt, un número ≥40pt). Si el hueco literal es más',
-    '   chico (p. ej. "***" ≈ 14pt), ENSANCHALO — no dejes inputs enanos:',
-    '   · el resto del renglón está en el MISMO tramo de estilo → poné MÁS',
-    '     espacios en el reemplazo (el texto del tramo fluye a la derecha y el',
-    '     hueco crece; espacios_extra = ancho_extra / charW) y ensanchá el field.',
-    '   · lo que sigue es OTRO nodo del renglón → movelo con move_text',
-    '     (x = fin_del_input + ~6pt). Nunca te pases del ancho de la página; si',
-    '     no hay lugar en el renglón, dejá el hueco como está y avisá.',
-    'NUNCA dupliques el hueco: o input o línea visual, jamás ambos.',
-    'MANTENÉ EL ESTILO: nunca agregues bold/italic que el original no tenía.',
-    'Un "____" ya dibujado ya ES el campo: completá encima, no agregues otro.',
+    'CONVERTIR PLACEHOLDERS EN INPUTS ("XXXX", "xxx", "____", "***", "…" o',
+    'cualquier relleno de plantilla): DETECTALOS VOS leyendo el texto y usá SIEMPRE',
+    'placeholders_to_fields(id, fields=[{placeholder,name}]) — UNA llamada por nodo,',
+    'con TODOS sus placeholders. `placeholder` = el substring EXACTO como aparece en',
+    'el nodo; `name` = snake_case descriptivo (mirá el label alrededor del hueco). El',
+    'código calcula la geometría exacta, reemplaza por espacios y ubica el campo sin',
+    'pisar texto — NO pases coordenadas, NO uses edit_text/add_form_field para esto,',
+    'NO dejes "_" ni "XXXX" en el texto. Un "____" ya dibujado ya ES el campo:',
+    'completá encima, no agregues otro. Nunca agregues bold/italic que no existía.',
     '',
     'Respondé en el idioma del usuario, conciso. Si una edición es ambigua o el id',
     'no existe, decilo en vez de adivinar.',
@@ -207,47 +188,67 @@ export async function runTurn(opts: TurnOpts): Promise<TurnResult> {
   // pedidas por el chat y las tools reales de edición.
   const routed = route as RouteRequest;
   const pages = routed.pages.length ? routed.pages : (opts.page != null ? [opts.page] : undefined);
-  const editorPrompt = `${opts.prompt}\n\n[Plan del asistente]: ${routed.request}`;
   const server = buildToolServer(opts.session);
   let toolCalls = 0;
+  let editorSession: string | undefined;
 
-  for await (const message of query({
-    prompt: editorPrompt,
-    options: {
-      model: config.model,
-      systemPrompt: systemPrompt(opts.doc, pages),
-      mcpServers: { aldus: server },
-      // Deltas token a token → el panel muestra la respuesta escribiéndose y las
-      // tools ejecutándose, en vez de quedarse mudo 20-40s en "Pensando".
-      includePartialMessages: true,
-      // En headless no hay prompt de permisos interactivo: `canUseTool` es el
-      // ÚNICO gate — auto-aprueba las tools de Aldus y niega cualquier otra (sin
-      // `allowedTools`, que las auto-aprobaría antes y shadowearía este callback).
-      canUseTool: async (name, input) =>
-        name.startsWith('mcp__aldus__')
-          ? { behavior: 'allow', updatedInput: input }
-          : { behavior: 'deny', message: 'Aldus solo permite sus propias tools de edición.' },
-      maxTurns: config.maxTurns,
-      // SIN resume: la fase editora es una conversación propia (el hilo del
-      // chat vive en la fase 1 — su sessionId es el que se devuelve).
-    },
-  })) {
-    if (message.type === 'stream_event') {
-      // Evento raw de Anthropic: deltas de texto y comienzo de tool_use.
-      const ev = message.event as { type: string; delta?: { type?: string; text?: string }; content_block?: { type?: string; name?: string } };
-      if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta' && ev.delta.text) {
-        text += ev.delta.text;
-        opts.onEvent?.({ type: 'text', delta: ev.delta.text });
-      } else if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
-        const name = ev.content_block.name ?? 'tool';
-        // Solo las tools de edición de Aldus cuentan/se muestran; las internas del
-        // SDK (p. ej. ToolSearch, que canUseTool deniega) no son ruido para el UI.
-        if (name.startsWith('mcp__aldus__')) {
-          toolCalls++;
-          opts.onEvent?.({ type: 'tool', name });
+  // Una PASADA del editor (query del SDK); `resume` encadena la corrección de
+  // layout a la misma conversación editora.
+  const editorPass = async (prompt: string, resume?: string): Promise<void> => {
+    for await (const message of query({
+      prompt,
+      options: {
+        model: config.model,
+        systemPrompt: systemPrompt(opts.doc, pages),
+        mcpServers: { aldus: server },
+        // Deltas token a token → el panel muestra la respuesta escribiéndose y las
+        // tools ejecutándose, en vez de quedarse mudo 20-40s en "Pensando".
+        includePartialMessages: true,
+        // En headless no hay prompt de permisos interactivo: `canUseTool` es el
+        // ÚNICO gate — auto-aprueba las tools de Aldus y niega cualquier otra (sin
+        // `allowedTools`, que las auto-aprobaría antes y shadowearía este callback).
+        canUseTool: async (name, input) =>
+          name.startsWith('mcp__aldus__')
+            ? { behavior: 'allow', updatedInput: input }
+            : { behavior: 'deny', message: 'Aldus solo permite sus propias tools de edición.' },
+        maxTurns: config.maxTurns,
+        // La fase editora es una conversación propia (el hilo del CHAT vive en
+        // la fase 1 — su sessionId es el que se devuelve al panel).
+        ...(resume ? { resume } : {}),
+      },
+    })) {
+      if (message.type === 'stream_event') {
+        // Evento raw de Anthropic: deltas de texto y comienzo de tool_use.
+        const ev = message.event as { type: string; delta?: { type?: string; text?: string }; content_block?: { type?: string; name?: string } };
+        if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta' && ev.delta.text) {
+          text += ev.delta.text;
+          opts.onEvent?.({ type: 'text', delta: ev.delta.text });
+        } else if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
+          const name = ev.content_block.name ?? 'tool';
+          // Solo las tools de edición de Aldus cuentan/se muestran; las internas del
+          // SDK (p. ej. ToolSearch, que canUseTool deniega) no son ruido para el UI.
+          if (name.startsWith('mcp__aldus__')) {
+            toolCalls++;
+            opts.onEvent?.({ type: 'tool', name });
+          }
         }
+      } else if (message.type === 'result') {
+        editorSession = message.session_id;
       }
     }
+  };
+
+  await editorPass(`${opts.prompt}\n\n[Plan del asistente]: ${routed.request}`);
+
+  // VERIFICACIÓN GEOMÉTRICA determinística (hornea en memoria y mide): si algún
+  // campo pisa texto u otro campo, el reporte (con el move EXACTO ya calculado)
+  // vuelve a la MISMA conversación editora para que corrija. Hasta 3 pasadas
+  // (los solapamientos pueden cascadear en un renglón con varios campos).
+  for (let v = 0; v < 3 && toolCalls > 0; v++) {
+    const issues = await overlapReport(opts.session).catch(() => []);
+    if (!issues.length) break;
+    opts.onEvent?.({ type: 'tool', name: 'mcp__aldus__verify_layout' });
+    await editorPass(verifyMessage(issues), editorSession);
   }
   return { text, sessionId, toolCalls };
 }

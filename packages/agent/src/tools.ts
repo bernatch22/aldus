@@ -11,12 +11,14 @@ import type { EditSession } from './session.js';
 
 const FIELD_TYPES = ['text', 'checkbox', 'radio', 'select', 'list', 'button', 'signature'] as const;
 
-/** Una tool como data: shape zod (para MCP y para JSON-Schema) + handler puro. */
+/** Una tool como data: shape zod (para MCP y para JSON-Schema) + handler. El
+ *  handler puede ser async (p. ej. placeholders_to_fields hornea un preview
+ *  para medir el layout real antes de ubicar los campos). */
 interface ToolDef {
   name: string;
   description: string;
   shape: z.ZodRawShape;
-  run: (session: EditSession, args: Record<string, unknown>) => string;
+  run: (session: EditSession, args: Record<string, unknown>) => string | Promise<string>;
 }
 
 const a = (o: Record<string, unknown>) => o; // alias legible para args tipados por uso
@@ -142,6 +144,22 @@ export const TOOL_DEFS: ToolDef[] = [
       s.addField(type as (typeof FIELD_TYPES)[number], page as number, x as number, y as number, width as number | undefined, height as number | undefined, name as string | undefined),
   },
   {
+    name: 'placeholders_to_fields',
+    description:
+      'Convierte los placeholders de UN nodo de texto (XXXX/xxx/***/____ que VOS detectás leyendo el texto) en campos ' +
+      'de formulario, en UNA sola llamada. El código calcula la geometría EXACTA y reemplaza el placeholder por espacios — ' +
+      'NO pasás coordenadas ni tocás el texto vos, y es IMPOSIBLE que el campo pise texto. SIEMPRE usá esta tool para ' +
+      '"convertir en inputs", nunca edit_text + add_form_field a mano.',
+    shape: {
+      id: z.string().describe('id del nodo de texto con los placeholders'),
+      fields: z.array(z.object({
+        placeholder: z.string().describe('el substring EXACTO del placeholder tal como aparece en el nodo, p. ej. "XXXXXXXXX" o "xxxxxxx"'),
+        name: z.string().describe('nombre descriptivo del campo (snake_case), p. ej. "razon_social"'),
+      })).min(1).describe('un item por hueco, EN ORDEN de aparición'),
+    },
+    run: (s, { id, fields }) => s.placeholdersToFields(id as string, fields as Array<{ placeholder: string; name: string }>),
+  },
+  {
     name: 'fill_field',
     description: 'COMPLETA un campo de formulario por su fieldName O por su id de widget (el [[id]] de la Lectura, p. ej. p1-w3): texto para text/select/radio; para checkbox pasá "true"/"false". Podés llamarla varias veces para completar todo el form.',
     shape: { name: z.string().describe('fieldName o id de widget (p1-w3)'), value: z.string().describe('valor (para checkbox: "true"/"false")') },
@@ -176,7 +194,7 @@ export const TOOL_NAMES = TOOL_DEFS.map(d => `mcp__aldus__${d.name}`);
 export function buildToolServer(session: EditSession) {
   const ok = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
   const tools = TOOL_DEFS.map(d =>
-    tool(d.name, d.description, d.shape, async (args: Record<string, unknown>) => ok(d.run(session, args))),
+    tool(d.name, d.description, d.shape, async (args: Record<string, unknown>) => ok(await d.run(session, args))),
   );
   return createSdkMcpServer({ name: 'aldus', version: '0.0.1', tools });
 }
@@ -190,10 +208,10 @@ export function openaiTools(): Array<{ type: 'function'; function: { name: strin
 }
 
 /** Ejecuta una tool por nombre contra la sesión (path OpenRouter). */
-export function runTool(session: EditSession, name: string, args: Record<string, unknown>): string {
+export async function runTool(session: EditSession, name: string, args: Record<string, unknown>): Promise<string> {
   const d = TOOL_DEFS.find(x => x.name === name);
   if (!d) return `⚠️ tool desconocida: ${name}`;
-  try { return d.run(session, args); } catch (err) { return `⚠️ ${name}: ${err instanceof Error ? err.message : 'error'}`; }
+  try { return await d.run(session, args); } catch (err) { return `⚠️ ${name}: ${err instanceof Error ? err.message : 'error'}`; }
 }
 
 /* ── Router (arquitectura en dos niveles) ─────────────────────────────────────

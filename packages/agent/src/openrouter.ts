@@ -15,6 +15,7 @@
 import { config } from './config.js';
 import { chatSystemPrompt, systemPrompt, type AgentEvent, type TurnOpts, type TurnResult } from './agent.js';
 import { openaiRouterTool, openaiTools, runTool, type RouteRequest } from './tools.js';
+import { overlapReport, verifyMessage } from './verify.js';
 
 interface ToolCall { id: string; type: 'function'; function: { name: string; arguments: string } }
 interface Msg {
@@ -47,6 +48,9 @@ async function streamCompletion(
       tools,
       tool_choice: 'auto',
       stream: true,
+      // Sesgo a proveedores de alta throughput — OpenRouter a veces rutea sonnet
+      // a un backend encolado (primera llamada de minutos); esto lo evita.
+      provider: { sort: 'throughput' },
     }),
   });
   if (!res.ok || !res.body) {
@@ -121,11 +125,29 @@ export async function runTurnOpenRouter(opts: TurnOpts): Promise<TurnResult> {
   ];
   let text = r1.content;
   let toolCalls = 0;
+  let verifies = 0;
 
   for (let turn = 0; turn < config.maxTurns; turn++) {
     const { content, toolCalls: calls } = await streamCompletion(config.openrouter.model, messages, openaiTools(), opts.onEvent);
     text += content;
-    if (!calls.length) break; // el modelo respondió sin pedir tools → listo
+
+    if (!calls.length) {
+      // El modelo dio por terminado → VERIFICACIÓN GEOMÉTRICA determinística
+      // (hornea en memoria y mide): si algún campo pisa texto u otro campo, el
+      // reporte (con el move EXACTO ya calculado) vuelve al MISMO turno para que
+      // corrija. Hasta 3 pasadas (los solapamientos pueden cascadear).
+      if (toolCalls > 0 && verifies < 3) {
+        verifies++;
+        const issues = await overlapReport(opts.session).catch(() => []);
+        if (issues.length) {
+          opts.onEvent?.({ type: 'tool', name: 'mcp__aldus__verify_layout' });
+          messages.push({ role: 'assistant', content: content || null });
+          messages.push({ role: 'user', content: verifyMessage(issues) });
+          continue;
+        }
+      }
+      break; // sin tools y sin (más) solapamientos → listo
+    }
 
     messages.push({ role: 'assistant', content: content || null, tool_calls: calls });
     for (const tc of calls) {
@@ -133,7 +155,7 @@ export async function runTurnOpenRouter(opts: TurnOpts): Promise<TurnResult> {
       opts.onEvent?.({ type: 'tool', name: `mcp__aldus__${tc.function.name}` });
       let args: Record<string, unknown> = {};
       try { args = JSON.parse(tc.function.arguments || '{}'); } catch { /* args vacíos */ }
-      const result = runTool(opts.session, tc.function.name, args);
+      const result = await runTool(opts.session, tc.function.name, args);
       messages.push({ role: 'tool', tool_call_id: tc.id, content: result });
     }
   }

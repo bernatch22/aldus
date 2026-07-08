@@ -410,16 +410,15 @@ export class EditSession {
           .sort((a, b) => a.x - b.x);
         // runs reales de la fila, en orden x (los segmentos pueden fusionar tramos)
         const flat = rowSegs.flatMap(seg => seg.runs).sort((a, b) => a.x - b.x);
+        const MIN_GAP = spaceW * 0.7; // ~2pt: un espacio de palabra decente entre tramos de distinto estilo
         for (let i = 0; i < flat.length; i++) {
           if (flat[i].x + flat[i].width > rightEdge + 3) overflow = true;
           if (i > 0) {
-            const prevEnd = flat[i - 1].x + flat[i - 1].width;
-            const over = prevEnd - flat[i].x;
-            if (over > 1) {
-              collided = true;
-              // corrimiento exacto medido para esta ancla, acumulable
+            const gap = flat[i].x - (flat[i - 1].x + flat[i - 1].width);
+            if (gap < MIN_GAP) {
+              collided = true; // incluye solapamiento (gap<0) Y espacio demasiado angosto
               const key = `${k}:${flat[i].text.trim().slice(0, 30)}`;
-              dxFix.set(key, (dxFix.get(key) ?? 0) + over + 1.5);
+              dxFix.set(key, (dxFix.get(key) ?? 0) + (MIN_GAP - gap));
             }
           }
         }

@@ -155,9 +155,10 @@ export const TOOL_DEFS: ToolDef[] = [
       fields: z.array(z.object({
         placeholder: z.string().describe('el substring EXACTO del placeholder tal como aparece en el nodo, p. ej. "XXXXXXXXX" o "xxxxxxx"'),
         name: z.string().describe('nombre descriptivo del campo (snake_case), p. ej. "razon_social"'),
+        width: z.number().positive().optional().describe('ancho ÚTIL deseado en puntos según lo que se va a escribir (nombre/dirección ~110, DNI/RUC ~55). Opcional: si lo omitís se estima por el nombre. El campo se ensancha hasta ahí empujando el texto, con tope en el borde de página.'),
       })).min(1).describe('un item por hueco, EN ORDEN de aparición'),
     },
-    run: (s, { id, fields }) => s.placeholdersToFields(id as string, fields as Array<{ placeholder: string; name: string }>),
+    run: (s, { id, fields }) => s.placeholdersToFields(id as string, fields as Array<{ placeholder: string; name: string; width?: number }>),
   },
   {
     name: 'fill_field',

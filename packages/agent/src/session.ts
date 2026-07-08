@@ -20,6 +20,7 @@ import {
   applyTextDiff, originalStyledRuns, promoteMovedImages, effectiveGeometry,
   type FontBucket, type SegmentEdit, type ImageEdit, type WidgetEdit, type HighlightEdit, type LinkEdit,
   type SegmentNode, type ImageNode, type WidgetNode, type HighlightNode, type LinkNode, type WidgetKind,
+  type StyledRun,
 } from '@aldus/core';
 import {
   bakeSegmentEdits, addHighlight, addLink, addText, addWatermark, addHeaderFooter, addFormField, insertImage, setFieldValues,
@@ -39,6 +40,17 @@ type CreateOp =
   | { kind: 'field'; fieldType: WidgetKind; page: number; x: number; y: number; width?: number; height?: number; name?: string };
 
 const MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg' };
+
+/** Ancho ÚTIL objetivo de un campo (pt): el LLM puede pasarlo explícito (`width`);
+ *  si no, se estima por el nombre — nombres/direcciones anchos, números medios. */
+const WIDE_FIELD = /nombre|apellido|raz[oó]n|social|domicilio|direcci|empresa|calle|ciudad|cargo/i;
+const NARROW_FIELD = /ruc|dni|n[uú]m|partida|c[oó]digo|fecha|tel[eé]fono|cuit|nit|zip|cp\b/i;
+function targetWidthFor(name: string, width: number | undefined, fontSize: number): number {
+  if (typeof width === 'number' && width > 0) return width;
+  if (WIDE_FIELD.test(name)) return fontSize * 11;   // ~110pt @10
+  if (NARROW_FIELD.test(name)) return fontSize * 5.5; // ~55pt
+  return fontSize * 8;                                // ~80pt
+}
 
 export class EditSession {
   private edits = new Map<string, SegmentEdit>();
@@ -186,21 +198,24 @@ export class EditSession {
   }
 
   /**
-   * DETERMINÍSTICO — el LLM DETECTA (pasa los substrings de placeholder que
-   * encontró + un nombre para cada uno) y el CÓDIGO hace la geometría: reemplaza
-   * cada placeholder por espacios del MISMO largo (layout y estilo intactos, sin
-   * corrimiento) y ubica un campo de texto EXACTAMENTE sobre el hueco, calculado
-   * de la geometría real de los tramos (x por carácter). El widget se extiende a
-   * los espacios contiguos (el ancho disponible real) sin pisar NUNCA texto — por
-   * construcción no puede haber solapamiento. `fields` en orden de aparición;
-   * placeholders repetidos se emparejan secuencialmente.
+   * DETERMINÍSTICO — el LLM DETECTA (pasa los substrings de placeholder + nombre
+   * y opcionalmente el ancho útil) y el CÓDIGO hace TODO el layout: los campos
+   * reciben ancho ÚTIL (nombre ~110pt, número ~55pt) y el PÁRRAFO SE RECONSTRUYE
+   * — las palabras que ya no entran en un renglón bajan al siguiente en cascada;
+   * si el párrafo necesita un renglón más, se crea y TODO lo de abajo se corre.
+   * Un loop determinístico achica los targets hasta que cada grafo quede dentro
+   * de la página. Al final se hornea un preview, se re-extrae y cada campo se
+   * ubica sobre el HUECO REAL medido — sin pisar texto, por construcción.
+   * `id` puede ser cualquier línea del párrafo; `fields` en orden de lectura.
    */
-  async placeholdersToFields(id: string, fields: Array<{ placeholder: string; name: string }>): Promise<string> {
+  async placeholdersToFields(id: string, fields: Array<{ placeholder: string; name: string; width?: number }>): Promise<string> {
     const s = this.seg(id);
     if (!s) return `⚠️ No existe el nodo de texto "${id}".`;
     if (!fields.length) return `⚠️ placeholders_to_fields necesita al menos un {placeholder,name}.`;
+    const page = this.doc.pages.find(p => p.page === s.page);
+    if (!page) return `⚠️ página ${s.page} no encontrada.`;
 
-    // x por CARÁCTER del texto ORIGINAL (para medir el ancho de cada placeholder).
+    // x por CARÁCTER de un segmento, desde sus runs reales.
     const charXOf = (seg: SegmentNode): number[] => {
       const cx = new Array<number>(seg.text.length + 1).fill(seg.x);
       let cur = 0, lastEnd = seg.x;
@@ -215,75 +230,241 @@ export class EditSession {
       for (let k = cur; k <= seg.text.length; k++) cx[k] = lastEnd;
       return cx;
     };
-    const charX = charXOf(s);
 
-    // Localizar cada placeholder por búsqueda LITERAL (indexOf del string que dio
-    // el LLM — no un patrón), secuencial para emparejar repetidos en orden.
-    const spans: Array<{ from: number; to: number; name: string }> = [];
-    let scan = 0;
+    // ── 1. EL PÁRRAFO: líneas consecutivas con el mismo x de anclaje y paso de
+    // interlineado regular, conteniendo a `id`.
+    const sameCol = page.segments
+      .filter(x => Math.abs(x.x - s.x) < 4 && Math.abs(x.fontSize - s.fontSize) < 2)
+      .sort((a, b) => b.baseline - a.baseline);
+    const idx = sameCol.findIndex(x => x.id === s.id);
+    const maxLead = s.fontSize * 1.7;
+    let lo = idx, hi = idx;
+    while (lo > 0 && sameCol[lo - 1].baseline - sameCol[lo].baseline < maxLead) lo--;
+    while (hi + 1 < sameCol.length && sameCol[hi].baseline - sameCol[hi + 1].baseline < maxLead) hi++;
+    const lines = sameCol.slice(lo, hi + 1); // arriba → abajo
+    const leading = lines.length > 1
+      ? (lines[0].baseline - lines[lines.length - 1].baseline) / (lines.length - 1)
+      : s.fontSize * 1.15;
+    const lineMaps = lines.map(charXOf);
+    const rightEdge = Math.max(...lines.map(l => l.x + l.width));
+    const capacity = rightEdge - s.x;
+    const spaceW = s.fontSize * 0.28;
+
+    // ── 2. LOCALIZAR cada placeholder (literal, en orden de lectura, cruzando líneas).
+    interface Hole { li: number; from: number; to: number; name: string; target: number }
+    const holes: Hole[] = [];
+    let li = 0, off = 0;
     for (const f of fields) {
       if (!f.placeholder) return `⚠️ un field vino sin placeholder.`;
-      const at = s.text.indexOf(f.placeholder, scan);
-      if (at < 0) return `⚠️ no encontré ${JSON.stringify(f.placeholder)} en ${id} (usá el texto EXACTO del nodo, sin editarlo antes).`;
-      spans.push({ from: at, to: at + f.placeholder.length, name: (f.name || '').trim() || `campo_${spans.length + 1}` });
-      scan = at + f.placeholder.length;
+      let at = -1;
+      while (li < lines.length) {
+        at = lines[li].text.indexOf(f.placeholder, off);
+        if (at >= 0) break;
+        li++; off = 0;
+      }
+      if (at < 0) return `⚠️ no encontré ${JSON.stringify(f.placeholder)} en el párrafo de ${id} (usá el texto EXACTO, en orden de lectura).`;
+      holes.push({ li, from: at, to: at + f.placeholder.length, name: (f.name || '').trim() || `campo_${holes.length + 1}`, target: targetWidthFor(f.name ?? '', f.width, s.fontSize) });
+      off = at + f.placeholder.length;
     }
 
-    // Reemplazar cada placeholder por espacios. Como el espacio es MÁS ANGOSTO que
-    // una X/x/*, uso MÁS espacios para que el hueco conserve ~el ancho original
-    // (así el texto que sigue casi no se corre). El ancho REAL igual se mide abajo.
-    const spaceEst = s.fontSize * 0.28;
-    let newText = '';
-    let prev = 0;
-    for (const sp of spans) {
-      const targetW = charX[sp.to] - charX[sp.from];
-      const nSpaces = Math.max(sp.to - sp.from, Math.round(targetW / spaceEst));
-      newText += s.text.slice(prev, sp.from) + ' '.repeat(nSpaces);
-      prev = sp.to;
-    }
-    newText += s.text.slice(prev);
-    this.putSeg(s, { runs: applyTextDiff(originalStyledRuns(s), newText) });
-
-    // MEDIR el layout real: horneo un preview y re-extraigo. Cada blanco (run de
-    // espacios) supera el umbral de columna → PARTE la línea, así que los huecos
-    // quedan como GAPS entre los segmentos resultantes. Ubico un campo en cada gap
-    // dentro del x-span original — imposible que pise texto (no hay glifos ahí).
-    const { pdf } = await this.bake();
-    const re = await graphFromBytes(pdf.slice());
-    const line = (re.pages.find(p => p.page === s.page)?.segments ?? [])
-      .filter(x => Math.abs(x.baseline - s.baseline) < 6 && x.x >= s.x - 3 && x.x <= s.x + s.width + 8)
-      .sort((a, b) => a.x - b.x);
-
-    const gaps: Array<{ from: number; to: number }> = [];
-    const GAP_MIN = 8; // los word-spaces (~0.28×size) no llegan; los placeholders sí
-    if (line.length && line[0].x - s.x > GAP_MIN) gaps.push({ from: s.x, to: line[0].x }); // placeholder al inicio
-    for (let i = 0; i < line.length; i++) {
-      const from = line[i].x + line[i].width;
-      const to = i + 1 < line.length ? line[i + 1].x : s.x + s.width;
-      if (to - from > GAP_MIN) gaps.push({ from, to });
+    // ── 3. TOKENS del párrafo (palabras con su ancho REAL medido + estilo + huecos).
+    interface Tok { kind: 'word' | 'hole'; text?: string; w: number; bold?: boolean; italic?: boolean; hole?: Hole }
+    const toks: Tok[] = [];
+    for (let k = 0; k < lines.length; k++) {
+      const text = lines[k].text;
+      const cx = lineMaps[k];
+      // estilo por carácter (del run que lo contiene) — para conservar negritas.
+      const styleAt: Array<{ bold: boolean; italic: boolean }> = new Array(text.length).fill({ bold: false, italic: false });
+      let sc = 0;
+      for (const r of lines[k].runs) {
+        const at = text.indexOf(r.text, sc);
+        if (at < 0) continue;
+        for (let c = at; c < at + r.text.length; c++) styleAt[c] = { bold: r.font.bold, italic: r.font.italic };
+        sc = at + r.text.length;
+      }
+      const lineHoles = holes.filter(h => h.li === k).sort((a, b) => a.from - b.from);
+      let pos = 0;
+      const pushWords = (from: number, to: number) => {
+        const re = /\S+/g;
+        re.lastIndex = 0;
+        const slice = text.slice(from, to);
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(slice))) {
+          const a = from + m.index, b = a + m[0].length;
+          toks.push({ kind: 'word', text: m[0], w: cx[b] - cx[a], bold: styleAt[a]?.bold ?? false, italic: styleAt[a]?.italic ?? false });
+        }
+      };
+      for (const h of lineHoles) { pushWords(pos, h.from); toks.push({ kind: 'hole', w: 0, hole: h }); pos = h.to; }
+      pushWords(pos, text.length);
     }
 
-    const baseline = line[0]?.baseline ?? s.baseline;
-    const size = line[0]?.fontSize ?? s.fontSize;
-    const n = Math.min(gaps.length, spans.length);
+    // ── 4. REFLOW en LOOP: targets al 100%; si el párrafo no entra (renglones
+    // disponibles + los extra que quepan en la página), achicar 10% y reintentar.
+    const bottomMost = Math.min(...page.segments.map(x => x.baseline));
+    const paraBottom = lines[lines.length - 1].baseline;
+    const isLastBlock = Math.abs(bottomMost - paraBottom) < 1;
+    const slackBelow = isLastBlock ? Math.max(0, paraBottom - 60) : Math.max(0, paraBottom - 60); // hasta 60pt del borde
+    const maxExtraLines = Math.min(3, Math.floor(slackBelow / leading));
+
+    const wrap = (scale: number): Tok[][] => {
+      const rows: Tok[][] = [[]];
+      let curW = 0;
+      for (const t of toks) {
+        const w = t.kind === 'hole' ? Math.max(25, t.hole!.target * scale) : t.w;
+        const sep = rows[rows.length - 1].length ? spaceW : 0;
+        if (curW + sep + w > capacity && rows[rows.length - 1].length) { rows.push([]); curW = 0; }
+        rows[rows.length - 1].push(t);
+        curW += (rows[rows.length - 1].length > 1 ? spaceW : 0) + w;
+      }
+      return rows;
+    };
+
+    // ── 5. APLICAR + MEDIR EN LOOP (grafo por grafo): cada renglón se
+    // reconstruye con RUNS PROPIOS anclados (dx) a posiciones calculadas — nunca
+    // heredamos el dx viejo (una palabra bold movida quedaría anclada a su
+    // posición anterior y se superpondría). Después se HORNEA y se MIDE: si un
+    // renglón real se pasa del borde o dos tramos chocan, se achican los targets
+    // y se re-aplica, hasta que TODO quede dentro. Determinístico, sin LLM.
+    const BOUNDARY_PAD = 2; // aire extra al cambiar de estilo (deriva de estimación)
+    // Correcciones de ancla MEDIDAS: clave "fila:texto_del_run" → pt a correr el
+    // dx (se llenan cuando el preview muestra dos runs chocando; la próxima
+    // pasada emite el ancla en la posición real).
+    const dxFix = new Map<string, number>();
+    const rowRuns = (row: Tok[], scale: number, rowIdx: number): StyledRun[] => {
+      const runs: StyledRun[] = [];
+      let cursor = 0;
+      for (const t of row) {
+        const isFirst = runs.length === 0;
+        const sep = isFirst ? 0 : spaceW;
+        const text = t.kind === 'word' ? t.text! : ' '.repeat(Math.max(3, Math.round(Math.max(25, t.hole!.target * scale) / spaceW)));
+        const w = t.kind === 'word' ? t.w : Math.max(25, t.hole!.target * scale);
+        const bold = t.kind === 'word' ? !!t.bold : false;
+        const italic = t.kind === 'word' ? !!t.italic : false;
+        const last = runs[runs.length - 1];
+        if (last && (t.kind === 'hole' || (last.bold === bold && last.italic === italic))) {
+          last.text += (isFirst ? '' : ' ') + text; // mismo estilo (o hueco): fluye en el run
+        } else {
+          runs.push({ text, bold, italic, dx: cursor + sep + (isFirst ? 0 : BOUNDARY_PAD) });
+        }
+        cursor += sep + w;
+      }
+      for (const r of runs) {
+        const fix = dxFix.get(`${rowIdx}:${r.text.trim().slice(0, 30)}`);
+        if (fix) r.dx += fix;
+      }
+      return runs;
+    };
+
+    const createStart = this.creates.length;
+    let scale = 1;
+    let layout: Tok[][] = [];
+    let extraLines = 0;
+    let pdf: Uint8Array | null = null;
+    let rePage: Awaited<ReturnType<typeof graphFromBytes>>['pages'][number] | undefined;
+
+    for (let iter = 0; iter < 8; iter++) {
+      // wrap con el scale actual (respetando el tope de renglones extra)
+      layout = wrap(scale);
+      while (layout.length > lines.length + maxExtraLines && scale > 0.3) { scale *= 0.9; layout = wrap(scale); }
+      extraLines = Math.max(0, layout.length - lines.length);
+
+      // (re)aplicar desde cero: ediciones frescas de las líneas + creates truncados
+      this.creates.length = createStart;
+      for (const l of lines) this.edits.delete(l.id);
+      for (let k = 0; k < lines.length; k++) {
+        const runs = k < layout.length ? rowRuns(layout[k], scale, k) : [];
+        if (runs.length) this.putSeg(lines[k], { runs });
+        else this.putSeg(lines[k], { remove: true });
+      }
+      for (let e = 0; e < extraLines; e++) {
+        const bl = paraBottom - leading * (e + 1);
+        const text = layout[lines.length + e].map(t => (t.kind === 'word' ? t.text! : ' '.repeat(Math.max(3, Math.round(Math.max(25, t.hole!.target * scale) / spaceW))))).join(' ');
+        this.creates.push({ kind: 'text', page: s.page, x: s.x, y: bl + s.fontSize, text, size: s.fontSize });
+      }
+      if (extraLines > 0) {
+        const dy = extraLines * leading;
+        for (const other of page.segments) {
+          if (other.baseline < paraBottom - 1 && !lines.some(l => l.id === other.id)) {
+            this.putSeg(other, { baseline: other.baseline - dy });
+          }
+        }
+        for (let ci = 0; ci < createStart; ci++) {
+          const c = this.creates[ci];
+          if (c.kind === 'field' && c.page === s.page && c.y < paraBottom - 1) c.y -= dy;
+        }
+      }
+
+      // MEDIR el resultado real: (a) ningún renglón puede pasarse del borde de
+      // texto original (los generadores tipo Word CLIPPEAN ahí — el excedente
+      // desaparece visualmente), (b) ningún par de runs puede solaparse — si
+      // chocan, registro el corrimiento EXACTO medido y re-aplico.
+      ({ pdf } = await this.bake());
+      const re = await graphFromBytes(pdf.slice());
+      rePage = re.pages.find(p => p.page === s.page);
+      let overflow = false;
+      let collided = false;
+      for (let k = 0; k < layout.length; k++) {
+        const bl = k < lines.length ? lines[k].baseline : paraBottom - leading * (k - lines.length + 1);
+        const rowSegs = (rePage?.segments ?? [])
+          .filter(x => Math.abs(x.baseline - bl) < 6 && x.x >= s.x - 3)
+          .sort((a, b) => a.x - b.x);
+        // runs reales de la fila, en orden x (los segmentos pueden fusionar tramos)
+        const flat = rowSegs.flatMap(seg => seg.runs).sort((a, b) => a.x - b.x);
+        for (let i = 0; i < flat.length; i++) {
+          if (flat[i].x + flat[i].width > rightEdge + 3) overflow = true;
+          if (i > 0) {
+            const prevEnd = flat[i - 1].x + flat[i - 1].width;
+            const over = prevEnd - flat[i].x;
+            if (over > 1) {
+              collided = true;
+              // corrimiento exacto medido para esta ancla, acumulable
+              const key = `${k}:${flat[i].text.trim().slice(0, 30)}`;
+              dxFix.set(key, (dxFix.get(key) ?? 0) + over + 1.5);
+            }
+          }
+        }
+      }
+      if (!overflow && !collided) break;
+      if (overflow) scale *= 0.92; // solo el overflow achica los campos; el choque se corrige por ancla
+    }
+
+    // ── 6. Con el layout final medido, crear cada campo sobre el GAP real de su
+    // renglón — imposible pisar texto (no hay glifos ahí).
     const made: string[] = [];
-    for (let i = 0; i < n; i++) {
-      const g = gaps[i];
-      const x0 = g.from + 1;
-      const width = Math.max(20, g.to - g.from - 2);
-      // Altura ajustada al interlineado: size+2 (no size+5) para que los campos
-      // de líneas contiguas no se toquen verticalmente.
-      const y = baseline - 2;
-      this.creates.push({
-        kind: 'field', fieldType: 'text', page: s.page,
-        x: Math.round(x0 * 100) / 100, y: Math.round(y * 100) / 100,
-        width: Math.round(width * 100) / 100, height: Math.round((size + 2) * 100) / 100,
-        name: spans[i].name,
-      });
-      made.push(`${spans[i].name} @(${Math.round(x0)},${Math.round(y)}) ${Math.round(width)}pt`);
+    let holeCursor = 0;
+    const holesPerRow = layout.map(row => row.filter(t => t.kind === 'hole').length);
+    for (let k = 0; k < layout.length && holeCursor < holes.length; k++) {
+      if (!holesPerRow[k]) continue;
+      const bl = k < lines.length ? lines[k].baseline : paraBottom - leading * (k - lines.length + 1);
+      const rowSegs = (rePage?.segments ?? [])
+        .filter(x => Math.abs(x.baseline - bl) < 6 && x.x >= s.x - 3 && x.x <= rightEdge + 8)
+        .sort((a, b) => a.x - b.x);
+      const gaps: Array<{ from: number; to: number }> = [];
+      const GAP_MIN = 10;
+      if (rowSegs.length && rowSegs[0].x - s.x > GAP_MIN) gaps.push({ from: s.x, to: rowSegs[0].x });
+      for (let i = 0; i < rowSegs.length; i++) {
+        const from = rowSegs[i].x + rowSegs[i].width;
+        const to = i + 1 < rowSegs.length ? rowSegs[i + 1].x : rightEdge;
+        if (to - from > GAP_MIN) gaps.push({ from, to });
+      }
+      const rowHoles = layout[k].filter(t => t.kind === 'hole').map(t => t.hole!);
+      const size = rowSegs[0]?.fontSize ?? s.fontSize;
+      const rbl = rowSegs[0]?.baseline ?? bl;
+      for (let i = 0; i < rowHoles.length && holeCursor < holes.length; i++, holeCursor++) {
+        const g = gaps[i];
+        if (!g) { made.push(`(⚠ sin hueco medible para ${rowHoles[i].name})`); continue; }
+        this.creates.push({
+          kind: 'field', fieldType: 'text', page: s.page,
+          x: Math.round((g.from + 1) * 100) / 100, y: Math.round((rbl - 2) * 100) / 100,
+          width: Math.round(Math.max(20, g.to - g.from - 2) * 100) / 100, height: Math.round((size + 2) * 100) / 100,
+          name: rowHoles[i].name,
+        });
+        made.push(`${rowHoles[i].name} @(${Math.round(g.from + 1)},${Math.round(rbl - 2)}) ${Math.round(g.to - g.from - 2)}pt`);
+      }
     }
-    const warn = gaps.length !== spans.length ? ` (⚠ ${spans.length} placeholders → ${gaps.length} huecos medidos)` : '';
-    return `✓ ${made.length} campo(s) sobre los huecos REALES de ${id} (medido tras hornear, sin solapamiento): ${made.join(' · ')}${warn}`;
+    const grew = extraLines ? ` · párrafo reconstruido (+${extraLines} renglón/es, contenido inferior corrido)` : '';
+    const shrunk = scale < 1 ? ` · targets al ${Math.round(scale * 100)}% para entrar en página` : '';
+    return `✓ ${made.length} campo(s) con ancho útil sobre huecos REALES (medidos tras hornear)${grew}${shrunk}: ${made.join(' · ')}`;
   }
 
   /** COMPLETA un campo de formulario por su NOMBRE o por su id de widget

@@ -52,7 +52,7 @@ export {
 } from './graph/pageGraphService.js';
 export { locateText, type TextAnchor } from './graph/locateText.js';
 
-// edit — Layer 2 (construcción de ediciones; F4 lo expande al EditLedger)
+// edit — Layer 2 (mutación acumulada: merge, ledger, tramos estilados, list-markers)
 export {
   mergeSegmentEdit,
   mergeImageEdit,
@@ -61,7 +61,9 @@ export {
   mergeHighlightEdit,
   mergeLinkEdit,
   promoteMovedImages,
-} from './edit/merge.js';
+  effectiveGeometry,
+  effectiveRect,
+} from './edit/mergeEdits.js';
 export type {
   SegmentPatch,
   ImagePatch,
@@ -69,4 +71,58 @@ export type {
   WidgetPatch,
   HighlightPatch,
   LinkPatch,
-} from './edit/merge.js';
+  EffectiveGeometry,
+  EffectiveRect,
+} from './edit/mergeEdits.js';
+export { EditLedger, IEditLedger } from './edit/editLedger.js';
+export type { LedgerSnapshot, RectNode, RectPatch } from './edit/editLedger.js';
+export { applyTextDiff, toggleStyleRange, setStyleRange } from './edit/styledRuns.js';
+export {
+  LIST_GAP,
+  hasListMarker,
+  listMarkerLen,
+  markerBodyDx,
+  stripListMarker,
+  markerAt,
+  firstMarker,
+  isBareListMarker,
+  markerIsKind,
+  markerKindOf,
+  toggleListMarker,
+  nextListMarker,
+  type ListKind,
+} from './edit/listMarkers.js';
+
+// layout — Layer 2 (geometría determinística: charX, párrafo, reflow, placeholders)
+export { charXOf, type CharXLine } from './layout/charX.js';
+export {
+  paraLinesOf,
+  paragraphOf,
+  paragraphToks,
+  type LayoutEnv,
+  type ParaLine,
+  type Paragraph,
+  type ReflowHole,
+  type ReflowTok,
+} from './layout/paragraph.js';
+export {
+  reflowApply,
+  DEFAULT_REFLOW_LIMITS,
+  type ReflowEnv,
+  type ReflowCreate,
+  type ReflowLimits,
+  type ReflowResult,
+  type ReExtract,
+} from './layout/reflow.js';
+export {
+  matchPlaceholders,
+  targetWidthFor,
+  defaultFieldWidthHints,
+  looksLikeLeaderRewrite,
+  type PlaceholderField,
+  type FieldPlacement,
+  type PlaceholderMatchResult,
+  type MatchContext,
+  type FieldWidthHint,
+  type OccupiedRect,
+} from './layout/placeholderMatch.js';

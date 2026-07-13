@@ -8,5 +8,10 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test"
   },
-  "packageManager": "pnpm@10.0.0"
+  "packageManager": "pnpm@10.0.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
 }

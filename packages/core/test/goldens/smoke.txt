@@ -1,0 +1,2 @@
+segment relocated x=<n> y=<n> (page <n>)
+bake applied <n> edits in <n>ms

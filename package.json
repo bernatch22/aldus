@@ -1,0 +1,12 @@
+{
+  "name": "aldus-v2",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Aldus v2 — pixel-perfect PDF graph editing, re-architected art-of-code style (see PLAN.md).",
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test"
+  },
+  "packageManager": "pnpm@10.0.0"
+}

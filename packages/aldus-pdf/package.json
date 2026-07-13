@@ -1,0 +1,13 @@
+{
+  "name": "aldus-pdf",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Aldus v2 — la distribución npm (lib + CLI + server + editor SPA). Llega en F7.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@aldus/core": "workspace:*",
+    "@aldus/agent": "workspace:*"
+  }
+}

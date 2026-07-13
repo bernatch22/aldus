@@ -1,0 +1,14 @@
+{
+  "name": "@aldus/server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Aldus v2 host Express: composition root Node, error middleware único, IInstantOp, IAgentEventSink, DocStore + GC. Llega en F7.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@aldus/core": "workspace:*",
+    "@aldus/agent": "workspace:*"
+  }
+}

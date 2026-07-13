@@ -1,0 +1,12 @@
+{
+  "name": "@aldus/agent",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Aldus v2 agent: ILlmTransport ×2, runTurn único, EditSession fachada, CLI. Llega en F5.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@aldus/core": "workspace:*"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "aldus-editor",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Aldus v2 editor: editor-core sin React + editor-react (INodeKind registry, composition root). Llega en F6.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@aldus/core": "workspace:*"
+  }
+}

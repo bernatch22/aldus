@@ -1,0 +1,33 @@
+{
+  "name": "@aldus/core",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "El motor de Aldus v2: common (Layer 0), container, errores estructurados. El dominio (graph/edit/bake) llega en F2-F4.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./bake": {
+      "types": "./dist/bake/index.d.ts",
+      "import": "./dist/bake/index.js"
+    },
+    "./node": {
+      "types": "./dist/node/index.d.ts",
+      "import": "./dist/node/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.8"
+  }
+}

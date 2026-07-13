@@ -51,3 +51,22 @@ export {
   type PdfRect,
 } from './graph/pageGraphService.js';
 export { locateText, type TextAnchor } from './graph/locateText.js';
+
+// edit — Layer 2 (construcción de ediciones; F4 lo expande al EditLedger)
+export {
+  mergeSegmentEdit,
+  mergeImageEdit,
+  mergeShapeEdit,
+  mergeWidgetEdit,
+  mergeHighlightEdit,
+  mergeLinkEdit,
+  promoteMovedImages,
+} from './edit/merge.js';
+export type {
+  SegmentPatch,
+  ImagePatch,
+  ShapePatch,
+  WidgetPatch,
+  HighlightPatch,
+  LinkPatch,
+} from './edit/merge.js';

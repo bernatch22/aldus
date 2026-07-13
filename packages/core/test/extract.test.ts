@@ -1,12 +1,8 @@
 /**
- * extract.test.ts — dos invariantes del extractor (portado de F1a con UNA
- * adaptación: en v1 el caso "ids estables" removía el nodo con el BAKE; el
- * bake llega en F3, así que acá se construyen DOS PDFs con pdf-lib — uno sin
- * el nodo del medio — y se comparan los ids de los nodos comunes. El
- * invariante probado es el mismo: el id sale de la GEOMETRÍA, no del índice).
- *
- * TODO(F3): re-agregar la variante vía bake (remove de "Beta" + re-extract)
- * cuando bakeSegmentEdits/bake exista en v2.
+ * extract.test.ts — invariantes del extractor. La variante "ids estables" se
+ * prueba de DOS formas equivalentes: con dos PDFs construidos a mano (portado
+ * de F1a) Y — ahora que el bake existe (F3) — removiendo el nodo del medio con
+ * el BAKE y re-extrayendo (la forma ORIGINAL de v1, resuelto el TODO(F3)).
  *
  * (a) IDS ESTABLES POR GEOMETRÍA: el id de un segmento sale de su baseline/x
  *     redondeados (`p1-y700-x72`), no de un índice — remover OTRO nodo no
@@ -15,10 +11,14 @@
  *
  * (b) mergeBlockSegments: un bloque multilínea emitido como lo emite el bake
  *     (una línea de UN segmento, misma x ±0.5, mismo tamaño ±0.1, leading
- *     1.2×size ±0.06×size) se re-fusiona en UN segmento con '\n'.
+ *     1.2×size ±0.06×size) se re-fusiona en UN segmento con '\n'. Se prueba
+ *     también el ROUND-TRIP real: bake de un texto con '\n' → re-extract → un
+ *     solo segmento con '\n' (el bake emite exactamente esa firma).
  */
 import { describe, expect, it } from 'vitest';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { mergeSegmentEdit } from '../src/index.js';
+import { bakeSegmentEdits } from '../src/bake/index.js';
 import { graphOf, segByText } from './helpers.js';
 
 async function makeLines(lines: Array<{ text: string; x: number; y: number }>): Promise<Uint8Array> {
@@ -54,6 +54,25 @@ describe('ids estables por geometría', () => {
     expect(segByText(g, 'Alpha').id).toBe('p1-y700-x72');
     expect(segByText(g, 'Beta').id).toBe('p1-y660-x72');
   });
+
+  it('vía BAKE (remove de "Beta" + re-extract): los ids de Alpha/Gamma no cambian', async () => {
+    // La forma ORIGINAL de v1 (resuelto el TODO(F3)): remover el nodo del medio
+    // con el bake real y re-extraer. Si los ids salieran de un índice, borrar
+    // Beta correría los de Gamma.
+    const pdf = await makeLines([
+      { text: 'Alpha', x: 72, y: 700 },
+      { text: 'Beta', x: 72, y: 660 },
+      { text: 'Gamma', x: 72, y: 620 },
+    ]);
+    const g = await graphOf(pdf);
+    const del = mergeSegmentEdit(segByText(g, 'Beta'), null, { remove: true });
+    const { pdf: baked, warnings } = await bakeSegmentEdits(pdf, [del!]);
+    expect(warnings).toEqual([]);
+    const g2 = await graphOf(baked);
+    expect(g2.segments.some(s => s.text === 'Beta')).toBe(false);
+    expect(segByText(g2, 'Alpha').id).toBe(segByText(g, 'Alpha').id);
+    expect(segByText(g2, 'Gamma').id).toBe(segByText(g, 'Gamma').id);
+  });
 });
 
 describe('mergeBlockSegments — el bloque del bake se re-fusiona', () => {
@@ -88,5 +107,22 @@ describe('mergeBlockSegments — el bloque del bake se re-fusiona', () => {
       { text: 'indentada dos', x: 90, y: 700 - 14.4 },
     ]));
     expect(g.segments.filter(s => s.text.startsWith('indentada'))).toHaveLength(2);
+  });
+
+  it('ROUND-TRIP: bake de un texto con \\n → re-extract lo devuelve como UN segmento', async () => {
+    // El bake emite cada línea del '\n' bajando leading = 1.2×fs, misma x — la
+    // firma EXACTA que mergeBlockSegments re-fusiona. Round-trip real bake→extract.
+    const pdf = await makeLines([{ text: 'una sola linea', x: 72, y: 700 }]);
+    const g = await graphOf(pdf);
+    const seg = segByText(g, 'una sola linea');
+    const edit = mergeSegmentEdit(seg, null, { text: 'primera\nsegunda\ntercera' });
+    // (La fuente estándar de pdf-lib no trae ToUnicode → el rewrite cae a
+    // sustitución con warning; irrelevante para el invariante del '\n'.)
+    const { pdf: baked } = await bakeSegmentEdits(pdf, [edit!]);
+    const g2 = await graphOf(baked);
+    const block = segByText(g2, 'primera\nsegunda\ntercera');
+    expect(block.x).toBeCloseTo(72, 0);
+    expect(block.baseline).toBeCloseTo(700, 0);
+    expect(g2.segments.filter(s => /primera|segunda|tercera/.test(s.text))).toHaveLength(1);
   });
 });

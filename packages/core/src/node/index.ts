@@ -1,6 +1,7 @@
 /**
- * @aldus/core/node — providers con I/O (font providers de sistema/descarga,
- * composition.node). Vacío hasta F2/F3; el subpath existe desde F0 para que
- * el bundle browser jamás arrastre node:fs (regla dura #5 del plan).
+ * @aldus/core/node — providers con I/O (font providers de sistema/descarga) y
+ * el composition root Node. SOLO este subpath importa node:fs — el bundle
+ * browser jamás lo arrastra (regla dura #5 del plan).
  */
-export {};
+export { SystemFontProvider, MetricTwinProvider, registerNodeFontProviders } from './fontsNode.js';
+export { createNodeContainer } from './composition.node.js';

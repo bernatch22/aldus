@@ -2,7 +2,7 @@
   "name": "@aldus/core",
   "version": "0.0.1",
   "type": "module",
-  "description": "El motor de Aldus v2: common (Layer 0), container, errores estructurados. El dominio (graph/edit/bake) llega en F2-F4.",
+  "description": "El motor de Aldus v2: common (Layer 0), container, errores estructurados, modelo tipado del grafo (model/), extracción (graph/) y protocolo PDF (pdf/). El bake/edit/layout llegan en F3-F4.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -24,8 +24,20 @@
     "build": "tsup",
     "test": "vitest run"
   },
+  "dependencies": {
+    "pdf-lib": "^1.17.1"
+  },
+  "peerDependencies": {
+    "pdfjs-dist": ">=4"
+  },
+  "peerDependenciesMeta": {
+    "pdfjs-dist": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "pdfjs-dist": "^4.10.38",
     "tsup": "^8.3.5",
     "typescript": "^5.7.0",
     "vitest": "^2.1.8"

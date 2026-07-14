@@ -301,12 +301,39 @@ export const textEmitStrategies: readonly ITextEmitStrategy[] = [
 const textLocator = new TextOpLocator();
 
 /**
+ * ESCUDO NaN: ¿algún número que el emit escribiría al stream NO es finito?
+ * Un run sin `dx` (o con NaN) hace `newX + sr.dx * ratio` = NaN → `fmt(NaN)`
+ * escribe "NaN" en el Tm → PDF corrupto ("Unknown command NaN" / "Tm expected
+ * 6 args, got 4"). Ley del proyecto: lo que no puede hacer bien, NO lo toca —
+ * el edit entero se salta con warning {@link BakeCodes.InvalidGeometry}.
+ */
+function hasNonFiniteGeometry(edit: SegmentEdit): boolean {
+  const bad = (v: number | undefined) => v !== undefined && !Number.isFinite(v);
+  if (bad(edit.fontSize) || bad(edit.x) || bad(edit.baseline) || bad(edit.charSpacing) || bad(edit.hScale)) return true;
+  // ratio = (fontSize ?? original.fontSize) / original.fontSize: un original
+  // degenerado (0/NaN) también propaga NaN/Infinity a toda la emisión.
+  if (!Number.isFinite(edit.original.fontSize) || edit.original.fontSize === 0) return true;
+  if (!Number.isFinite(edit.original.x) || !Number.isFinite(edit.original.baseline)) return true;
+  for (const r of edit.runs ?? []) {
+    if (!Number.isFinite(r.dx)) return true; // dx es REQUERIDO: undefined → NaN
+    if (r.w !== undefined && !Number.isFinite(r.w)) return true;
+  }
+  return false;
+}
+
+/**
  * Apply ONE SegmentEdit on its page: locate by geometry, record the exact
  * segment color, handle removal, then probe the emit strategies. (El cuerpo
  * del loop de v1 applySegmentEditsToPage — el loop vive en SegmentEditApplier.)
  */
 export function applySegmentEdit(edit: SegmentEdit, ctx: PageBakeContext): void {
   const { splices, report } = ctx;
+  // Escudo NaN ANTES de tocar nada: un edit con geometría no finita jamás
+  // llega a los sinks (splices/appendBlocks) — el segmento queda intacto.
+  if (hasNonFiniteGeometry(edit)) {
+    report.warning(BakeCodes.InvalidGeometry, edit.segmentId);
+    return;
+  }
   const located = textLocator.locate(edit.original, ctx.walk.shows);
   if (located === null || isLocateConflict(located)) {
     const reason = located === null ? TEXT_NOT_LOCATED_REASON : located.conflict;

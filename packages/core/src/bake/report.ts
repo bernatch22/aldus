@@ -68,6 +68,9 @@ export const BakeCodes = {
   FallbackDrawFailed: 9019,
   /** Ningún IEditApplier reclamó el edit (kind desconocido) — v2 estructural. */
   UnclaimedEdit: 9020,
+  /** Algún número del edit no es finito (NaN/Infinity/dx faltante) — emitirlo
+   *  escribiría "NaN" en el content stream (PDF corrupto). No se toca. */
+  InvalidGeometry: 9021,
 } as const;
 
 export type BakeCode = (typeof BakeCodes)[keyof typeof BakeCodes];
@@ -113,6 +116,7 @@ const FORMATTERS: Record<number, (e: BakeEvent) => string> = {
   [BakeCodes.UnrepresentableDropped]: e => `p${e.params.page}: caracteres no representables descartados en "${e.params.text}…"`,
   [BakeCodes.FallbackDrawFailed]: e => `p${e.params.page}: no se pudo dibujar el reemplazo "${e.params.text}…"`,
   [BakeCodes.UnclaimedEdit]: e => `${e.nodeId}: ningún applier reconoce la edición (kind "${e.params.kind}") — sin cambios`,
+  [BakeCodes.InvalidGeometry]: e => `${e.nodeId}: geometría inválida (número no finito) — sin cambios`,
 };
 
 /** Renderiza un evento al string castellano de v1 (byte-idéntico). */

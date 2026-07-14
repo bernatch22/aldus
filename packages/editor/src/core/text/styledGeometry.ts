@@ -1,71 +1,149 @@
 /**
- * styledGeometry — preservar la GEOMETRÍA del PDF al re-estilar sin cambiar texto.
+ * styledGeometry — preservar la GEOMETRÍA del PDF al re-estilar sin cambiar
+ * texto (v2 del fix; la v1, `restyleKeepingGeometry(seed, styled)`, mezclaba
+ * dx del seed con runs SIN dx multi-línea y el emit del bake escribía NaN en
+ * el content stream → PDF corrupto; hoy el bake tiene escudo InvalidGeometry,
+ * pero acá directamente no se produce esa forma).
  *
- * ⚠️ NO CABLEADO (bug NaN, 2026-07-14): el seed (originalStyledRuns) fusiona
- * runs del mismo estilo A TRAVÉS del '\n' → esta función devuelve runs
- * multi-línea con dx, una forma que el emit del bake no tolera (escribió NaN
- * en el content stream → PDF corrupto). Antes de re-cablear en commit():
- * (a) re-cortar acá por '\n' (ningún run de salida cruza línea; el primer run
- *     de cada línea hereda el dx REAL de esa línea del grafo, no del seed
- *     fusionado), y
- * (b) blindar el emit del bake para que NUNCA escriba NaN (skip + warning).
+ * El caso: el usuario aplica bold/italic/color a una palabra SIN tocar el
+ * texto. El camino normal del commit (applyTextDiff + applyAlign) recalcula
+ * los `dx` midiendo con la fuente del BROWSER — que difiere de la métrica
+ * real del PDF (itálicas, bold sintético, glifos sin /ToUnicode tipo
+ * U+0011/U+0012): "denominación" en bold midió 83.2pt en browser pero el bake
+ * la dibuja en 71.2pt. El bake re-emitía con esos dx corridos → agujeros que
+ * el re-extract clasifica COLUMNA (nodo PARTIDO) o texto pisado.
  *
- * El caso: el usuario aplica bold/italic/color a una palabra SIN tocar el texto.
- * El camino normal del commit (applyTextDiff + applyAlign) recalcula los `dx`
- * midiendo con la fuente del BROWSER — que difiere de la métrica real del PDF
- * (itálicas, glifos sin /ToUnicode tipo U+0011/U+0012). El bake re-emite con
- * esos dx corridos → huecos → el re-extract los lee como espacios de palabra
- * ("nombre ]") o directamente parte el nodo (gap de columna).
+ * {@link restyleFromGraph} construye los runs de salida desde la GEOMETRÍA
+ * DEL GRAFO (seg.runs vía runLines: cada run trae x/width REALES del PDF):
+ *  - recorre las líneas y los graph-runs EXACTAMENTE como `originalStyledRuns`
+ *    arma el texto (espacios inferidos con classifyGap, '\n' entre líneas) —
+ *    los offsets calzan 1:1 con `styled`;
+ *  - corta en: inicios de línea ∪ fronteras de estilo ∪ fronteras de graph-run
+ *    (estas últimas regalan los dx exactos). Ningún run de salida cruza '\n'
+ *    (va pegado al final del último run de su línea, como originalStyledRuns);
+ *  - dx = posición PDF real − seg.x: frontera en el inicio de un graph-run →
+ *    su x exacta; adentro de un graph-run → interpolación por clase de glifo
+ *    con `charXOf` (la misma de placeholderMatch);
+ *  - estilos del run de `styled` que cubre el tramo; underline lleva el `w`
+ *    GEOMÉTRICO del tramo (cx[to]−cx[from]: exacto cuando coincide con un run
+ *    subrayado del grafo).
  *
- * Con texto idéntico, la geometría correcta YA LA TENEMOS: son los dx del seed
- * (los del PDF si es la primera edición; los del edit previo si no). Esta
- * función re-corta el texto en la UNIÓN de fronteras (seed ∪ estilados), toma
- * el ESTILO del run estilado que cubre cada tramo, y el `dx` del seed cuando el
- * tramo arranca exactamente donde arrancaba un run del seed. Resultado: mismos
- * bytes de posición que el original, estilos nuevos.
+ * Nota de fidelidad: el ancla de cada graph-run queda EXACTA (eso mata el
+ * split); el ANCHO re-encodeado de un tramo puede diferir del original
+ * (justificado por dobles espacios/TJ que pdf.js normaliza en el grafo), así
+ * que el re-extract puede correr algún espacio inferido ±1 posición. Fidelidad
+ * total de ancho exigiría Tz/Tc por run en el bake (fuera de alcance acá).
+ *
+ * DEFENSIVO: si el texto de `styled` no calza con el ensamblado del grafo
+ * (edición previa, trailing space, cualquier duda) devuelve null y el caller
+ * cae al camino applyAlign — nunca adivina.
  */
-import type { StyledRun } from '@aldus/core';
+import {
+  charXOf,
+  classifyGap,
+  runLines,
+  styledText,
+  type SegmentNode,
+  type StyledRun,
+  type TextRunNode,
+} from '@aldus/core';
+import { round1 } from './styledDom.js';
 
-/** Pre-condición: `seed` y `styled` concatenan EXACTAMENTE el mismo texto. */
-export function restyleKeepingGeometry(seed: StyledRun[], styled: StyledRun[]): StyledRun[] {
-  const text = seed.map(r => r.text).join('');
-  const total = text.length;
+/** El run de `styled` que cubre el offset `o` (por construcción los cortes
+ *  incluyen las fronteras de estilo: un tramo nunca cruza dos estilos). */
+function styleAt(styled: StyledRun[], o: number): StyledRun {
+  let p = 0;
+  for (const r of styled) {
+    if (o < p + r.text.length) return r;
+    p += r.text.length;
+  }
+  return styled[styled.length - 1]!;
+}
 
-  // Fronteras: la unión de los inicios de run de ambos lados.
-  const starts = new Set<number>([0]);
-  let off = 0;
-  for (const r of seed) { starts.add(off); off += r.text.length; }
-  off = 0;
-  for (const r of styled) { starts.add(off); off += r.text.length; }
-  const cuts = [...starts].filter(c => c < total).sort((a, b) => a - b);
+export function restyleFromGraph(seg: SegmentNode, styled: StyledRun[]): StyledRun[] | null {
+  if (!seg.runs.length || !styled.length) return null;
+  const lines = runLines(seg);
 
-  // dx del seed, indexado por el offset de inicio de su run.
-  const seedDxAt = new Map<number, number>();
-  off = 0;
-  for (const r of seed) { if (r.dx !== undefined) seedDxAt.set(off, r.dx); off += r.text.length; }
-
-  const runAt = (runs: StyledRun[], o: number): StyledRun => {
-    let p = 0;
-    for (const r of runs) { if (o < p + r.text.length) return r; p += r.text.length; }
-    return runs[runs.length - 1]!;
-  };
-
-  const out: StyledRun[] = [];
-  for (let i = 0; i < cuts.length; i++) {
-    const from = cuts[i]!;
-    const to = i + 1 < cuts.length ? cuts[i + 1]! : total;
-    const st = runAt(styled, from);   // el ESTILO manda el lado editado
-    const ge = runAt(seed, from);     // la GEOMETRÍA manda el seed
-    const run: StyledRun = { text: text.slice(from, to), bold: st.bold, italic: st.italic };
-    if (st.color !== undefined) run.color = st.color;
-    if (st.underline) {
-      run.underline = true;
-      const w = ge.underline ? ge.w : st.w;
-      if (w !== undefined) run.w = w;
+  // ── 1. Ensamblar el texto COMO originalStyledRuns (misma regla de espacios
+  // y de '\n') registrando, por línea, el offset de inicio de cada graph-run.
+  interface LineInfo {
+    start: number; // offset de la línea en el texto ensamblado
+    text: string; // texto de la línea (sin '\n')
+    runs: TextRunNode[];
+    /** offset GLOBAL de inicio de cada graph-run de la línea. */
+    runStart: Map<number, TextRunNode>;
+  }
+  const infos: LineInfo[] = [];
+  let text = '';
+  for (let li = 0; li < lines.length; li++) {
+    if (li > 0) text += '\n';
+    const start = text.length;
+    const runs = lines[li]!;
+    const runStart = new Map<number, TextRunNode>();
+    let lineText = '';
+    for (let i = 0; i < runs.length; i++) {
+      const r = runs[i]!;
+      if (i > 0) {
+        const prev = runs[i - 1]!;
+        const gap = r.x - (prev.x + prev.width);
+        if (classifyGap(gap, prev, r) === 'space' && !lineText.endsWith(' ') && !r.text.startsWith(' ')) {
+          lineText += ' ';
+        }
+      }
+      runStart.set(start + lineText.length, r);
+      lineText += r.text;
     }
-    const dx = seedDxAt.get(from);
-    if (dx !== undefined) run.dx = dx;
-    out.push(run);
+    text += lineText;
+    infos.push({ start, text: lineText, runs, runStart });
+  }
+
+  // ── 2. Pre-condición sagrada: los offsets deben calzar 1:1 con `styled`.
+  if (text !== styledText(styled)) return null;
+
+  // Fronteras de estilo (inicios de run de `styled`), offsets globales.
+  const styleStarts: number[] = [];
+  let off = 0;
+  for (const r of styled) {
+    styleStarts.push(off);
+    off += r.text.length;
+  }
+
+  // ── 3. Cortar por línea y asignar dx desde la geometría real.
+  const out: StyledRun[] = [];
+  for (let li = 0; li < infos.length; li++) {
+    const info = infos[li]!;
+    const lineEnd = info.start + info.text.length;
+    const cuts = [...new Set([
+      info.start,
+      ...info.runStart.keys(),
+      ...styleStarts.filter(o => o > info.start && o < lineEnd),
+    ])].filter(o => o < lineEnd).sort((a, b) => a - b);
+    // x por carácter de la línea, desde sus runs reales (pesos por clase de
+    // glifo — la interpolación para fronteras a mitad de un graph-run).
+    const cx = charXOf({ text: info.text, runs: info.runs, x: info.runs[0]!.x });
+    const lineFirst = out.length;
+    for (let c = 0; c < cuts.length; c++) {
+      const from = cuts[c]!;
+      const to = c + 1 < cuts.length ? cuts[c + 1]! : lineEnd;
+      const slice = text.slice(from, to);
+      if (!slice) continue;
+      const st = styleAt(styled, from);
+      const atRun = info.runStart.get(from);
+      const x = atRun ? atRun.x : cx[from - info.start]!;
+      if (!Number.isFinite(x)) return null; // jamás alimentar NaN al bake
+      const run: StyledRun = { text: slice, bold: st.bold, italic: st.italic, dx: round1(x - seg.x) };
+      if (st.color !== undefined) run.color = st.color;
+      if (st.underline) {
+        run.underline = true;
+        // Ancho GEOMÉTRICO del tramo (cx es exacto en los bordes de graph-run:
+        // un tramo que coincide con un run subrayado hereda su width real).
+        const xEnd = to === lineEnd ? cx[info.text.length]! : (info.runStart.get(to)?.x ?? cx[to - info.start]!);
+        run.w = Number.isFinite(xEnd) ? round1(Math.max(0, xEnd - x)) : st.w ?? 0;
+      }
+      out.push(run);
+    }
+    if (out.length === lineFirst) return null; // línea vacía: no debería pasar
+    if (li < infos.length - 1) out[out.length - 1]!.text += '\n';
   }
   return out;
 }

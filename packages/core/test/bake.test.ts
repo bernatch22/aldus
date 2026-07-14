@@ -715,3 +715,53 @@ describe('bake', () => {
     expect(l3.x).toBeCloseTo(l1.x, 0);
   });
 });
+
+describe('escudo NaN (geometría inválida — el motor JAMÁS corrompe)', () => {
+  // La forma EXACTA que corrompió en producción (header de styledGeometry.ts
+  // v1 del fix): runs multi-línea donde algún tramo llega SIN dx (undefined)
+  // → `newX + sr.dx * ratio` = NaN → fmt(NaN) escribía "NaN" en el Tm →
+  // pdf.js: "Unknown command NaN" / "Tm expected 6 args, got 4".
+  const contentOf = async (baked: Uint8Array) => {
+    const { decodeStreams } = await import('./helpers.js');
+    return Buffer.from(await decodeStreams(baked)).toString('latin1');
+  };
+
+  it('run multi-línea sin dx → warning InvalidGeometry, cero NaN, segmento intacto', async () => {
+    const pdf = await makePdf();
+    const g = await graphOf(pdf);
+    const edit = editFor(g, 'Segunda linea de prueba', {
+      runs: [
+        { text: 'Segunda linea', bold: true, italic: false, dx: 0 },
+        // sin dx: la forma que el emit no tolera (jamás debe llegar al stream)
+        { text: ' de\nprueba', bold: false, italic: false } as unknown as import('../src/index.js').StyledRun,
+      ],
+    });
+    const { pdf: baked, applied, warnings } = await bakeSegmentEdits(pdf, [edit]);
+    expect(warnings).toContain('seg: geometría inválida (número no finito) — sin cambios'.replace('seg', edit.segmentId));
+    expect(applied).toHaveLength(0);
+    expect((await contentOf(baked)).includes('NaN')).toBe(false);
+    const g2 = await graphOf(baked);
+    expect(segByText(g2, 'Segunda linea de prueba').x).toBeCloseTo(72, 0);
+  });
+
+  it('dx/x/w con NaN directo → mismo escudo, sin tocar nada', async () => {
+    const pdf = await makePdf();
+    const g = await graphOf(pdf);
+    const edits = [
+      editFor(g, 'Juan Perez', {
+        runs: [{ text: 'Juan Perez', bold: false, italic: false, dx: Number.NaN }],
+      }),
+      editFor(g, 'Nombre:', { x: Number.NaN }),
+      editFor(g, 'Segunda linea de prueba', {
+        runs: [{ text: 'Segunda linea de prueba', bold: false, italic: false, dx: 0, w: Number.POSITIVE_INFINITY, underline: true }],
+      }),
+    ];
+    const { pdf: baked, applied, warnings } = await bakeSegmentEdits(pdf, edits);
+    expect(warnings.filter(w => w.includes('geometría inválida'))).toHaveLength(3);
+    expect(applied).toHaveLength(0);
+    expect((await contentOf(baked)).includes('NaN')).toBe(false);
+    const g2 = await graphOf(baked);
+    expect(segByText(g2, 'Juan Perez').x).toBeCloseTo(220, 0);
+    expect(segByText(g2, 'Nombre:').x).toBeCloseTo(72, 0);
+  });
+});

@@ -20,12 +20,16 @@ export interface TextStyleOverrides {
   colorRaw?: string;
 }
 
-/** Text matrix RELATIVE to the op's CTM for the given scale + position. */
+/** Text matrix RELATIVE to the op's CTM for the given scale + position.
+ *  Devuelve null también si algún componente NO es finito (NaN/Infinity):
+ *  `fmt(NaN)` escribiría literalmente "NaN" en el stream → PDF corrupto e
+ *  ilegible ("Unknown command NaN"). El emit JAMÁS puede corromper. */
 export function relTm(o: ShowOp, ratio: number, x: number, y: number): Matrix | null {
   const m = o.matrix;
   const abs: Matrix = [m[0] * ratio, m[1] * ratio, m[2] * ratio, m[3] * ratio, x, y];
   const inv = invert(o.ctm);
-  return inv ? mul(abs, inv) : null;
+  const t = inv ? mul(abs, inv) : null;
+  return t && t.every(Number.isFinite) ? t : null;
 }
 
 /**

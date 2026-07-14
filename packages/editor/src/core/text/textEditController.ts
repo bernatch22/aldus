@@ -56,6 +56,7 @@ import {
   type StyledRun,
 } from '@aldus/core';
 import { applyAlign, measureWidth, round1 } from './styledDom.js';
+import { restyleFromGraph } from './styledGeometry.js';
 import { containerStyle, log } from '../helpers.js';
 
 export interface EditSession {
@@ -617,14 +618,16 @@ export class TextEditController implements IDisposable {
     // se les suma el indent REAL (bodyDx, geometría) y el marcador se antepone
     // VERBATIM — el gap no depende de espacios ni de mediciones.
     const bodyPx = s.lblRuns ? s.bodyDx * s.scale : 0;
-    // ⚠️ DESCABLEADO (bug NaN): el fast-path restyleKeepingGeometry preservaba
-    // los dx del seed para restyles sin cambio de texto, pero el seed
-    // (originalStyledRuns) fusiona runs del mismo estilo A TRAVÉS del '\n' —
-    // esa forma (run multi-línea con dx) hizo que el emit del bake escribiera
-    // NaN en el content stream (PDF corrupto). Se re-cablea cuando el emit
-    // tolere esa forma (o el helper re-corte por línea). Ver styledGeometry.ts.
-    const sameBody = false;
-    let bodyRuns = applyAlign(applyTextDiff(s.runs, bodyText), s.seg, 1, (s.minW - bodyPx) / s.scale, s.align);
+    // FAST-PATH geométrico (v2 del fix NaN): estilo/color SIN cambio de texto
+    // ni de align ni marcador → los dx salen de la GEOMETRÍA DEL GRAFO
+    // (restyleFromGraph: x/width reales del PDF, cortado por línea — ningún
+    // run cruza '\n', todos con dx finito), no de la medición del browser,
+    // cuya deriva (bold/italic/glifos sin /ToUnicode) abría agujeros que el
+    // re-extract leía como columna → nodo PARTIDO. Si los offsets no calzan
+    // (edición previa, lo que sea), devuelve null y cae a applyAlign.
+    const sameBody = bodyText === s.seedText.replace(/\s+$/, '') && s.align === s.seedAlign && !s.lblRuns;
+    const geo = sameBody ? restyleFromGraph(s.seg, applyTextDiff(s.runs, bodyText)) : null;
+    let bodyRuns = geo ?? applyAlign(applyTextDiff(s.runs, bodyText), s.seg, 1, (s.minW - bodyPx) / s.scale, s.align);
     if (s.lblRuns) bodyRuns = bodyRuns.map(r => ({ ...r, dx: round1((r.dx ?? 0) + s.bodyDx) }));
     const runs = s.lblRuns ? [...s.lblRuns, ...bodyRuns] : bodyRuns;
     const text = (s.lblRuns ? s.lblText : '') + bodyText;
@@ -643,7 +646,7 @@ export class TextEditController implements IDisposable {
         before: s.seedText,
         after: text,
         changed: !noop,
-        geometriaPreservada: sameBody,
+        geometriaPreservada: geo != null,
         runs: runs.map(r => ({
           text: r.text,
           ...(r.bold ? { b: true } : {}), ...(r.italic ? { i: true } : {}),

@@ -492,6 +492,16 @@ export function AldusEditor({
   // PreviewService): se anclan a su segmento y lo siguen al arrastrar.
   const pageHighlights = useMemo(() => view.pendingHighlights.filter(h => h.page === pageNum), [view.pendingHighlights, pageNum]);
 
+  // Los servicios de render van a PdfCanvas como UN objeto — memoizado por
+  // `session` (estable). Sin esto, el literal `{fonts,colors,pixels}` es una
+  // referencia NUEVA cada render → el effect de render de PdfCanvas (que lo
+  // tiene en sus deps) re-corre → onGraph → re-render → LOOP (el select nativo
+  // se cerraba solo, el canvas re-renderizaba sin fin). Gotcha del CLAUDE.md.
+  const canvasServices = useMemo(
+    () => session ? { fonts: session.fonts, colors: session.colors, pixels: session.pixels } : null,
+    [session],
+  );
+
   // ¿Hay un nodo DOCKEABLE seleccionado (segmento/imagen/campo/forma, no
   // bloqueado)? Su barra (FloatingBar / ObjectBar) se acopla al grupo del
   // header vía portal; si no, el header muestra el placeholder deshabilitado.
@@ -658,11 +668,11 @@ export function AldusEditor({
 
         {/* ── Área de la página ── */}
         <main className={cx('thin-scroll flex flex-1 justify-center overflow-auto p-8', placing && 'cursor-crosshair')}>
-          {pdf && session && adapter ? (
+          {pdf && session && adapter && canvasServices ? (
             <div className="h-max">
               <PdfCanvas
                 pdf={pdf} pageNum={pageNum} scale={scale}
-                services={{ fonts: session.fonts, colors: session.colors, pixels: session.pixels }}
+                services={canvasServices}
                 onGraph={handleGraph}
                 lift={liftEntry} draggingId={draggingId}
               >

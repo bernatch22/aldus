@@ -162,6 +162,13 @@ export class EditLedgerAdapter implements IDisposable {
   private readonly _onDidChange = new EventEmitter<void>();
   readonly onDidChange: IEvent<void> = this._onDidChange.event;
 
+  private readonly _onDidRestore = new EventEmitter<void>();
+  /** Fired tras restaurar un snapshot (undo/redo). La capa react lo usa para
+   *  DESELECCIONAR (v1: `onAfterRestore` de usePendingEdits → EditorPage
+   *  `setSelectedId(null)`) — sin esto, un box podía quedar apuntando a un
+   *  nodo cuyo estado acaba de retroceder. */
+  readonly onDidRestore: IEvent<void> = this._onDidRestore.event;
+
   readonly history = new EditHistory(
     () => this.snapshot(),
     s => this.restoreSnapshot(s),
@@ -267,18 +274,24 @@ export class EditLedgerAdapter implements IDisposable {
   }
 
   /** El AGENTE devuelve el SET COMPLETO de ediciones (texto + imagen):
-   *  reemplazan el estado (una sola vez, deshacible con Ctrl+Z). Cachea el
-   *  nodo original de cada segmento editado para el fantasma, igual que una
-   *  edición manual. */
+   *  reemplazan SOLO esos dos kinds (una sola vez, deshacible con Ctrl+Z) —
+   *  los widget/shape/highlight/link edits MANUALES pendientes sobreviven
+   *  (contrato v1: usePendingEdits solo pisaba `edits` + `imageEdits`).
+   *
+   *  El `SegmentEdit` del agente es AUTOCONTENIDO (trae `page` + `original`):
+   *  se acepta VERBATIM, sin exigir el nodo en el grafo local — el flujo
+   *  two-level edita OTRAS páginas por diseño (`edit_document({pages:[3]})`
+   *  con el usuario mirando la 1). Cachea el nodo original de cada segmento
+   *  editado para el fantasma (best-effort: solo si está en la página visible),
+   *  igual que una edición manual. */
   applyAgentEdits(segEdits: SegmentEdit[], imgEdits: ImageEdit[]): void {
     this.history.pushHistory();
     for (const e of segEdits) this.cacheSegment(e.segmentId);
-    this.ledger.clear();
-    for (const e of segEdits) this.ledger.patchSegment(this.requireSeg(e.segmentId), toSegmentPatch(e));
-    for (const e of imgEdits) {
-      const img = this.graph?.images.find(im => im.id === e.imageId);
-      if (img) this.ledger.patchRect(img, toRectPatch(e));
-    }
+    this.ledger.restore({
+      ...this.ledger.snapshot(),
+      segments: new Map(segEdits.map(e => [e.segmentId, e])),
+      images: new Map(imgEdits.map(e => [e.imageId, e])),
+    });
   }
 
   /** HIGHLIGHT pendiente (preview local; se escribe con Aplicar). Varios de
@@ -306,13 +319,13 @@ export class EditLedgerAdapter implements IDisposable {
     return this.graph?.segments.find(s => s.id === segmentId) ?? this.segCache.get(segmentId) ?? null;
   }
 
-  private requireSeg(segmentId: string): SegmentNode {
-    const seg = this.findSeg(segmentId);
-    if (!seg) throw new Error(`applyAgentEdits: segmento ${segmentId} no está en el grafo ni en el cache`);
-    return seg;
-  }
-
-  private cacheSegment(segmentId: string): void {
+  /** Siembra el fantasma de un segmento (si está en el grafo vigente y aún no
+   *  fue cacheado). PÚBLICO: además de cada patch, lo llama
+   *  `LiftService.onDragging` al ARRANCAR un drag (v1 useLift.ts:79-82) — la
+   *  defensa del "ghost vacío": el nodo arrastrado-sin-edición sobrevive
+   *  aunque el grafo cambie bajo el gesto (un preview de otra edición puede
+   *  aterrizar a mitad del drag y extirparlo). */
+  cacheSegment(segmentId: string): void {
     if (this.segCache.has(segmentId)) return;
     const seg = this.graph?.segments.find(s => s.id === segmentId);
     if (seg) this.segCache.set(segmentId, seg);
@@ -333,40 +346,13 @@ export class EditLedgerAdapter implements IDisposable {
   private restoreSnapshot(s: AdapterSnapshot): void {
     this.ledger.restore(s.ledger);
     this.pendingHighlightsList = [...s.pendingHighlights];
+    this._onDidRestore.fire();
   }
 
   dispose(): void {
     this.ledgerSub.dispose();
     this._onDidChange.dispose();
+    this._onDidRestore.dispose();
     this.ledger.dispose();
   }
-}
-
-/** SegmentEdit completo (como los que trae el agente) → el patch equivalente
- *  para `ledger.patchSegment` (todos los campos son overrides explícitos). */
-function toSegmentPatch(e: SegmentEdit): SegmentPatch {
-  return {
-    text: e.text,
-    runs: e.runs ?? null,
-    fontSize: e.fontSize ?? null,
-    font: e.font ?? null,
-    x: e.x ?? null,
-    baseline: e.baseline ?? null,
-    remove: e.remove ?? null,
-    charSpacing: e.charSpacing ?? null,
-    hScale: e.hScale ?? null,
-    color: e.color ?? null,
-    align: e.align ?? null,
-  };
-}
-
-function toRectPatch(e: ImageEdit): RectPatch {
-  return {
-    x: e.x ?? null,
-    y: e.y ?? null,
-    width: e.width ?? null,
-    height: e.height ?? null,
-    remove: e.remove ?? null,
-    zOrder: e.zOrder ?? null,
-  } as RectPatch;
 }

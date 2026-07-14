@@ -89,6 +89,75 @@ describe('EditLedgerAdapter — apply → snapshot → undo/redo', () => {
     expect((adapter.ledger.toBakeInput()[0] as { text: string }).text).toBe('manual edit');
   });
 
+  it('applyAgentEdits acepta edits de OTRA página VERBATIM (A4: no exige el nodo en el grafo local)', () => {
+    // El flujo two-level edita páginas arbitrarias: el usuario mira la página
+    // 1 (grafo local = página 1) y el agente devuelve un edit de la página 2.
+    // El SegmentEdit es autocontenido (page + original) — v1 lo guardaba tal
+    // cual en el map, sin buscar el nodo.
+    const seg = mkSeg('p1-l0-s0');
+    const adapter = new EditLedgerAdapter();
+    adapter.setGraph(mkGraph([seg])); // SOLO página 1
+
+    const page2Edit = {
+      segmentId: 'p2-l0-s0', page: 2, text: 'agent edit en página 2',
+      original: { text: 'texto original', x: 72, baseline: 500, width: 90, fontSize: 11 },
+    };
+    expect(() => adapter.applyAgentEdits([page2Edit], [])).not.toThrow();
+
+    const baked = adapter.ledger.toBakeInput();
+    expect(baked).toHaveLength(1);
+    const e = baked[0] as { segmentId: string; page: number; text: string; original: { text: string } };
+    expect(e.segmentId).toBe('p2-l0-s0');
+    expect(e.page).toBe(2);
+    expect(e.text).toBe('agent edit en página 2');
+    // VERBATIM: conserva el `original` que calculó el agente, no uno re-derivado.
+    expect(e.original).toBe(page2Edit.original);
+  });
+
+  it('applyAgentEdits NO borra los widget/shape/highlight/link edits manuales pendientes (A3)', () => {
+    const seg = mkSeg('p1-l0-s0');
+    const adapter = new EditLedgerAdapter();
+    adapter.setGraph(mkGraph([seg]));
+
+    // Edición MANUAL de un campo (widget) pendiente, previa al agente.
+    const widget = {
+      id: 'w1', kind: 'widget' as const, page: 1, fieldName: 'firma', widgetType: 'text' as never,
+      readOnly: false, x: 100, y: 200, width: 120, height: 20,
+    };
+    adapter.patchRect(widget as never, { x: 140 });
+    // Y una edición manual de texto (esta SÍ debe ser reemplazada).
+    adapter.patchSegment(seg, { text: 'manual edit' });
+    expect(adapter.ledger.toBakeInput()).toHaveLength(2);
+
+    adapter.applyAgentEdits(
+      [{ segmentId: 'p1-l0-s0', page: 1, text: 'agent edit', original: { text: 'Acme Corp', x: 72, baseline: 700, width: 60, fontSize: 12 } }],
+      [],
+    );
+
+    const baked = adapter.ledger.toBakeInput();
+    const kinds = baked.map(e => e.kind).sort();
+    expect(kinds).toEqual(['segment', 'widget']); // el widget SOBREVIVE
+    expect((baked.find(e => e.kind === 'segment') as { text: string }).text).toBe('agent edit');
+    expect((baked.find(e => e.kind === 'widget') as { x: number }).x).toBe(140);
+  });
+
+  it('onDidRestore se dispara tras undo/redo de snapshot (deselect-on-undo, ítem 11)', () => {
+    const seg = mkSeg('p1-l0-s0');
+    const adapter = new EditLedgerAdapter();
+    adapter.setGraph(mkGraph([seg]));
+
+    let restores = 0;
+    adapter.onDidRestore(() => { restores++; });
+
+    adapter.patchSegment(seg, { text: 'Beta Corp' });
+    expect(restores).toBe(0); // un patch normal NO es un restore
+
+    adapter.history.undo();
+    expect(restores).toBe(1);
+    adapter.history.redo();
+    expect(restores).toBe(2);
+  });
+
   it('pendingHighlights: addHighlights/removePendingHighlightsFor con historial; clearAll limpia todo', () => {
     const seg = mkSeg('p1-l0-s0');
     const adapter = new EditLedgerAdapter();

@@ -284,6 +284,14 @@ export function AldusEditor({
   useEffect(() => {
     session?.lift.select(selectedId, editingActive);
   }, [session, selectedId, editingActive]);
+  // Undo/redo restauró un snapshot → DESELECCIONAR (v1: onAfterRestore de
+  // usePendingEdits → EditorPage `setSelectedId(null)`): un box no puede
+  // quedar apuntando a un nodo cuyo estado acaba de retroceder.
+  useEffect(() => {
+    if (!session) return;
+    const sub = session.adapter.onDidRestore(() => setSelectedId(null));
+    return () => sub.dispose();
+  }, [session]);
   // Nodo en ARRASTRE (estado de render del gesto; la máquina vive en LiftService).
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const handleDragging = useCallback((segId: string, active: boolean, committed = false) => {

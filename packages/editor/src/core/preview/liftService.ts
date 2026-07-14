@@ -84,6 +84,13 @@ export class LiftService implements IDisposable {
   }
 
   private async reconcile(): Promise<void> {
+    // INVALIDAR SIEMPRE al entrar (v1: el cleanup del effect — `cancelled =
+    // true` — corría ante CUALQUIER cambio de deps: deseleccionar, abrir el
+    // editor de texto, cambiar edits). Bumpear solo en el camino que hornea
+    // dejaba vivo un bake en vuelo por los early-return: seleccionar A (bake
+    // gen=1) → deseleccionar (branch vacío, sin bump) → el bake gen=1 termina
+    // e instala un lift STALE de un nodo deseleccionado.
+    const gen = ++this.generation;
     if (this.editingActive) return;
     const graph = this.opts.ledger.currentGraph;
     const sid = this.selectedId;
@@ -109,7 +116,6 @@ export class LiftService implements IDisposable {
       return;
     }
 
-    const gen = ++this.generation;
     try {
       const bytes = seg ? await this.opts.preview.bakePending(seg) : await this.opts.preview.bakePending(undefined, imgNode!);
       if (gen !== this.generation) return;
@@ -130,6 +136,12 @@ export class LiftService implements IDisposable {
    */
   onDragging(segId: string, active: boolean, committed = false): void {
     if (active) {
+      // Sembrar el FANTASMA del nodo arrastrado (v1 useLift.ts:79-82 — el
+      // guard del "ghost vacío"): si el segmento no tiene edición propia, no
+      // está en segCache; un preview de OTRA edición puede aterrizar a mitad
+      // del drag y extirparlo del grafo — sin el cache, el overlay dibujaría
+      // un fantasma vacío.
+      this.opts.ledger.cacheSegment(segId);
       this.draggingId = segId;
       this.phase = 'dragging';
       return;

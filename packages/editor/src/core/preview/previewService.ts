@@ -23,6 +23,7 @@ import {
   type IEvent,
   type ImageEdit,
   type ImageNode,
+  type LedgerSnapshot,
   type SegmentEdit,
   type SegmentNode,
   type ShapeEdit,
@@ -56,8 +57,33 @@ export class PreviewService implements IDisposable {
     // edición paga el import dinámico y el preview extirpador tarda ~1s en
     // llegar — se veía el texto "duplicado" hasta entonces.
     void import('@aldus/core/bake');
-    this.ledgerSub = opts.ledger.onDidChange(() => { void this.rebake(); });
+    this.consumeRelevantChange(); // sembrar la línea base ANTES de suscribirse
+    // FILTRO por kind (v1): el effect de useLocalPreview NO dependía de
+    // highlightEdits/linkEdits — mover un highlight/link GUARDADO va por
+    // /Annots (lo dibuja el overlay; el preview los oculta siempre igual) y
+    // NO amerita re-hornear el content stream. Sin el filtro, cada
+    // syncHighlightEdits durante un drag de texto disparaba un bake completo
+    // in-browser extra.
+    this.ledgerSub = opts.ledger.onDidChange(() => { if (this.consumeRelevantChange()) void this.rebake(); });
     void this.loadBase();
+  }
+
+  /** ¿Cambió el subset que el preview HORNEA (texto/imagen/campo/forma +
+   *  pendingHighlights)? Compara por identidad de los objetos edit (cada merge
+   *  produce un objeto nuevo — mismo criterio que las deps del effect v1) y
+   *  actualiza la línea base. */
+  private lastRelevant: { snap: LedgerSnapshot; highlights: readonly PendingHighlight[] } | null = null;
+  private consumeRelevantChange(): boolean {
+    const snap = this.opts.ledger.ledger.snapshot();
+    const highlights = this.opts.ledger.pendingHighlights;
+    const prev = this.lastRelevant;
+    this.lastRelevant = { snap, highlights };
+    if (!prev) return true;
+    return highlights !== prev.highlights
+      || !mapEquals(snap.segments, prev.snap.segments)
+      || !mapEquals(snap.images, prev.snap.images)
+      || !mapEquals(snap.widgets, prev.snap.widgets)
+      || !mapEquals(snap.shapes, prev.snap.shapes);
   }
 
   get currentPdf(): PDFDocumentProxy | null {
@@ -177,4 +203,10 @@ export class PreviewService implements IDisposable {
     void this.pdf?.destroy();
     this.pdf = null;
   }
+}
+
+function mapEquals<V>(a: ReadonlyMap<string, V>, b: ReadonlyMap<string, V>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, v] of a) if (b.get(k) !== v) return false;
+  return true;
 }

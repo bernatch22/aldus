@@ -1,6 +1,9 @@
-// F6 — aldus-editor: core/ sin React (ledger-adapter, previewService,
-// liftService, textEditController, styledDom, fontRegistry, sampleColor, api/)
-// + react/ (boxes INodeKind, hooks, AldusEditor composition root) + demo/.
-// Vacío hasta F6 (ver PLAN.md). vite.lib.config.ts: inlineDynamicImports es
-// LOAD-BEARING cuando llegue.
-export {};
+/**
+ * aldus-editor — public surface.
+ *
+ * F6 checkpoint 1: `core/` (editor-core, SIN React) — ledger adapter sobre
+ * `@aldus/core`, preview/lift services, textEditController, styledDom,
+ * fontRegistry, sampleColor/imagePixels, la API del wire. Checkpoint 2 suma
+ * `react/` (INodeKind registry, composition root `AldusEditor`) + `demo/`.
+ */
+export * from './core/index.js';

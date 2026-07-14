@@ -1,0 +1,458 @@
+/**
+ * text/styledDom.ts — el puente entre el MODELO (StyledRun[]) y el DOM editable
+ * (v1: `apps/editor/src/editor/styledDom.ts`, COPY verbatim — audit §2).
+ *
+ * Invariante: el DOM del box editable es siempre una proyección de runs
+ * estilados — spans con data-b/data-i y la fuente real del PDF para ese
+ * estilo. El texto lo muta el browser libremente (tipeo); el ESTILO pasa
+ * SIEMPRE por el modelo (applySelectionStyle → toggleStyleRange → re-seed),
+ * nunca por execCommand.
+ *
+ * Sin React: módulo puro de DOM, testeable con jsdom.
+ */
+
+import {
+  classifyGap,
+  originalStyledRuns,
+  runLines,
+  setStyleRange,
+  styledText,
+  toggleStyleRange,
+  type FontBucket,
+  type SegmentEdit,
+  type SegmentNode,
+  type StyledRun,
+  type TextRunNode,
+} from '@aldus/core';
+import { stableFontFamily } from './fontRegistry.js';
+
+// Espacios múltiples se siembran como NBSP (un contentEditable colapsa espacios
+// planos consecutivos); la serialización los vuelve espacios reales.
+// fromCharCode para que el carácter jamás se corrompa en el source.
+export const NBSP = String.fromCharCode(0xa0);
+const NBSP_RE = new RegExp(NBSP, 'g');
+
+export const esc = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+   .replace(/ {2,}/g, m => NBSP.repeat(m.length));
+
+export const round1 = (v: number) => Math.round(v * 10) / 10;
+
+export function bucketFallback(b: FontBucket): string {
+  return b === 'serif' ? "Georgia, 'Times New Roman', serif"
+    : b === 'mono' ? "'Courier New', Courier, monospace"
+    : 'Helvetica, Arial, sans-serif';
+}
+
+// El loadedName (g_dN_fM) muere con su documento (el preview los recrea y
+// destruye); el nombre ESTABLE del fontRegistry sobrevive — sin él, los
+// fantasmas perdían la fuente embebida al aterrizar cada preview.
+export const family = (r: TextRunNode) => {
+  const stable = r.font.postScriptName ? `'${stableFontFamily(r.font.postScriptName)}',` : '';
+  return `'${r.font.loadedName}',${stable}${bucketFallback(r.font.bucket)}`;
+};
+
+// ── Medición (canvas; en jsdom no hay 2d context → 0, inofensivo) ───────────
+let measureCtx: CanvasRenderingContext2D | null | false = null;
+
+export function measureWidth(text: string, cssFont: string): number {
+  if (measureCtx === false) return 0;
+  if (!measureCtx) {
+    try {
+      measureCtx = document.createElement('canvas').getContext('2d') ?? false;
+    } catch {
+      measureCtx = false;
+    }
+    if (!measureCtx) return 0;
+  }
+  measureCtx.font = cssFont;
+  return measureCtx.measureText(text).width;
+}
+
+/** Fit horizontal (la técnica del text layer de pdf.js): la diferencia entre
+ *  el ancho PDF real del run y el medido se reparte como letter-spacing. */
+export function fitLetterSpacing(r: TextRunNode, text: string, scale: number): number {
+  if (!text.length) return 0;
+  // Si NINGUNA fuente real está disponible (loadedName muerto y estable sin
+  // cargar), medir con el fallback del bucket hornea un tracking equivocado
+  // que DEFORMA el texto aunque la fuente cargue después. Mejor sin ajuste.
+  if (r.font.embedded && typeof document !== 'undefined' && 'fonts' in document) {
+    const vivo = document.fonts.check(`12px '${r.font.loadedName}'`)
+      || (r.font.postScriptName ? document.fonts.check(`12px '${stableFontFamily(r.font.postScriptName)}'`) : false);
+    if (!vivo) return 0;
+  }
+  const fontStyle = !r.font.embedded && r.font.italic ? 'italic ' : '';
+  const fontWeight = !r.font.embedded && r.font.bold ? '700 ' : '';
+  const measured = measureWidth(text, `${fontStyle}${fontWeight}${(r.fontSize * scale).toFixed(2)}px ${family(r)}`);
+  if (measured <= 0) return 0;
+  const spacing = (r.width * scale - measured) / text.length;
+  return Math.abs(spacing) > r.fontSize * scale * 0.4 ? 0 : spacing;
+}
+
+export function dominantRun(seg: SegmentNode): TextRunNode {
+  return seg.runs.reduce((a, b) => (b.width > a.width ? b : a));
+}
+
+/** El run original cuyo estilo coincide (su familia embebida YA es bold/italic),
+ *  o el dominante con estilo sintetizado si el segmento nunca tuvo ese estilo. */
+function styleBase(seg: SegmentNode, bold: boolean, italic: boolean): { base: TextRunNode; exact: boolean } {
+  const match = seg.runs.find(r => r.font.bold === bold && r.font.italic === italic);
+  return { base: match ?? dominantRun(seg), exact: !!match };
+}
+
+export function styledSpanStyle(seg: SegmentNode, sr: { bold: boolean; italic: boolean; color?: string }, sizeRatio: number, scale: number): string {
+  const { base, exact } = styleBase(seg, sr.bold, sr.italic);
+  // Sin run original con este estilo: NO usar la familia embebida (podría ser
+  // la BOLD — des-boldear un segmento 100% bold quedaba en bold igual). Se cae
+  // al fallback del bucket con weight/style sintéticos según el tramo.
+  const fam = exact ? family(base) : bucketFallback(base.font.bucket);
+  const synthBold = sr.bold && (!exact || !base.font.embedded);
+  const synthItalic = sr.italic && (!exact || !base.font.embedded);
+  const weight = exact ? (synthBold ? 'font-weight:700;' : '') : `font-weight:${sr.bold ? 700 : 400};`;
+  const style = exact ? (synthItalic ? 'font-style:italic;' : '') : `font-style:${sr.italic ? 'italic' : 'normal'};`;
+  const colorVal = sr.color ?? base.color;
+  const color = colorVal ? `color:${colorVal};` : '';
+  const deco = (sr as { underline?: boolean }).underline ? 'text-decoration:underline;' : '';
+  return `font-family:${fam};font-size:${(base.fontSize * sizeRatio * scale).toFixed(2)}px;${color}${weight}${style}${deco}`;
+}
+
+/** Font shorthand para MEDIR un tramo (en pt: tamaño original × ratio). */
+export function measureFontFor(seg: SegmentNode, sr: { bold: boolean; italic: boolean }, sizeRatio: number): string {
+  const { base, exact } = styleBase(seg, sr.bold, sr.italic);
+  const fam = exact ? family(base) : bucketFallback(base.font.bucket);
+  const st = sr.italic && (!exact || !base.font.embedded) ? 'italic ' : '';
+  const wt = sr.bold && (!exact || !base.font.embedded) ? '700 ' : '';
+  return `${st}${wt}${(base.fontSize * sizeRatio).toFixed(2)}px ${fam}`;
+}
+
+/** Recalcula el `dx` (y `w`) de cada tramo POR LÍNEA, con la alineación DENTRO
+ *  de un frame de ancho `frameWpt` (pt) — no mueve el nodo, corre el texto:
+ *  left = 0, center = (frame−ancho)/2, right = frame−ancho. El bake usa el dx
+ *  resultante (no sabe de "align"). Preserva los '\n'. */
+export function applyAlign(
+  runs: StyledRun[], seg: SegmentNode, sizeRatio: number,
+  frameWpt: number, align: 'left' | 'center' | 'right',
+): StyledRun[] {
+  const w = (r: StyledRun, t: string) => measureWidth(t, measureFontFor(seg, r, sizeRatio));
+  const lines: StyledRun[][] = [[]];
+  for (const r of runs) {
+    const parts = r.text.split('\n');
+    parts.forEach((p, i) => { if (i > 0) lines.push([]); lines[lines.length - 1]!.push({ ...r, text: p }); });
+  }
+  const out: StyledRun[] = [];
+  lines.forEach((line, li) => {
+    if (li > 0) { const prev = out[out.length - 1]; if (prev) prev.text += '\n'; else out.push({ text: '\n', bold: false, italic: false, dx: 0 }); }
+    const lw = line.reduce((a, r) => a + w(r, r.text), 0);
+    const off = align === 'center' ? Math.max(0, (frameWpt - lw) / 2) : align === 'right' ? Math.max(0, frameWpt - lw) : 0;
+    let acc = off;
+    for (const r of line) {
+      const own = w(r, r.text);
+      out.push({ ...r, dx: round1(acc), w: round1(own) });
+      acc += own;
+    }
+  });
+  return out.length ? out : runs;
+}
+
+export function runStyle(r: TextRunNode, scale: number, letterSpacing = 0, ratio = 1): string {
+  const weight = !r.font.embedded && r.font.bold ? 'font-weight:bold;' : '';
+  const style = !r.font.embedded && r.font.italic ? 'font-style:italic;' : '';
+  const tracking = letterSpacing !== 0 ? `letter-spacing:${letterSpacing.toFixed(3)}px;` : '';
+  const color = r.color ? `color:${r.color};` : '';
+  const deco = r.underline ? 'text-decoration:underline;' : '';
+  return `font-family:${family(r)};font-size:${(r.fontSize * ratio * scale).toFixed(2)}px;${color}${weight}${style}${deco}${tracking}`;
+}
+
+/** Runs estilados → el DOM canónico del box editable (un span por tramo, con
+ *  data-b/data-i y la fuente real de ese estilo). */
+export function runsToHtml(seg: SegmentNode, runs: StyledRun[], sizeRatio: number, scale: number): string {
+  return runs.map(sr =>
+    `<span data-b="${sr.bold ? 1 : 0}" data-i="${sr.italic ? 1 : 0}" data-u="${sr.underline ? 1 : 0}"${sr.color ? ` data-c="${sr.color}"` : ''} style="${styledSpanStyle(seg, sr, sizeRatio, scale)}">${esc(sr.text)}</span>`,
+  ).join('') || '<br>';
+}
+
+/** Layout ORIGINAL del segmento: un span por run con su fuente real, su fit de
+ *  letter-spacing y el gap EXACTO del PDF entre runs (como margin-left). `ratio`
+ *  escala todo proporcionalmente (resize del segmento). */
+function originalLayoutHtml(seg: SegmentNode, scale: number, ratio: number): string {
+  // Bloque MULTILÍNEA: cada LÍNEA VISUAL (runLines: un super/subíndice NO abre
+  // línea) se compone por separado y se unen con '\n' (white-space:pre las quiebra).
+  const lines = runLines(seg);
+  if (lines.length > 1) {
+    return lines
+      .map(ln => originalLayoutHtml({ ...seg, runs: ln }, scale, ratio))
+      .join('\n');
+  }
+  const runs = seg.runs;
+  // El espacio de un word-gap va al FINAL del run ANTERIOR — la MISMA regla que
+  // originalStyledRuns (core). Si difieren, el roundtrip sembrar→serializar no
+  // es idéntico: edits fantasma y fronteras de tramo corridas un espacio.
+  const texts = runs.map(r => r.text);
+  for (let i = 1; i < runs.length; i++) {
+    const prev = runs[i - 1]!;
+    const cur = runs[i]!;
+    const gap = cur.x - (prev.x + prev.width);
+    if (classifyGap(gap, prev, cur) === 'space' && !texts[i - 1]!.endsWith(' ') && !texts[i]!.startsWith(' ')) {
+      texts[i - 1] += ' ';
+    }
+  }
+  let html = '';
+  for (let i = 0; i < runs.length; i++) {
+    const r = runs[i]!;
+    let margin = '';
+    if (i > 0) {
+      const prev = runs[i - 1]!;
+      const gap = r.x - (prev.x + prev.width);
+      // Un word-gap se rinde como espacio (ya sumado arriba) PERO su ancho real
+      // rara vez coincide con el espacio de la fuente: el margen compensa la
+      // diferencia para que cada run quede en su x exacto — "el mismo gap".
+      const cls = classifyGap(gap, prev, r);
+      if (cls === 'none' && gap > 0.5) {
+        margin = `margin-left:${(gap * ratio * scale).toFixed(2)}px;`;
+      } else if (cls !== 'none') {
+        const spaceW = measureWidth(' ', `${(prev.fontSize * ratio * scale).toFixed(2)}px ${family(prev)}`);
+        const delta = gap * ratio * scale - spaceW;
+        if (Math.abs(delta) > 0.5) margin = `margin-left:${delta.toFixed(2)}px;`;
+      }
+    }
+    html += `<span data-b="${r.font.bold ? 1 : 0}" data-i="${r.font.italic ? 1 : 0}" data-u="${r.underline ? 1 : 0}"${r.color ? ` data-c="${r.color}"` : ''} style="${margin}${runStyle(r, scale, fitLetterSpacing(r, r.text, scale) * ratio, ratio)}">${esc(texts[i]!)}</span>`;
+  }
+  return html || '<br>';
+}
+
+/** HTML inicial del box. Move/resize puro (texto y estilos intactos): el MISMO
+ *  layout del original (runs + gaps exactos), escalado — mover no debe cambiar
+ *  ningún gap. Edición de texto/estilos: un span por TRAMO estilado (el texto
+ *  fluye). Sin edición: layout original. */
+export function seedHtml(seg: SegmentNode, edit: SegmentEdit | null, scale: number): string {
+  if (edit) {
+    const ratio = (edit.fontSize ?? seg.fontSize) / seg.fontSize;
+    const pureMove = edit.text === seg.text && !edit.runs && edit.font === undefined
+      && edit.color === undefined && edit.charSpacing === undefined && edit.hScale === undefined;
+    if (pureMove) return originalLayoutHtml(seg, scale, ratio);
+    const dom = dominantRun(seg);
+    const source: StyledRun[] = edit.runs ?? [{ text: edit.text, bold: dom.font.bold, italic: dom.font.italic, dx: 0 }];
+    return runsToHtml(seg, source, ratio, scale);
+  }
+  return originalLayoutHtml(seg, scale, 1);
+}
+
+/** DOM editado → runs estilados. data-b/data-i de los spans sembrados manda;
+ *  también se respetan <b>/<i>/font-weight por si el browser los inserta. */
+/** 'rgb(r, g, b)' o '#hex' → '#rrggbb' (o undefined si no se entiende). */
+function cssColorToHex(v: string): string | undefined {
+  const hex = /^#([0-9a-f]{6})$/i.exec(v.trim());
+  if (hex) return v.trim().toLowerCase();
+  const m = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/i.exec(v.trim());
+  if (!m) return undefined;
+  const h = (n: string) => Math.min(255, parseInt(n, 10)).toString(16).padStart(2, '0');
+  return `#${h(m[1]!)}${h(m[2]!)}${h(m[3]!)}`;
+}
+
+export function serializeStyled(root: HTMLElement, seg: SegmentNode, sizeRatio: number, inheritedColor?: string): StyledRun[] {
+  const parts: Array<{ text: string; bold: boolean; italic: boolean; underline?: boolean; color?: string }> = [];
+  // El color que el texto HEREDA del contenedor: cuando Chrome crea spans
+  // propios al tipear, les copia ese color como style inline — NO es un
+  // override del usuario (los overrides reales viajan por data-c). Sin este
+  // filtro, cada blur paría un run con c#000000 ≠ undefined = edit fantasma.
+  const baseColor = (inheritedColor ?? dominantRun(seg).color ?? '#000000').toLowerCase();
+  const push = (t: string, bold: boolean, italic: boolean, underline: boolean, color?: string) => {
+    if (!t) return;
+    const last = parts[parts.length - 1];
+    if (last && last.bold === bold && last.italic === italic && !!last.underline === underline && last.color === color) last.text += t;
+    else parts.push({ text: t, bold, italic, ...(underline ? { underline: true } : {}), color });
+  };
+  const walk = (node: Node, bold: boolean, italic: boolean, underline: boolean, color?: string) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      push((node.textContent ?? '').replace(NBSP_RE, ' ').replace(/\n+/g, ' '), bold, italic, underline, color);
+      return;
+    }
+    if (!(node instanceof HTMLElement) || node.tagName === 'BR') return;
+    let b = bold, i = italic, u = underline, c = color;
+    if (node.tagName === 'B' || node.tagName === 'STRONG') b = true;
+    if (node.tagName === 'I' || node.tagName === 'EM') i = true;
+    if (node.tagName === 'U') u = true;
+    const fw = node.style.fontWeight;
+    if (fw) b = fw === 'bold' || fw === 'bolder' || parseInt(fw) >= 600;
+    const fs = node.style.fontStyle;
+    if (fs) i = fs === 'italic' || fs === 'oblique';
+    if (node.style.textDecoration) u = node.style.textDecoration.includes('underline');
+    if (node.dataset.b !== undefined) b = node.dataset.b === '1';
+    if (node.dataset.i !== undefined) i = node.dataset.i === '1';
+    if (node.dataset.u !== undefined) u = node.dataset.u === '1';
+    if (node.dataset.c !== undefined) c = node.dataset.c || undefined;
+    else if (node.style.color) {
+      const cc = cssColorToHex(node.style.color);
+      if (cc && cc.toLowerCase() !== baseColor) c = cc;
+    }
+    node.childNodes.forEach(child => walk(child, b, i, u, c));
+  };
+  walk(root, false, false, false, undefined);
+  while (parts.length && /^\s+$/.test(parts[parts.length - 1]!.text)) parts.pop();
+  if (parts.length) parts[parts.length - 1]!.text = parts[parts.length - 1]!.text.replace(/\s+$/, '');
+
+  // dx de cada tramo = suma de anchos medidos (pt) de los tramos anteriores.
+  // Los subrayados llevan su `w` (el bake dibuja la línea con ese ancho).
+  const out: StyledRun[] = [];
+  let dx = 0;
+  for (const p of parts) {
+    const own = measureWidth(p.text, measureFontFor(seg, p, sizeRatio));
+    out.push({ ...p, dx: round1(dx), ...(p.underline ? { w: round1(own) } : {}) });
+    dx += own;
+  }
+  return out;
+}
+
+/** Offset de un boundary point sobre el texto plano del root. Funciona con
+ *  containers de TEXTO y de ELEMENTO (triple-click/select-all reportan
+ *  (elemento, childIndex)) — Range.toString() resuelve ambos casos. */
+function pointOffset(root: HTMLElement, container: Node, offset: number): number {
+  const r = document.createRange();
+  r.selectNodeContents(root);
+  try {
+    r.setEnd(container, offset);
+  } catch {
+    return 0;
+  }
+  return r.toString().length;
+}
+
+/** Posición de la selección como offsets sobre el TEXTO PLANO del box.
+ *  Clampea al root (un triple-click puede extender la selección afuera). */
+export function flatOffsets(root: HTMLElement, range: Range): { start: number; end: number } {
+  const total = (root.textContent ?? '').length;
+  const start = root.contains(range.startContainer)
+    ? pointOffset(root, range.startContainer, range.startOffset)
+    : 0;
+  const end = root.contains(range.endContainer)
+    ? pointOffset(root, range.endContainer, range.endOffset)
+    : total;
+  return { start: Math.min(start, end, total), end: Math.min(end, total) };
+}
+
+export function restoreSelection(root: HTMLElement, start: number, end: number): void {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  let pos = 0;
+  let startSet = false;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const len = n.textContent?.length ?? 0;
+    if (!startSet && start <= pos + len) {
+      range.setStart(n, Math.max(0, start - pos));
+      startSet = true;
+    }
+    if (startSet && end <= pos + len) {
+      range.setEnd(n, Math.max(0, end - pos));
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return;
+    }
+    pos += len;
+  }
+  if (startSet) {
+    range.setEnd(root, root.childNodes.length);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+}
+
+/** Aplica bold/italic a la SELECCIÓN actual del box (o a todo el contenido si
+ *  no hay selección), vía el modelo: serializar → toggleStyleRange → re-seed
+ *  del DOM canónico → restaurar la selección. El ÚNICO camino de estilo. */
+export function applySelectionStyle(
+  el: HTMLElement,
+  seg: SegmentNode,
+  edit: SegmentEdit | null,
+  scale: number,
+  key: 'bold' | 'italic',
+): void {
+  const sizeRatio = (edit?.fontSize ?? seg.fontSize) / seg.fontSize;
+  const runs = serializeStyled(el, seg, sizeRatio);
+  const total = styledText(runs).length;
+  const sel = window.getSelection();
+  const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+  const within = range && el.contains(range.commonAncestorContainer);
+  let { start, end } = within ? flatOffsets(el, range) : { start: 0, end: total };
+  if (end <= start) {
+    // Sin selección (caret solo): el toggle aplica a todo el box.
+    start = 0;
+    end = total;
+  }
+  if (end <= start) return;
+  const next = toggleStyleRange(runs, start, end, key);
+  el.innerHTML = runsToHtml(seg, next, sizeRatio, scale);
+  restoreSelection(el, start, end);
+}
+
+/** Color a la SELECCIÓN actual (o a todo el box si no hay selección), vía el
+ *  modelo: setStyleRange + re-seed + restauración. null = quitar el override. */
+export function applySelectionColor(
+  el: HTMLElement,
+  seg: SegmentNode,
+  edit: SegmentEdit | null,
+  scale: number,
+  color: string | null,
+): void {
+  const sizeRatio = (edit?.fontSize ?? seg.fontSize) / seg.fontSize;
+  const runs = serializeStyled(el, seg, sizeRatio);
+  const total = styledText(runs).length;
+  const sel = window.getSelection();
+  const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+  const within = range && el.contains(range.commonAncestorContainer);
+  let { start, end } = within ? flatOffsets(el, range) : { start: 0, end: total };
+  if (end <= start) {
+    start = 0;
+    end = total;
+  }
+  if (end <= start) return;
+  const next = setStyleRange(runs, start, end, { color });
+  el.innerHTML = runsToHtml(seg, next, sizeRatio, scale);
+  restoreSelection(el, start, end);
+}
+
+/** ¿Hay un box de segmento en edición con el foco? (para que el panel derive
+ *  el estilo a la selección en vez de al modelo del segmento entero). */
+export function activeEditingBox(): HTMLElement | null {
+  const a = document.activeElement;
+  // El editor es un TEXTAREA singleton (TextEditController); se conserva la
+  // detección de contentEditable por compatibilidad con los tests.
+  if (a instanceof HTMLTextAreaElement && a.classList.contains('seg-text')) return a;
+  return a instanceof HTMLElement && a.classList.contains('seg-text') && a.isContentEditable ? a : null;
+}
+
+/** Estilo de la selección actual dentro del box en edición (para encender los
+ *  toggles del panel): con caret colapsado, el estilo del carácter ANTERIOR
+ *  (la convención de todo editor de texto). null = sin selección en el box. */
+export function selectionStyle(
+  el: HTMLElement,
+  seg: SegmentNode,
+  edit: SegmentEdit | null,
+): { bold: boolean; italic: boolean } | null {
+  const sel = window.getSelection();
+  const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+  if (!range || !el.contains(range.commonAncestorContainer)) return null;
+  const sizeRatio = (edit?.fontSize ?? seg.fontSize) / seg.fontSize;
+  const runs = serializeStyled(el, seg, sizeRatio);
+  let { start, end } = flatOffsets(el, range);
+  if (end <= start) {
+    start = Math.max(0, start - 1);
+    end = start + 1;
+  }
+  let bold = true;
+  let italic = true;
+  let any = false;
+  let pos = 0;
+  for (const r of runs) {
+    const from = pos;
+    const to = pos + r.text.length;
+    if (to > start && from < end) {
+      any = true;
+      bold = bold && r.bold;
+      italic = italic && r.italic;
+    }
+    pos = to;
+  }
+  return any ? { bold, italic } : { bold: false, italic: false };
+}

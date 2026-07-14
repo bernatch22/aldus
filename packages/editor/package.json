@@ -2,11 +2,25 @@
   "name": "aldus-editor",
   "version": "0.0.1",
   "type": "module",
-  "description": "Aldus v2 editor: editor-core sin React + editor-react (INodeKind registry, composition root). Llega en F6.",
+  "description": "Aldus v2 editor: editor-core sin React (ledger adapter sobre @aldus/core, preview/lift services, textEditController, styledDom) + editor-react (INodeKind registry, composition root). F6 checkpoint 1 = core/.",
+  "scripts": {
+    "test": "vitest run",
+    "build": "echo 'build real llega con vite.lib.config.ts en el checkpoint 2 (editor-react)'"
+  },
   "exports": {
     ".": "./src/index.ts"
   },
   "dependencies": {
     "@aldus/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "pdfjs-dist": ">=4.10"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "jsdom": "^25.0.1",
+    "pdfjs-dist": "^4.10.38",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.8"
   }
 }

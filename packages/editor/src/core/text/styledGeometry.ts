@@ -1,6 +1,15 @@
 /**
  * styledGeometry — preservar la GEOMETRÍA del PDF al re-estilar sin cambiar texto.
  *
+ * ⚠️ NO CABLEADO (bug NaN, 2026-07-14): el seed (originalStyledRuns) fusiona
+ * runs del mismo estilo A TRAVÉS del '\n' → esta función devuelve runs
+ * multi-línea con dx, una forma que el emit del bake no tolera (escribió NaN
+ * en el content stream → PDF corrupto). Antes de re-cablear en commit():
+ * (a) re-cortar acá por '\n' (ningún run de salida cruza línea; el primer run
+ *     de cada línea hereda el dx REAL de esa línea del grafo, no del seed
+ *     fusionado), y
+ * (b) blindar el emit del bake para que NUNCA escriba NaN (skip + warning).
+ *
  * El caso: el usuario aplica bold/italic/color a una palabra SIN tocar el texto.
  * El camino normal del commit (applyTextDiff + applyAlign) recalcula los `dx`
  * midiendo con la fuente del BROWSER — que difiere de la métrica real del PDF

@@ -56,7 +56,6 @@ import {
   type StyledRun,
 } from '@aldus/core';
 import { applyAlign, measureWidth, round1 } from './styledDom.js';
-import { restyleKeepingGeometry } from './styledGeometry.js';
 import { containerStyle, log } from '../helpers.js';
 
 export interface EditSession {
@@ -618,16 +617,14 @@ export class TextEditController implements IDisposable {
     // se les suma el indent REAL (bodyDx, geometría) y el marcador se antepone
     // VERBATIM — el gap no depende de espacios ni de mediciones.
     const bodyPx = s.lblRuns ? s.bodyDx * s.scale : 0;
-    // PIXEL PERFECT — texto SIN cambios (solo estilos): NO recalcular geometría.
-    // El camino normal (applyAlign) mide con la fuente del BROWSER, que difiere
-    // de la métrica del PDF (itálicas, glifos sin /ToUnicode): el bake re-emitía
-    // con dx corridos → huecos que el re-extract leía como espacios de palabra
-    // ("nombre ]") o gaps de columna (nodo partido). Con texto idéntico, la
-    // geometría correcta ES la del seed: re-estilar preservando sus dx.
-    const sameBody = bodyText === s.seedText.replace(/\s+$/, '') && s.align === s.seedAlign && !s.lblRuns;
-    let bodyRuns = sameBody
-      ? restyleKeepingGeometry(s.seedRuns, applyTextDiff(s.runs, bodyText))
-      : applyAlign(applyTextDiff(s.runs, bodyText), s.seg, 1, (s.minW - bodyPx) / s.scale, s.align);
+    // ⚠️ DESCABLEADO (bug NaN): el fast-path restyleKeepingGeometry preservaba
+    // los dx del seed para restyles sin cambio de texto, pero el seed
+    // (originalStyledRuns) fusiona runs del mismo estilo A TRAVÉS del '\n' —
+    // esa forma (run multi-línea con dx) hizo que el emit del bake escribiera
+    // NaN en el content stream (PDF corrupto). Se re-cablea cuando el emit
+    // tolere esa forma (o el helper re-corte por línea). Ver styledGeometry.ts.
+    const sameBody = false;
+    let bodyRuns = applyAlign(applyTextDiff(s.runs, bodyText), s.seg, 1, (s.minW - bodyPx) / s.scale, s.align);
     if (s.lblRuns) bodyRuns = bodyRuns.map(r => ({ ...r, dx: round1((r.dx ?? 0) + s.bodyDx) }));
     const runs = s.lblRuns ? [...s.lblRuns, ...bodyRuns] : bodyRuns;
     const text = (s.lblRuns ? s.lblText : '') + bodyText;

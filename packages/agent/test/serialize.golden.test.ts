@@ -12,7 +12,7 @@ import { rgb } from 'pdf-lib';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { serializeDoc } from '../src/serialize.js';
+import { serializeDoc } from '../src/llm/serialize.js';
 import { graphOf, pdfWith } from './helpers.js';
 
 const GOLDENS = path.join(path.dirname(fileURLToPath(import.meta.url)), 'goldens');

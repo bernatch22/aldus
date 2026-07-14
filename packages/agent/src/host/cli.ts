@@ -20,9 +20,9 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readFormFields, setFieldValues } from '@aldus/core/bake';
 import { registerNodeFontProviders } from '@aldus/core/node';
-import { loadDoc } from './graph.js';
-import { EditSession } from './session/EditSession.js';
-import { runTurn, type AgentEvent } from './runTurn.js';
+import { loadDoc } from '../graph.js';
+import { EditSession } from '../session/EditSession.js';
+import { runTurn, type AgentEvent } from '../llm/runTurn.js';
 import { openFile, openInEditor } from './openInEditor.js';
 
 // Fuentes sustitutas REALES para el bake (original del sistema / gemela métrica).

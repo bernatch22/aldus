@@ -9,9 +9,9 @@
 import { describe, expect, it } from 'vitest';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { graphFromBytes } from '../src/graph.js';
-import { serializeDoc } from '../src/serialize.js';
+import { serializeDoc } from '../src/llm/serialize.js';
 import { EditSession } from '../src/session/EditSession.js';
-import { runTurn } from '../src/runTurn.js';
+import { runTurn } from '../src/llm/runTurn.js';
 
 // PNG 1×1 rojo.
 const RED_PNG = Buffer.from(

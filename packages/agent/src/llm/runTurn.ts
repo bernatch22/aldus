@@ -19,14 +19,14 @@ import { createLogger, NeverCancelled, type CancellationToken } from '@aldus/cor
 import { chatSystemPrompt, systemPrompt } from './prompts.js';
 import { ROUTE_DESC, ROUTE_SHAPE, TOOL_DEFS, runTool, type HostToolDef, type RouteRequest } from './tools.js';
 import { overlapReport, verifyMessage } from './verify.js';
-import { defaultAgentConfig, type IAgentConfig } from './config.js';
-import { ClaudeSdkTransport } from './transport/claudeSdk.js';
-import { OpenRouterTransport } from './transport/openRouter.js';
-import type { AgentEvent, ILlmTransport, PassRequest, PassTool } from './transport/transport.js';
-import type { DocGraph } from './graph.js';
-import type { EditSession } from './session/EditSession.js';
+import { defaultAgentConfig, type IAgentConfig } from '../config.js';
+import { ClaudeSdkTransport } from '../transport/claudeSdk.js';
+import { OpenRouterTransport } from '../transport/openRouter.js';
+import type { AgentEvent, ILlmTransport, PassRequest, PassTool } from '../transport/transport.js';
+import type { DocGraph } from '../graph.js';
+import type { EditSession } from '../session/EditSession.js';
 
-export type { AgentEvent, AgentRole, ILlmTransport } from './transport/transport.js';
+export type { AgentEvent, AgentRole, ILlmTransport } from '../transport/transport.js';
 
 export interface TurnResult {
   text: string;

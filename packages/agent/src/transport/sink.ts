@@ -17,7 +17,7 @@
  * (CLI) · {@link CallbackSink} (tests/embeds).
  */
 import { createToken, type ImageEdit, type SegmentEdit } from '@aldus/core';
-import type { AgentEvent } from './transport/transport.js';
+import type { AgentEvent } from './transport.js';
 
 /** Terminal OK de un turno. O `reloaded` (horneado+persistido) o `edits`. */
 export interface TurnDoneEvent {

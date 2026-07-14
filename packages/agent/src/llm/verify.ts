@@ -10,9 +10,9 @@
  * run mixto palabras+leaders corría el borde ~50pt y disparaba falsos positivos).
  */
 import { charXOf } from '@aldus/core';
-import { graphFromBytes } from './graph.js';
-import type { DocGraph } from './graph.js';
-import type { EditSession } from './session/EditSession.js';
+import { graphFromBytes } from '../graph.js';
+import type { DocGraph } from '../graph.js';
+import type { EditSession } from '../session/EditSession.js';
 
 function pageIssues(p: DocGraph['pages'][number]): string[] {
   const out: string[] = [];

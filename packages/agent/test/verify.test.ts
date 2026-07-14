@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { EditSession } from '../src/session/EditSession.js';
-import { overlapReport } from '../src/verify.js';
+import { overlapReport } from '../src/llm/verify.js';
 import { graphOf, pdfWith } from './helpers.js';
 
 describe('overlapReport (verificación geométrica determinística)', () => {

@@ -9,7 +9,7 @@
  * texto la `y` es la BASELINE (lo que consumen las tools move_text).
  */
 import type { SegmentNode } from '@aldus/core';
-import type { DocGraph } from './graph.js';
+import type { DocGraph } from '../graph.js';
 
 const r = (n: number): number => Math.round(n);
 

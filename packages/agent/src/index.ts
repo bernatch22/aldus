@@ -14,7 +14,7 @@
 // ── LEER ────────────────────────────────────────────────────────────────────
 export { loadDoc, graphFromBytes } from './graph.js';
 export type { DocGraph } from './graph.js';
-export { serializeDoc } from './serialize.js';
+export { serializeDoc } from './llm/serialize.js';
 export { locateText } from '@aldus/core';
 export type { TextAnchor, PageGraph, SegmentNode, LineNode, TextRunNode, ImageNode, WidgetNode, WidgetKind, HighlightNode, LinkNode, ShapeNode } from '@aldus/core';
 export { readPdfInfo, isPdf } from '@aldus/core/bake';
@@ -27,12 +27,12 @@ export type { FormField } from '@aldus/core/bake';
 export { EditSession } from './session/EditSession.js';
 export type { TurnFinish } from './session/EditSession.js';
 export { NodeIndex } from './session/NodeIndex.js';
-export { runTurn } from './runTurn.js';
-export type { TurnResult, TurnOpts, AgentEvent, AgentRole } from './runTurn.js';
+export { runTurn } from './llm/runTurn.js';
+export type { TurnResult, TurnOpts, AgentEvent, AgentRole } from './llm/runTurn.js';
 // El seam de STREAMING de un host (audit-hosts §3.4): el server escribe NDJSON,
 // el CLI stdout, un test un callback — misma orquestación, distinto canal.
-export { IAgentEventSink, CallbackSink } from './sink.js';
-export type { AgentWireEvent, TurnDoneEvent, TurnErrorEvent } from './sink.js';
+export { IAgentEventSink, CallbackSink } from './transport/sink.js';
+export type { AgentWireEvent, TurnDoneEvent, TurnErrorEvent } from './transport/sink.js';
 // El agente (two-level) sobre el contrato ILlmTransport + los 2 transportes.
 export { ILlmTransport } from './transport/transport.js';
 export type { PassRequest, PassResult, PassTool } from './transport/transport.js';
@@ -40,8 +40,8 @@ export { ClaudeSdkTransport } from './transport/claudeSdk.js';
 export { OpenRouterTransport } from './transport/openRouter.js';
 // Tools como DATA + su ejecución (ToolOutcome debajo del protocolo ✓/⚠️/↩︎) +
 // la extensión OCP del host (tools de su dominio: firmantes, envíos…).
-export { TOOL_DEFS, TOOL_NAMES, runTool, runToolOutcome, buildToolServer, buildRouterServer, openaiTools, openaiRouterTool } from './tools.js';
-export type { ToolDef, ToolOutcome, ToolCode, HostToolDef, RouteRequest } from './tools.js';
+export { TOOL_DEFS, TOOL_NAMES, runTool, runToolOutcome, buildToolServer, buildRouterServer, openaiTools, openaiRouterTool } from './llm/tools.js';
+export type { ToolDef, ToolOutcome, ToolCode, HostToolDef, RouteRequest } from './llm/tools.js';
 // Config inyectable (los tests pasan la suya; los hosts usan el default).
 export { loadAgentConfig, defaultAgentConfig } from './config.js';
 export type { IAgentConfig, IAgentOpenRouterConfig, AgentProvider } from './config.js';
@@ -63,4 +63,4 @@ export type { FlattenResult } from '@aldus/core/bake';
 // el host Node lo llama UNA vez al boot. El browser no debe importar esto.
 export { registerNodeFontProviders } from '@aldus/core/node';
 // Editor visual local en una llamada (el ejemplo edit-in-browser ES esto).
-export { openInEditor, openFile } from './openInEditor.js';
+export { openInEditor, openFile } from './host/openInEditor.js';

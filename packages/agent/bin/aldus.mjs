@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const cli = path.join(here, '..', 'src', 'cli.ts');
+const cli = path.join(here, '..', 'src', 'host', 'cli.ts');
 const tsxBin = path.join(here, '..', 'node_modules', '.bin', 'tsx');
 
 // El agente usa la SUSCRIPCIÓN de Claude Code, nunca la API key: la deshacemos

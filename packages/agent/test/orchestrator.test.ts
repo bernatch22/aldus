@@ -9,8 +9,8 @@ import { describe, expect, it } from 'vitest';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { graphFromBytes } from '../src/graph.js';
 import { EditSession } from '../src/session/EditSession.js';
-import { runTool, runToolOutcome } from '../src/tools.js';
-import { runTurn } from '../src/runTurn.js';
+import { runTool, runToolOutcome } from '../src/llm/tools.js';
+import { runTurn } from '../src/llm/runTurn.js';
 import { loadAgentConfig } from '../src/config.js';
 import type { AgentEvent, AgentRole, ILlmTransport, PassRequest, PassResult } from '../src/transport/transport.js';
 

@@ -7,7 +7,7 @@
  * Cambiar un carácter puede degradar el comportamiento del LLM: no se reescribe.
  */
 import { serializeDoc } from './serialize.js';
-import type { DocGraph } from './graph.js';
+import type { DocGraph } from '../graph.js';
 
 export function systemPrompt(doc: DocGraph, page?: number | number[]): string {
   const pages = doc.pages.length;

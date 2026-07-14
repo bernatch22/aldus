@@ -13,7 +13,7 @@
  */
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
-import { cpSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, rmSync, writeFileSync, readFileSync, statSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import path from 'node:path';
 
@@ -26,8 +26,41 @@ rmSync(path.join(dir, 'dist'), { recursive: true, force: true });
 // 1. Los dist TIPADOS de core + agent (la fuente de TODO lo que se bundlea acá).
 run('pnpm --filter @aldus/core build && pnpm --filter @aldus/agent build');
 
-// 2. La LIB con d.ts bundleado (tsup.config.ts: noExternal @aldus/*, dts.resolve).
+// 2. La LIB (SOLO el runtime index.js — tsup.config.ts: noExternal @aldus/*,
+//    dts: false; los tipos los ensambla `assembleTypes` abajo).
 run('pnpm exec tsup', { cwd: dir });
+
+// 2b. Los TIPOS, autocontenidos y con specifiers RELATIVOS.
+//     Ni `tsup dts.resolve` ni `dts-bundle-generator` aplanan los tipos de
+//     @aldus/* (el primero emitía un re-export de 30 bytes a `@aldus/agent`
+//     que el consumidor no puede resolver; el segundo revienta en un tipo
+//     transitivo de undici via el SDK de Anthropic). Ensamblamos a mano un set
+//     autoconsistente desde los dist YA TIPADOS de core + agent:
+//       dist/_core/**        el árbol .d.ts de @aldus/core (root + bake + node +
+//                            chunks compartidos: relative imports intactos)
+//       dist/_agent.d.ts     @aldus/agent/index.d.ts con `@aldus/core[/bake|/node]`
+//                            reescrito a `./_core/...` (subpaths PRIMERO)
+//       dist/index.d.ts      `export * from './_agent.js'`
+//     Externos legítimos (pdf-lib, zod, @anthropic-ai/*, pdfjs-dist) quedan como
+//     imports — el consumidor ya los tiene.
+assembleTypes();
+function assembleTypes() {
+  const dist = path.join(dir, 'dist');
+  const coreDist = path.resolve(dir, '../core/dist');
+  const agentDts = path.resolve(dir, '../agent/dist/index.d.ts');
+  // Solo los .d.ts del árbol de core (los .js reales viajan bundleados en index.js).
+  cpSync(coreDist, path.join(dist, '_core'), {
+    recursive: true,
+    filter: (src) => statSync(src).isDirectory() || src.endsWith('.d.ts'),
+  });
+  let agent = readFileSync(agentDts, 'utf8');
+  agent = agent
+    .replaceAll('@aldus/core/bake', './_core/bake/index.js')
+    .replaceAll('@aldus/core/node', './_core/node/index.js')
+    .replaceAll('@aldus/core', './_core/index.js');
+  writeFileSync(path.join(dist, '_agent.d.ts'), agent);
+  writeFileSync(path.join(dist, 'index.d.ts'), "export * from './_agent.js';\n");
+}
 
 // deps de npm (y sus subpaths) → external: las trae el consumidor, no el bundle.
 const external = [

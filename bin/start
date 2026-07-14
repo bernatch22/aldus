@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+#
+# bin/start — arranca TODO el stack de Aldus (server :4100 + editor :5190) con la
+# API key de Anthropic DESHECHA, para que el agente use la SUSCRIPCIÓN de Claude
+# Code y nunca la API (que factura por token).
+#
+#   ./bin/start
+#
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+# Clave: sin ANTHROPIC_API_KEY el Agent SDK cae a la auth por suscripción.
+unset ANTHROPIC_API_KEY
+
+echo "▶ Aldus — server :4100 + editor :5190"
+echo "  agente: suscripción de Claude Code (ANTHROPIC_API_KEY deshecho)"
+echo
+
+# `pnpm dev` = pnpm -r --parallel dev → editor (vite) + server (tsx watch).
+exec pnpm dev

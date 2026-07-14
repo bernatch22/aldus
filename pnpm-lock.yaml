@@ -48,6 +48,12 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)(jsdom@25.0.1)(lightningcss@1.32.0)
 
+  examples/edit-in-browser:
+    dependencies:
+      '@aldus/agent':
+        specifier: workspace:*
+        version: link:../../packages/agent
+
   packages/agent:
     dependencies:
       '@aldus/core':
@@ -84,12 +90,41 @@ importers:
 
   packages/aldus-pdf:
     dependencies:
+      '@anthropic-ai/claude-agent-sdk':
+        specifier: ^0.3.198
+        version: 0.3.209(@anthropic-ai/sdk@0.111.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)
+      '@pdf-lib/fontkit':
+        specifier: ^1.1.1
+        version: 1.1.1
+      pdf-lib:
+        specifier: ^1.17.1
+        version: 1.17.1
+      pdfjs-dist:
+        specifier: ^4.10.38
+        version: 4.10.38
+      zod:
+        specifier: ^4.0.0
+        version: 4.4.3
+    devDependencies:
       '@aldus/agent':
         specifier: workspace:*
         version: link:../agent
       '@aldus/core':
         specifier: workspace:*
         version: link:../core
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsup:
+        specifier: ^8.3.5
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.19)(tsx@4.23.1)(typescript@5.9.3)
+    optionalDependencies:
+      express:
+        specifier: ^4.21.2
+        version: 4.22.2
+      multer:
+        specifier: ^2.0.1
+        version: 2.2.0
 
   packages/core:
     dependencies:

@@ -12,3 +12,4 @@ apps/server/data/
 # Docs internos de proceso (no van al repo público)
 PLAN.md
 audits/
+.megabrain/

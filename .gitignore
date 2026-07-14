@@ -8,3 +8,7 @@ dist-demo/
 
 # Datos de sesión del server local (uploads/revisiones de prueba, NUNCA código)
 apps/server/data/
+
+# Docs internos de proceso (no van al repo público)
+PLAN.md
+audits/

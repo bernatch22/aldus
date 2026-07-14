@@ -1,2 +1,7 @@
 @import 'tailwindcss';
+/* El vite root del demo es `demo/`, pero los componentes con clases Tailwind
+ * viven en `src/react/` (fuera del root) — la autodetección v4 no los alcanza.
+ * Declaramos las fuentes explícitas (rutas relativas a ESTE css, en src/). */
+@source './react';
+@source '../demo';
 @import './custom.css';

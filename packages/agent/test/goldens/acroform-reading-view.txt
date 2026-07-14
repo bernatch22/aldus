@@ -1,0 +1,19 @@
+## Página 1 — 500×400 pt
+### Lectura (texto con los campos [[id]] intercalados donde caen — así se entiende qué va en cada uno)
+Nombre: [[p1-w0]]
+[[p1-w1]] Acepto los términos
+País: [[p1-w2]]
+### Texto  (id @(x,baseline) ancho×alto tamaño estilo: "contenido")
+  (si un nodo tiene varios tramos, "tramos:" da la x y el ancho EXACTOS de cada uno — para geometría fina, p. ej. ubicar un placeholder dentro del nodo)
+- p1-y331-x50 @(50,331) 123×10 11pt Helvetica: "Nombre: ____________"
+    tramos: @50 w42 "Nombre:" | @100 w73 "____________"
+- p1-y282-x68 @(68,282) 88×9 10pt Helvetica: "Acepto los términos"
+- p1-y253-x50 @(50,253) 23×9 10pt Helvetica: "País:"
+### Campos de formulario  (nombre tipo [valor] near "label" @(x,y) ancho×alto)
+  (los nombres suelen ser opacos → usá "near" (el texto pegado al campo) para saber QUÉ va en cada uno)
+- p1-w0 "nombre" text (vacío) @(100,326) 121×17
+- p1-w1 "acepta" checkbox (vacío) @(50,280) 13×13
+- p1-w2 "pais" select (vacío) opciones:[Uruguay, Argentina] near "País:" @(120,250) 101×17
+### Formas vectoriales  (id color @(x,y) ancho×alto — fondos/banners; NO editables)
+- p1-shape0 #ffffff @(1,1) 120×16
+- p1-shape1 #ffffff @(1,1) 100×16

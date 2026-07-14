@@ -1,0 +1,7 @@
+## Página 1 — 500×400 pt
+### Texto  (id @(x,baseline) ancho×alto tamaño estilo: "contenido")
+  (si un nodo tiene varios tramos, "tramos:" da la x y el ancho EXACTOS de cada uno — para geometría fina, p. ej. ubicar un placeholder dentro del nodo)
+- p1-y350-x60 @(60,350) 209×15 16pt bold Helvetica-Bold: "CONTRATO DE SERVICIOS"
+- p1-y310-x60 @(60,310) 146×10 11pt Helvetica: "NOMBRE: .............................."
+- p1-y292-x60 @(60,292) 160×10 11pt Helvetica: "Fecha: .............. Lugar: .............."
+- p1-y274-x60 @(60,274) 169×10 11pt Helvetica: "Firma: ______________________"

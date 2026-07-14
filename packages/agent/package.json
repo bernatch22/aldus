@@ -2,11 +2,37 @@
   "name": "@aldus/agent",
   "version": "0.0.1",
   "type": "module",
-  "description": "Aldus v2 agent: ILlmTransport ×2, runTurn único, EditSession fachada, CLI. Llega en F5.",
+  "description": "Aldus v2 agent: ILlmTransport ×2, runTurn único, EditSession fachada, CLI.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "aldus": "./bin/aldus.mjs"
+  },
+  "files": [
+    "dist",
+    "bin"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "aldus": "tsx src/cli.ts"
   },
   "dependencies": {
-    "@aldus/core": "workspace:*"
+    "@aldus/core": "workspace:*",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.198",
+    "pdfjs-dist": "^4.10.38",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "pdf-lib": "^1.17.1",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.8"
   }
 }

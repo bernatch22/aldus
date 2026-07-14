@@ -1,0 +1,6 @@
+## Página 1 — 500×300 pt
+### Texto  (id @(x,baseline) ancho×alto tamaño estilo: "contenido")
+  (si un nodo tiene varios tramos, "tramos:" da la x y el ancho EXACTOS de cada uno — para geometría fina, p. ej. ubicar un placeholder dentro del nodo)
+- p1-y240-x50 @(50,240) 149×11 12pt Helvetica: "Total:1.250 USD al contado"
+    tramos: @50 w30 "Total:" | @81 w59 bold "1.250 USD" | @143 w55 italic "al contado"
+- p1-y210-x50 @(50,210) 87×11 12pt Helvetica: "Cláusula en rojo"

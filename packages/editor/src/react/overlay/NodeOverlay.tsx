@@ -227,7 +227,11 @@ export function NodeOverlay({ graph, scale, ledger, controller, edits, imageEdit
         '\n' + JSON.stringify({
           id: seg.id,
           text: seg.text,
-          runs: seg.runs.map(r => r.text),
+          runs: seg.runs.map(r => ({
+            text: r.text,
+            x: round1(r.x), w: round1(r.width),
+            ...(r.font.bold ? { b: true } : {}), ...(r.font.italic ? { i: true } : {}),
+          })),
         }, null, 2),
       );
     }

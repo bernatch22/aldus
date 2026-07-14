@@ -56,6 +56,7 @@ import {
   type StyledRun,
 } from '@aldus/core';
 import { applyAlign, measureWidth, round1 } from './styledDom.js';
+import { restyleKeepingGeometry } from './styledGeometry.js';
 import { containerStyle, log } from '../helpers.js';
 
 export interface EditSession {
@@ -109,6 +110,8 @@ interface LiveSession extends EditSession {
   seedValue: string;
   /** true apenas se aplica CUALQUIER acción de estilo/align/lista en la sesión. */
   touched: boolean;
+  /** Alineación al abrir — para detectar "solo cambió estilo, no align". */
+  seedAlign: 'left' | 'center' | 'right';
 }
 
 /** Snapshot del ESTILO en vivo de la sesión abierta — reemplaza
@@ -350,6 +353,7 @@ export class TextEditController implements IDisposable {
       align: s.edit?.align ?? 'left',
       seedValue: value,
       touched: false,
+      seedAlign: s.edit?.align ?? 'left',
     };
     // FIT de ancho: solo con el texto ORIGINAL intacto y de UNA línea (con
     // texto editado el ancho efectivo ya no describe el contenido; con '\n'
@@ -614,7 +618,16 @@ export class TextEditController implements IDisposable {
     // se les suma el indent REAL (bodyDx, geometría) y el marcador se antepone
     // VERBATIM — el gap no depende de espacios ni de mediciones.
     const bodyPx = s.lblRuns ? s.bodyDx * s.scale : 0;
-    let bodyRuns = applyAlign(applyTextDiff(s.runs, bodyText), s.seg, 1, (s.minW - bodyPx) / s.scale, s.align);
+    // PIXEL PERFECT — texto SIN cambios (solo estilos): NO recalcular geometría.
+    // El camino normal (applyAlign) mide con la fuente del BROWSER, que difiere
+    // de la métrica del PDF (itálicas, glifos sin /ToUnicode): el bake re-emitía
+    // con dx corridos → huecos que el re-extract leía como espacios de palabra
+    // ("nombre ]") o gaps de columna (nodo partido). Con texto idéntico, la
+    // geometría correcta ES la del seed: re-estilar preservando sus dx.
+    const sameBody = bodyText === s.seedText.replace(/\s+$/, '') && s.align === s.seedAlign && !s.lblRuns;
+    let bodyRuns = sameBody
+      ? restyleKeepingGeometry(s.seedRuns, applyTextDiff(s.runs, bodyText))
+      : applyAlign(applyTextDiff(s.runs, bodyText), s.seg, 1, (s.minW - bodyPx) / s.scale, s.align);
     if (s.lblRuns) bodyRuns = bodyRuns.map(r => ({ ...r, dx: round1((r.dx ?? 0) + s.bodyDx) }));
     const runs = s.lblRuns ? [...s.lblRuns, ...bodyRuns] : bodyRuns;
     const text = (s.lblRuns ? s.lblText : '') + bodyText;
@@ -623,7 +636,9 @@ export class TextEditController implements IDisposable {
     // noop: comparado con estilos FUSIONADOS (el original puede traer
     // marcador+cuerpo en un solo run — "I. Custodiar").
     const noop = styledRunsEqual(mergeSameStyle(runs), mergeSameStyle(originalStyledRuns(s.seg)));
-    // DEBUG: al commitear una edición, dump del texto ANTES y DESPUÉS (JSON pretty).
+    // DEBUG: al commitear una edición, dump del texto ANTES y DESPUÉS (JSON
+    // pretty), con dx/estilos por run — el dx es la posición geométrica que el
+    // bake re-emite: compará contra los dx del CLICK para ver corrimientos.
     console.log(
       '%c[aldus] EDITADO →', 'color:#16a34a;font-weight:700',
       '\n' + JSON.stringify({
@@ -631,7 +646,13 @@ export class TextEditController implements IDisposable {
         before: s.seedText,
         after: text,
         changed: !noop,
-        runs: runs.map(r => r.text),
+        geometriaPreservada: sameBody,
+        runs: runs.map(r => ({
+          text: r.text,
+          ...(r.bold ? { b: true } : {}), ...(r.italic ? { i: true } : {}),
+          ...(r.underline ? { u: true, w: r.w } : {}),
+          ...(r.dx !== undefined ? { dx: r.dx } : {}),
+        })),
       }, null, 2),
     );
     s.onPatch({

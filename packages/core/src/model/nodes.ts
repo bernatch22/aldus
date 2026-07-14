@@ -127,8 +127,20 @@ export interface ImageNode {
 
 export type WidgetKind = 'text' | 'checkbox' | 'radio' | 'select' | 'list' | 'button' | 'signature';
 
-// TODO(F3): FIELD_DEFAULT_SIZE (Record<WidgetKind, {width, height}>) es dato de
-// CREACIÓN/UI, no de modelo — se muda a create/ cuando llegue esa capa.
+/** Tamaño default de cada tipo de widget al CREARLO. Es dato de creación/UI
+ *  pero vive acá (capa de tipos, pura) porque era export de la RAÍZ de v1
+ *  (`@aldus/core`) y el editor lo importa de ahí (usePlacement) — definirlo en
+ *  create/ arrastraría pdf-lib al bundle browser. create/fields lo consume y
+ *  re-exporta para el subpath ./bake. [C1 del informe de verificación] */
+export const FIELD_DEFAULT_SIZE: Record<WidgetKind, { width: number; height: number }> = {
+  text: { width: 160, height: 20 },
+  checkbox: { width: 14, height: 14 },
+  radio: { width: 14, height: 14 },
+  select: { width: 140, height: 20 },
+  list: { width: 140, height: 60 },
+  button: { width: 90, height: 24 },
+  signature: { width: 200, height: 50 },
+};
 
 /** Un campo de formulario (widget annotation de AcroForm). Vive en la capa
  *  /Annots — no en el content stream — así que editarlo es actualizar /Rect. */

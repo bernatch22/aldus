@@ -91,6 +91,10 @@ export interface MatchContext {
   /** Campos ya encolados por llamadas anteriores (idempotencia). */
   queuedFields: readonly OccupiedRect[];
   hints?: readonly FieldWidthHint[];
+  /** Id del nodo consultado — solo para el mensaje de error "no encontré …
+   *  en el párrafo de ${id}" (contrato v1 con el LLM: le dice en QUÉ nodo
+   *  buscó cuando pasa el id equivocado). [B1 del informe de verificación] */
+  nodeId?: string;
 }
 
 /**
@@ -141,7 +145,7 @@ export function matchPlaceholders(
       const m = flex.exec(joined.slice(gOff));
       if (m) { at = gOff + m.index; len = m[0].length; }
     }
-    if (at < 0) return { fields: [], notes: [], nothingNew: true, error: `no encontré ${JSON.stringify(f.placeholder)} en el párrafo (usá el texto EXACTO, en orden de lectura).` };
+    if (at < 0) return { fields: [], notes: [], nothingNew: true, error: `no encontré ${JSON.stringify(f.placeholder)} en el párrafo${ctx.nodeId ? ` de ${ctx.nodeId}` : ''} (usá el texto EXACTO, en orden de lectura).` };
     // EXPANDIR los bordes al run máximo de leaders: el documento puede tener 67
     // puntos seguidos y el LLM pasa 5 — los sobrantes quedarían como "palabra"
     // gigante. Vale para CUALQUIER match cuyo borde caiga en un leader.

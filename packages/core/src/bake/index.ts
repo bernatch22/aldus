@@ -64,3 +64,17 @@ export type {
   FlattenResult,
   PdfInfo,
 } from '../create/index.js';
+
+// ——— Shims deprecados [C2 del informe de verificación] ———
+// API pública de v1 `aldus-pdf` (regla dura #7 del PLAN: shims, no borrado en
+// caliente). El protocolo pdf/ es INTERNO en v2 — no construyas sobre esto.
+/** @deprecated API v1 — protocolo pdf/ interno; se elimina en v3. */
+export { rebuild, type Splice } from '../pdf/splice.js';
+/** @deprecated API v1 — protocolo pdf/ interno; se elimina en v3. */
+export { tokenizeContentStream, type OpRecord, type Token } from '../pdf/tokenizer.js';
+/** @deprecated API v1 — protocolo pdf/ interno; se elimina en v3. */
+export { walkContent, type ShowOp, type XObjectOp, type ContentWalk, type FillRectOp } from '../pdf/contentWalk.js';
+/** @deprecated API v1 — protocolo pdf/ interno; se elimina en v3. */
+export { parseToUnicode, type ReverseEncoder } from '../pdf/toUnicode.js';
+/** @deprecated API v1 — usá parseRawFill/toRgb de la raíz; se elimina en v3. */
+export { hexToRg } from '../common/hex.js';

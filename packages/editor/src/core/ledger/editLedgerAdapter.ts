@@ -31,6 +31,8 @@
 import {
   EventEmitter,
   EditLedger,
+  type EffectiveGeometry,
+  type EffectiveRect,
   type IDisposable,
   type IEditLedger,
   type IEvent,
@@ -190,8 +192,10 @@ export class EditLedgerAdapter implements IDisposable {
     return this.ledger.toBakeInput();
   }
 
-  effective(node: SegmentNode | RectNode) {
-    return this.ledger.effective(node as SegmentNode);
+  effective(node: SegmentNode): EffectiveGeometry;
+  effective(node: RectNode): EffectiveRect;
+  effective(node: SegmentNode | RectNode): EffectiveGeometry | EffectiveRect {
+    return node.kind === 'segment' ? this.ledger.effective(node) : this.ledger.effective(node);
   }
 
   /** ¿Hay algo pendiente (ledger de core + resaltados nuevos)? */

@@ -266,6 +266,24 @@ export class TextEditController implements IDisposable {
     return this.session != null;
   }
 
+  /** Commit + close EXPLÍCITOS — el NodeOverlay lo llama al seleccionar OTRO
+   *  nodo. Reemplaza el force-blur de v1 (`activeEditingBox()?.blur()`): el
+   *  `preventDefault` de los pointerdown impide el blur natural, y acá la
+   *  coordinación deja de viajar por el focus del DOM. No-op sin sesión. */
+  commitAndClose(): void {
+    if (!this.session) return;
+    this.commit();
+    this.close();
+  }
+
+  /** Estilo uniforme BAJO LA SELECCIÓN del textarea abierto (o null sin
+   *  sesión) — FloatingBar lo lee para pintar sus toggles B/I/U en vivo
+   *  (v1 leía `liveEditRuns` + los offsets del textarea a mano). */
+  get selectionStyle(): { bold: boolean; italic: boolean; underline: boolean } | null {
+    if (!this.session) return null;
+    return styleAtRange(this.session.runs, this.ta.selectionStart, this.ta.selectionEnd);
+  }
+
   /** Snapshot del estilo EN VIVO de la sesión abierta (o null). */
   get styleState(): StyleState | null {
     return this.session ? { runs: this.session.runs, markerKind: this.liveMarkerKind } : null;

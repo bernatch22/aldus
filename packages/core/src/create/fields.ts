@@ -7,20 +7,12 @@
  * un tipo de campo nuevo = una entrada, no un caso más en el switch.
  */
 import { PDFDocument, PDFString, rgb, type PDFPage } from 'pdf-lib';
-import type { WidgetKind } from '../model/nodes.js';
+import { FIELD_DEFAULT_SIZE, type WidgetKind } from '../model/nodes.js';
 import { appendAnnot } from './registry.js';
 
-/** Tamaño default de cada tipo de widget al CREARLO (dato de creación/UI —
- *  vivía en v1 model.ts; el TODO(F3) de model/nodes.ts muere acá). */
-export const FIELD_DEFAULT_SIZE: Record<WidgetKind, { width: number; height: number }> = {
-  text: { width: 160, height: 20 },
-  checkbox: { width: 14, height: 14 },
-  radio: { width: 14, height: 14 },
-  select: { width: 140, height: 20 },
-  list: { width: 140, height: 60 },
-  button: { width: 90, height: 24 },
-  signature: { width: 200, height: 50 },
-};
+// FIELD_DEFAULT_SIZE vive en model/nodes.ts (export de raíz v1, browser-puro);
+// re-export acá para los consumidores del subpath ./bake. [C1]
+export { FIELD_DEFAULT_SIZE };
 
 export interface NewFieldSpec {
   type: WidgetKind;

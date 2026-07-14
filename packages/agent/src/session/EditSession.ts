@@ -356,7 +356,7 @@ export class EditSession {
       .map(c => ({ x: c.x as number, y: c.y as number, width: c.width as number }));
 
     const res = matchPlaceholders(lines, fields, {
-      page: s.page, fontSize: s.fontSize, existingWidgets, queuedFields,
+      page: s.page, fontSize: s.fontSize, existingWidgets, queuedFields, nodeId: id,
     });
     if (res.error) return `⚠️ ${res.error}`;
     for (const f of res.fields) {

@@ -246,3 +246,15 @@ CLAUDE.md v2, migración v1→v2 con los shims deprecados: bakeSegmentEdits(...)
    documentan en el JSDoc del token correspondiente.
 7. API pública npm: shims deprecados (`bakeSegmentEdits`, `registerFallbackFontProvider`),
    no borrados en caliente.
+
+## Desvíos aceptados post-verificación (2026-07-14, informe verify-transplant.md)
+
+- **`targetWidthFor` extendido a EN** (placeholderMatch.ts): mejora deliberada pedida por
+  audit-agent §3.2 (v1 era español-only). ACEPTADA. F8 debe usar fixtures ES para el diff de
+  paridad de anchos de campo, o esperar el delta en `date|phone|code|address|…`.
+- **Orden inter-página de `applied[]`/`warnings[]` cambió** (Set-inserción → numérico por página).
+  ACEPTADO. Ningún golden/test de F8 debe asertar orden GLOBAL de las líneas del report.
+- **Parser de fills unificado**: `"/P1 scn"` ya no alucina gris (contradicción real de los dos
+  parsers v1, documentada con test propio en common/rawFill.test.ts). ACEPTADO.
+- **verify con charX ponderado**: los bordes de hit sobre runs mixtos se mueven algunos pt
+  (menos falsos positivos que el charXMap uniforme de v1). ACEPTADO, documentado en verify.ts.

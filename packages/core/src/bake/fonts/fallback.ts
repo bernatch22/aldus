@@ -10,10 +10,11 @@
  *  - la cadena de providers llega por DI (default: registry global — compat);
  *  - la geometría del subrayado viene de bake/underline.ts (fuente única).
  */
-import { PDFDocument, PDFFont, rgb } from 'pdf-lib';
+import { PDFDocument, PDFFont, popGraphicsState, pushGraphicsState, rgb, setCharacterSqueeze } from 'pdf-lib';
 import type { FontBucket } from '../../model/nodes.js';
 import { BakeCodes, type BakeReport } from '../report.js';
 import { underlineRectFor } from '../underline.js';
+import { fitHScale } from '../widthFit.js';
 import { stdFontFor } from './fontService.js';
 import { resolveFallbackFont, type IFallbackFontProvider } from './fontProviders.js';
 
@@ -35,6 +36,12 @@ export interface FallbackDraw {
   color?: { r: number; g: number; b: number };
   /** Underline: drawn as a thin rect under the text. */
   underline?: boolean;
+  /** SLOT geométrico (pt): distancia hasta la ancla del run SIGUIENTE de la
+   *  línea. Presente → el dibujo se ENCAJA con Tz (ver bake/widthFit.ts: la
+   *  cara sustituta suele ser más ancha que el hueco y el último glifo invadía
+   *  la ancla siguiente). Clamp de cordura en fitHScale — fuera de rango se
+   *  dibuja al ancho natural (deformar es peor que solapar). */
+  targetWidth?: number;
 }
 
 /** Draw every queued fallback, embedding each substitute font at most once. */
@@ -89,14 +96,32 @@ export async function drawFallbackTexts(
     const text = [...d.text].filter(c => c.codePointAt(0)! >= 0x20).join('');
     if (text !== d.text) report.warning(BakeCodes.GlyphArtifactDropped, undefined, { page: d.page, text: d.text.slice(0, 24) });
     if (!text) continue;
+    // WIDTH FITTING: la cara sustituta es otra métrica — con SLOT conocido
+    // (targetWidth) el texto se encaja con Tz para terminar EXACTO en la ancla
+    // del run siguiente (sin "a]" pegado ni agujero). Clamp en fitHScale.
+    let tz: number | undefined;
+    if (d.targetWidth !== undefined) {
+      try {
+        tz = fitHScale(font.widthOfTextAtSize(text, d.size), d.targetWidth);
+      } catch {
+        tz = undefined; // texto no encodeable con esta fuente: lo maneja el catch de abajo
+      }
+    }
     const drawUnderline = () => {
       if (!d.underline || !font) return;
-      const w = font.widthOfTextAtSize(text, d.size);
+      // Con fit, el ancho DIBUJADO es el slot (natural × Tz/100) — el subrayado
+      // debe medir lo que se ve, no el ancho natural.
+      const w = tz !== undefined ? d.targetWidth! : font.widthOfTextAtSize(text, d.size);
       const r = underlineRectFor(d.x, d.y, d.size, w);
       page.drawRectangle({ x: r.x, y: r.y, width: r.width, height: r.height, color });
     };
     try {
-      page.drawText(text, { x: d.x, y: d.y, size: d.size, font, color });
+      if (tz !== undefined) page.pushOperators(pushGraphicsState(), setCharacterSqueeze(tz));
+      try {
+        page.drawText(text, { x: d.x, y: d.y, size: d.size, font, color });
+      } finally {
+        if (tz !== undefined) page.pushOperators(popGraphicsState()); // q/Q siempre balanceado
+      }
       drawUnderline();
     } catch {
       // Characters outside the font: filter them out and report (never break the PDF).

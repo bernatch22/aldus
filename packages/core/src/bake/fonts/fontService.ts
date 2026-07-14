@@ -76,10 +76,83 @@ function simpleEncodingEncoder(fdict: PDFDict): ReverseEncoder | null {
   return encoderFromSimpleEncoding(encName, firstChar, lastChar, widths);
 }
 
+/** Medidor de ancho para BYTES ya encodeados de un font resource: devuelve el
+ *  ancho en unidades /Widths (milésimas de em), o null si algún glifo no tiene
+ *  ancho CONFIABLE (jamás adivinar → sin width fitting para ese run). */
+type ByteWidthMeasurer = (bytes: Uint8Array) => number | null;
+
+/** Medidor para fuentes SIMPLES (1 byte = 1 glifo): /Widths + /FirstChar.
+ *  Un ancho ausente o 0 delata un glifo fuera del subset → null (no confiable). */
+function simpleWidthMeasurer(fdict: PDFDict): ByteWidthMeasurer | null {
+  const subtype = fdict.lookupMaybe(PDFName.of('Subtype'), PDFName)?.decodeText();
+  if (subtype !== 'TrueType' && subtype !== 'Type1') return null;
+  const firstChar = fdict.lookupMaybe(PDFName.of('FirstChar'), PDFNumber)?.asNumber();
+  const w = fdict.lookupMaybe(PDFName.of('Widths'), PDFArray);
+  if (firstChar === undefined || !w) return null;
+  const widths = w.asArray().map(v => (v instanceof PDFNumber ? v.asNumber() : 0));
+  return bytes => {
+    let sum = 0;
+    for (const b of bytes) {
+      const gw = widths[b - firstChar];
+      if (!(typeof gw === 'number' && gw > 0)) return null;
+      sum += gw;
+    }
+    return sum;
+  };
+}
+
+/** Medidor para Type0 con /Encoding Identity-H (CID = código de 2 bytes):
+ *  /W del descendant font, /DW como default (1000 por spec, ISO 32000 §9.7.4.3).
+ *  Otros encodings CMap: null — el mapeo código→CID no es trivial, no adivinar. */
+function cidWidthMeasurer(fdict: PDFDict): ByteWidthMeasurer | null {
+  const subtype = fdict.lookupMaybe(PDFName.of('Subtype'), PDFName)?.decodeText();
+  if (subtype !== 'Type0') return null;
+  const enc = fdict.lookup(PDFName.of('Encoding'));
+  if (!(enc instanceof PDFName) || enc.decodeText() !== 'Identity-H') return null;
+  const desc = fdict.lookupMaybe(PDFName.of('DescendantFonts'), PDFArray)?.lookup(0);
+  if (!(desc instanceof PDFDict)) return null;
+  const dw = desc.lookupMaybe(PDFName.of('DW'), PDFNumber)?.asNumber() ?? 1000;
+  // /W: [ cFirst [w w ...] | cFirst cLast w ]* → mapa CID → ancho.
+  const cidW = new Map<number, number>();
+  const w = desc.lookupMaybe(PDFName.of('W'), PDFArray);
+  if (w) {
+    const items = [...Array(w.size()).keys()].map(i => w.lookup(i));
+    for (let i = 0; i < items.length; ) {
+      const c0 = items[i];
+      if (!(c0 instanceof PDFNumber)) return null; // /W malformado: no adivinar
+      const next = items[i + 1];
+      if (next instanceof PDFArray) {
+        const list = next.asArray();
+        for (let k = 0; k < list.length; k++) {
+          const gw = list[k];
+          if (gw instanceof PDFNumber) cidW.set(c0.asNumber() + k, gw.asNumber());
+        }
+        i += 2;
+      } else if (next instanceof PDFNumber && items[i + 2] instanceof PDFNumber) {
+        const cLast = next.asNumber();
+        const gw = (items[i + 2] as PDFNumber).asNumber();
+        for (let c = c0.asNumber(); c <= cLast && c - c0.asNumber() < 0x10000; c++) cidW.set(c, gw);
+        i += 3;
+      } else {
+        return null; // forma inesperada: no adivinar
+      }
+    }
+  }
+  return bytes => {
+    if (bytes.length % 2 !== 0) return null;
+    let sum = 0;
+    for (let i = 0; i + 1 < bytes.length; i += 2) {
+      sum += cidW.get((bytes[i]! << 8) | bytes[i + 1]!) ?? dw;
+    }
+    return sum;
+  };
+}
+
 /** Dueño del cache de reverse-encoders (null = fuente sin /ToUnicode usable;
  *  también se cachea). Un FontService por página de bake. */
 export class FontService {
   private readonly encCache = new Map<string, ReverseEncoder | null>();
+  private readonly widthCache = new Map<string, ByteWidthMeasurer | null>();
 
   /** Reverse /ToUnicode encoder for a page font resource, memoized. */
   encoderForFont(doc: PDFDocument, page: PDFPage, fontName: string): ReverseEncoder | null {
@@ -105,5 +178,29 @@ export class FontService {
     }
     this.encCache.set(fontName, enc);
     return enc;
+  }
+
+  /**
+   * Ancho (unidades /Widths, milésimas de em) de los BYTES ya encodeados para
+   * un font resource de la página — para el WIDTH FITTING del path B (Tz sobre
+   * el slot geométrico, ver bake/widthFit.ts). null = la fuente no expone
+   * anchos confiables (sin /Widths, /W ilegible, glifo fuera del subset,
+   * encoding CMap no-Identity): NO se ajusta, comportamiento intacto.
+   */
+  widthOfBytes(doc: PDFDocument, page: PDFPage, fontName: string, bytes: Uint8Array): number | null {
+    let measurer = this.widthCache.get(fontName);
+    if (measurer === undefined) {
+      measurer = null;
+      try {
+        const res = page.node.Resources();
+        const fonts = res?.lookup(PDFName.of('Font'));
+        const fdict = fonts instanceof PDFDict ? fonts.lookup(PDFName.of(fontName)) : null;
+        if (fdict instanceof PDFDict) measurer = simpleWidthMeasurer(fdict) ?? cidWidthMeasurer(fdict);
+      } catch {
+        measurer = null;
+      }
+      this.widthCache.set(fontName, measurer);
+    }
+    return measurer ? measurer(bytes) : null;
   }
 }

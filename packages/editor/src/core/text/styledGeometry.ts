@@ -29,10 +29,11 @@
  *    subrayado del grafo).
  *
  * Nota de fidelidad: el ancla de cada graph-run queda EXACTA (eso mata el
- * split); el ANCHO re-encodeado de un tramo puede diferir del original
- * (justificado por dobles espacios/TJ que pdf.js normaliza en el grafo), así
- * que el re-extract puede correr algún espacio inferido ±1 posición. Fidelidad
- * total de ancho exigiría Tz/Tc por run en el bake (fuera de alcance acá).
+ * split); y como cada run lleva su dx real, el bake conoce el SLOT geométrico
+ * de cada tramo (ancla siguiente − propia) y ENCAJA el ancho dibujado con Tz
+ * (core bake/widthFit.ts — path B y fallback), así la cara re-emitida/sustituta
+ * no invade la ancla siguiente ni deja agujero (clamp 65–135%: fuera de rango
+ * se dibuja al ancho natural).
  *
  * DEFENSIVO: si el texto de `styled` no calza con el ensamblado del grafo
  * (edición previa, trailing space, cualquier duda) devuelve null y el caller

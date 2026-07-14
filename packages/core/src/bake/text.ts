@@ -35,6 +35,7 @@ import { TextOpLocator, TEXT_NOT_LOCATED_REASON } from './locate/textOpLocator.j
 import { isLocateConflict } from './locate/types.js';
 import { newTextBlock, reemitBlock, type TextStyleOverrides } from './textEmit.js';
 import { underlineRectFor, underlineRectsFor } from './underline.js';
+import { fitHScale } from './widthFit.js';
 import { BakeCodes } from './report.js';
 import type { PageBakeContext } from './context.js';
 
@@ -213,12 +214,24 @@ class StyledRunsReemit implements ITextEmitStrategy {
     // de in-place, o el clip lo recortaría a nada.
     const escaped = lineRuns.some((_, li) => escapesClip(firstOp, newX, newBaseline - li * leading));
 
+    // WIDTH FITTING solo sin overrides de Tc/Tz del usuario (su intención manda
+    // sobre el encaje geométrico) — ver bake/widthFit.ts.
+    const wantFit = styleOv.hScale === undefined && styleOv.charSpacing === undefined;
     let substituted = 0;
     for (let li = 0; li < lineRuns.length; li++) {
       const lineBase = newBaseline - li * leading;
-      for (const sr of lineRuns[li]!) {
+      const runsInLine = lineRuns[li]!;
+      for (let ri = 0; ri < runsInLine.length; ri++) {
+        const sr = runsInLine[ri]!;
         if (!sr.text) continue;
         const x = newX + sr.dx * ratio;
+        // SLOT geométrico del run: ancla del run SIGUIENTE de la línea − la
+        // propia (dx reales del PDF cuando el edit trae runs anclados —
+        // restyleFromGraph). Sin run siguiente (fin de línea) no hay slot:
+        // comportamiento intacto.
+        const nextInLine = runsInLine[ri + 1];
+        const rawSlot = edit.runs && nextInLine ? (nextInLine.dx - sr.dx) * ratio : undefined;
+        const slotWidth = wantFit && rawSlot !== undefined && Number.isFinite(rawSlot) && rawSlot > 0 ? rawSlot : undefined;
         const fontName = familyChanged ? undefined : opForStyle.get(`${sr.bold}|${sr.italic}`)?.fontName;
         const bytes = fontName ? ctx.fonts.encoderForFont(doc, page, fontName)?.encode(sr.text) ?? null : null;
         // Per-run color (selection) > segment override > the original op's.
@@ -227,6 +240,21 @@ class StyledRunsReemit implements ITextEmitStrategy {
           colorRaw: sr.color ? hexToRg(sr.color) : styleOv.colorRaw,
         };
         const srcForBlock = opForStyle.get(`${sr.bold}|${sr.italic}`) ?? bodyOp;
+        // WIDTH FITTING (path B): el re-encode pierde el kerning TJ original —
+        // con slot conocido y una fuente que expone anchos CONFIABLES
+        // (/Widths o /W Identity: FontService.widthOfBytes; si no, null y NO
+        // se ajusta), Tz encaja el run en su hueco. Ancho natural en pts de
+        // página: unidades/1000 × Tf × escala X de la matriz × ratio (a Tz=100,
+        // Tc=0 — exactamente lo que emite newTextBlock sin overrides).
+        let fittedTz: number | undefined;
+        if (slotWidth !== undefined && fontName && bytes) {
+          const units = ctx.fonts.widthOfBytes(doc, page, fontName, bytes);
+          if (units !== null) {
+            const scaleX = Math.hypot(srcForBlock.matrix[0], srcForBlock.matrix[1]) * ratio;
+            fittedTz = fitHScale((units / 1000) * srcForBlock.fontSize * scaleX, slotWidth);
+            if (fittedTz !== undefined) runOv.hScale = fittedTz;
+          }
+        }
         const inlineBlock = fontName && bytes
           ? newTextBlock(escaped ? atStreamEnd(srcForBlock) : srcForBlock, ratio, x, lineBase, bytes, runOv)
           : null;
@@ -243,7 +271,8 @@ class StyledRunsReemit implements ITextEmitStrategy {
               : edit.color
                 ? hexToRgbObj(edit.color)
                 : toRgb((ops.find(o => o.fontName === fontName) ?? firstOp)?.fillColorRaw) ?? { r: 0, g: 0, b: 0 };
-            const u = underlineRectFor(x, lineBase, size, sr.w * ratio);
+            // Con fit, el ancho DIBUJADO es el slot — el subrayado mide lo que se ve.
+            const u = underlineRectFor(x, lineBase, size, fittedTz !== undefined ? slotWidth! : sr.w * ratio);
             appendBlocks.push(
               `q ${fmt(c.r)} ${fmt(c.g)} ${fmt(c.b)} rg ${fmt(u.x)} ${fmt(u.y)} ${fmt(u.width)} ${fmt(u.height)} re f Q`,
             );
@@ -272,6 +301,9 @@ class StyledRunsReemit implements ITextEmitStrategy {
               family: familyChanged ? undefined : baseFontFamilyOf(page, (srcOp ?? firstOp).fontName) ?? undefined,
               color: color ?? undefined,
               underline: sr.underline,
+              // SLOT geométrico → el fallback encaja el dibujo con Tz (la cara
+              // sustituta es más ancha/angosta que el hueco entre anclas).
+              ...(slotWidth !== undefined ? { targetWidth: slotWidth } : {}),
             });
           }
           substituted++;

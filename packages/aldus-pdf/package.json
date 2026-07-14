@@ -20,7 +20,7 @@
   },
   "type": "module",
   "bin": {
-    "aldus": "./dist/cli.js"
+    "aldus": "dist/cli.js"
   },
   "exports": {
     ".": {

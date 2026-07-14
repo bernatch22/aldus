@@ -212,6 +212,18 @@ export function NodeOverlay({ graph, scale, ledger, controller, edits, imageEdit
     }
     if (multiSel.size) setMultiSel(new Set());
     onSelect(nodeId);
+    // DEBUG: al clickear un nodo de texto, dump del texto TAL CUAL (JSON pretty).
+    if (nodeId) {
+      const seg = allSegments.find(s => s.id === nodeId);
+      if (seg) console.log(
+        '%c[aldus] CLICK →', 'color:#2563eb;font-weight:700',
+        '\n' + JSON.stringify({
+          id: seg.id,
+          text: seg.text,
+          runs: seg.runs.map(r => r.text),
+        }, null, 2),
+      );
+    }
   };
 
   // ── MULTI-SELECCIÓN (marquee sobre el fondo → grupo movible) ──

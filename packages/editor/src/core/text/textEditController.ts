@@ -602,6 +602,17 @@ export class TextEditController implements IDisposable {
     // noop: comparado con estilos FUSIONADOS (el original puede traer
     // marcador+cuerpo en un solo run — "I. Custodiar").
     const noop = styledRunsEqual(mergeSameStyle(runs), mergeSameStyle(originalStyledRuns(s.seg)));
+    // DEBUG: al commitear una edición, dump del texto ANTES y DESPUÉS (JSON pretty).
+    console.log(
+      '%c[aldus] EDITADO →', 'color:#16a34a;font-weight:700',
+      '\n' + JSON.stringify({
+        id: s.seg.id,
+        before: s.seedText,
+        after: text,
+        changed: !noop,
+        runs: runs.map(r => r.text),
+      }, null, 2),
+    );
     s.onPatch({
       text,
       runs: noop ? null : runs,

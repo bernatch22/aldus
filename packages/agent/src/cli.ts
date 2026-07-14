@@ -14,17 +14,16 @@
 import { parseArgs } from 'node:util';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
-import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
-import { existsSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { readFormFields, setFieldValues } from '@aldus/core/bake';
 import { registerNodeFontProviders } from '@aldus/core/node';
 import { loadDoc } from './graph.js';
 import { EditSession } from './session/EditSession.js';
 import { runTurn, type AgentEvent } from './runTurn.js';
+import { openFile, openInEditor } from './openInEditor.js';
 
 // Fuentes sustitutas REALES para el bake (original del sistema / gemela métrica).
 registerNodeFontProviders();
@@ -39,62 +38,6 @@ const TOOL_LABEL: Record<string, string> = {
   add_text: 'agregando texto', insert_image: 'insertando imagen', add_watermark: 'marca de agua',
   add_header_footer: 'encabezado/pie', add_form_field: 'creando campo', fill_field: 'completando campo', move_field: 'moviendo campo', delete_field: 'quitando campo',
 };
-
-/** Abre un archivo con el visor por defecto del SO (mac/linux/win). */
-function openFile(file: string): void {
-  const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
-  spawn(cmd, [file], { stdio: 'ignore', detached: true, shell: process.platform === 'win32' }).unref();
-}
-
-/** Abre el PDF en el EDITOR + agente CASPER en el navegador: corre el server real
- *  en modo local (un usuario, sin sesiones) sirviendo la SPA, sube el PDF y abre
- *  el navegador en ese doc. Vive hasta Ctrl+C. Funciona en DOS layouts:
- *   · paquete publicado → server.mjs + editor/ están junto a cli.js (dist/).
- *   · repo → corre apps/server con tsx y sirve apps/editor/dist. */
-export async function openInEditor(file: string): Promise<void> {
-  const cliDir = path.dirname(fileURLToPath(import.meta.url));
-  const bundledServer = path.join(cliDir, 'server.mjs');
-  const published = existsSync(bundledServer);
-  const repo = path.resolve(cliDir, '../../..');
-  const editorDir = published ? path.join(cliDir, 'editor') : path.join(repo, 'packages/editor/dist');
-  if (!existsSync(path.join(editorDir, 'index.html'))) {
-    console.error(published
-      ? 'Paquete incompleto: falta el editor buildeado.'
-      : 'Buildeá el editor primero:  pnpm --filter aldus-editor build');
-    process.exit(1);
-  }
-  const PORT = Number(process.env.ALDUS_PORT || 4180);
-  const [cmd, args] = published
-    ? [process.execPath, [bundledServer]] as const
-    : ['npx', ['tsx', path.join(repo, 'apps/server/src/index.ts')]] as const;
-  const server = spawn(cmd, args, {
-    stdio: 'inherit',
-    env: {
-      ...process.env,
-      ALDUS_PORT: String(PORT),
-      ALDUS_STATIC: editorDir,
-      ALDUS_SESSION_SCOPED: '',
-      // store temporal — no ensuciar el cwd ni node_modules.
-      ALDUS_DATA: process.env.ALDUS_DATA || mkdtempSync(path.join(tmpdir(), 'aldus-')),
-    },
-  });
-  server.on('exit', code => process.exit(code ?? 0));
-  process.on('SIGINT', () => server.kill('SIGINT'));
-
-  const base = `http://localhost:${PORT}`;
-  const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
-  for (let i = 0; i < 120; i++) { try { await fetch(base); break; } catch { await sleep(150); } }
-  const form = new FormData();
-  form.append('pdf', new Blob([await readFile(path.resolve(file))]), path.basename(file));
-  const res = await fetch(`${base}/api/documents`, { method: 'POST', body: form });
-  if (!res.ok) { console.error(`No pude cargar el PDF (${res.status})`); server.kill('SIGINT'); return; }
-  const { id } = await res.json() as { id: string };
-  const ai = process.env.ALDUS_PROVIDER === 'openrouter'
-    ? (process.env.OPENROUTER_API_KEY ? 'OpenRouter' : 'OpenRouter (falta OPENROUTER_API_KEY)')
-    : 'suscripción Claude Code';
-  console.log(`\n📄  ${path.basename(file)}\n🖊  Editor + agente CASPER: ${base}/doc/${id}\n🤖  IA: ${ai}\n   (Ctrl+C para cerrar)\n`);
-  openFile(`${base}/doc/${id}`);
-}
 
 /** Streamea los eventos del turno a stdout (texto token a token + tools). */
 function streamToStdout(ev: AgentEvent): void {
@@ -262,8 +205,15 @@ async function main(): Promise<void> {
   }
 }
 
-// Ejecutar solo como binario (no al importar openInEditor desde el ejemplo F7).
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+// Ejecutar solo como binario (no al importarlo como módulo). El bin de npm es
+// un SYMLINK → argv[1] se compara por realpath, o `aldus` instalado global no
+// matchearía import.meta.url (que apunta al archivo real) y el CLI moriría mudo.
+const invokedAs = (() => {
+  if (!process.argv[1]) return null;
+  try { return pathToFileURL(realpathSync(process.argv[1])).href; }
+  catch { return pathToFileURL(process.argv[1]).href; }
+})();
+if (invokedAs && import.meta.url === invokedAs) {
   main().catch(err => {
     console.error('✗', err instanceof Error ? err.message : err);
     process.exit(1);

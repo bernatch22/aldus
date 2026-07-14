@@ -25,9 +25,14 @@ export type { FormField } from '@aldus/core/bake';
 
 // ── EDITAR ──────────────────────────────────────────────────────────────────
 export { EditSession } from './session/EditSession.js';
+export type { TurnFinish } from './session/EditSession.js';
 export { NodeIndex } from './session/NodeIndex.js';
 export { runTurn } from './runTurn.js';
 export type { TurnResult, TurnOpts, AgentEvent, AgentRole } from './runTurn.js';
+// El seam de STREAMING de un host (audit-hosts §3.4): el server escribe NDJSON,
+// el CLI stdout, un test un callback — misma orquestación, distinto canal.
+export { IAgentEventSink, CallbackSink } from './sink.js';
+export type { AgentWireEvent, TurnDoneEvent, TurnErrorEvent } from './sink.js';
 // El agente (two-level) sobre el contrato ILlmTransport + los 2 transportes.
 export { ILlmTransport } from './transport/transport.js';
 export type { PassRequest, PassResult, PassTool } from './transport/transport.js';
@@ -57,3 +62,5 @@ export type { FlattenResult } from '@aldus/core/bake';
 // Fuentes sustitutas REALES (original del sistema / gemela métrica descargada):
 // el host Node lo llama UNA vez al boot. El browser no debe importar esto.
 export { registerNodeFontProviders } from '@aldus/core/node';
+// Editor visual local en una llamada (el ejemplo edit-in-browser ES esto).
+export { openInEditor, openFile } from './openInEditor.js';

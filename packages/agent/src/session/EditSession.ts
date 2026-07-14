@@ -47,6 +47,20 @@ type CreateOp =
 
 const MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg' };
 
+/**
+ * Resultado discriminado de {@link EditSession.finishTurn} — la política de
+ * PRODUCTO "¿el host hornea+persiste o devuelve ediciones?" en UN lugar
+ * (audit-hosts §2: en v1 vivía embebida en la ruta agent.ts del server):
+ *  - `baked` → hubo creaciones/annotations/fills que el estado local del editor
+ *    no sabe representar: acá van los bytes YA horneados; el host los persiste
+ *    y el cliente recarga el documento limpio.
+ *  - `edits` → el turno solo acumuló ediciones de texto/imagen: el host las
+ *    devuelve y el editor las aplica a su estado local (preview, sin persistir).
+ */
+export type TurnFinish =
+  | { kind: 'baked'; pdf: Uint8Array; applied: string[]; warnings: string[] }
+  | { kind: 'edits'; edits: SegmentEdit[]; imageEdits: ImageEdit[] };
+
 export class EditSession {
   private readonly index: NodeIndex;
   private readonly ledger = new EditLedger();
@@ -490,5 +504,17 @@ export class EditSession {
     const { pdf, applied, warnings } = await this.bake();
     await writeFile(outPath, pdf);
     return { applied, warnings };
+  }
+
+  /** Cierra el turno con la política de producto (ver {@link TurnFinish}):
+   *  hornea si hay cambios que el editor no representa localmente; si no,
+   *  devuelve las ediciones acumuladas. */
+  async finishTurn(): Promise<TurnFinish> {
+    if (this.hasBakedOps) {
+      const { pdf, applied, warnings } = await this.bake();
+      return { kind: 'baked', pdf, applied, warnings };
+    }
+    const { edits, imageEdits } = this.getEdits();
+    return { kind: 'edits', edits, imageEdits };
   }
 }

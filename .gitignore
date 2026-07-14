@@ -5,3 +5,6 @@ dist/
 *.actual
 dist-lib/
 dist-demo/
+
+# Datos de sesión del server local (uploads/revisiones de prueba, NUNCA código)
+apps/server/data/

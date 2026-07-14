@@ -1,0 +1,298 @@
+/* Estilos PROPIOS del editor (overlay, tokens, scrollbars) — compartidos
+   entre la app de ejemplo (styles.css) y la build de librería (styles-lib.css). */
+
+/*
+ * Aldus — design tokens (paleta estilo Acrobat: gris neutro, acento azul).
+ * El editor usa clases utilitarias de Tailwind. El OVERLAY de nodos sobre el
+ * canvas usa clases dedicadas (NodeOverlay compone strings dinámicos), así que
+ * viven acá como CSS plano — restyled coherente con los tokens.
+ */
+
+:root {
+  --accent: #2563eb;        /* blue-600  — selección */
+  --accent-soft: #eff6ff;   /* blue-50 */
+  --edited: #d97706;        /* amber-600 — edición pendiente */
+  --edited-soft: #fffbeb;
+  --field: #0d9488;         /* teal-600  — form fields */
+  --danger: #dc2626;        /* red-600 */
+  --line: #e4e4e7;          /* neutral-200 */
+  --ink: #27272a;           /* neutral-800 */
+  --muted: #71717a;         /* neutral-500 */
+}
+
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; height: 100%; }
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color: var(--ink);
+  background: #fafafa;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── El lienzo: página + overlay de nodos ─────────────────────────────────── */
+.pdf-stage { position: relative; box-shadow: 0 1px 3px rgba(0,0,0,.1), 0 8px 24px rgba(0,0,0,.08); background: #fff; }
+.pdf-stage canvas { display: block; }
+.node-overlay { position: absolute; inset: 0; }
+.node-overlay.placing { cursor: crosshair; }
+.node-overlay.placing > * { pointer-events: none; }
+
+/* Nodo BLOQUEADO: invisible al mouse. */
+.node-overlay .locked { pointer-events: none; }
+.node-overlay .locked:hover { outline-color: transparent !important; background: transparent !important; }
+.node-overlay .locked.selected { outline: 1.5px dashed #a1a1aa !important; }
+
+/* Segmentos de texto */
+.seg-box {
+  position: absolute;
+  cursor: pointer;
+  border-radius: 2px;
+  outline: 1px solid transparent;
+  outline-offset: 1px;
+  transition: background .1s, outline-color .1s;
+}
+.seg-box:hover { outline-color: color-mix(in srgb, var(--accent) 55%, transparent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.seg-box.selected { outline-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.seg-box.selected:not(.editing) { cursor: move; }
+.seg-box.editing { cursor: text; }
+/* Mientras se EDITA: superficie blanca (legibilidad + tapa sus propios glifos
+   en el lugar). Editado SIN editar: TRANSPARENTE — el texto flota sobre lo que
+   haya debajo (imagen incluida), igual que hará el bake. */
+.seg-box.editing.masked { background: #fff; }
+/* Editado pero el original AÚN está en el canvas (el extirpado del preview no
+   llegó): máscara OPACA para que no se transparente el viejo bajo el nuevo
+   (el "roto" transitorio de unos ms). Al extirparse, cae a transparente. */
+.seg-box.edited.masked.on-canvas { background: #fff; }
+.seg-box.masked { cursor: text; }
+.seg-box.edited { outline-color: transparent; }
+.seg-box.edited.selected { outline-color: var(--accent); }
+/* Un texto en interacción o ya editado se dibuja ARRIBA del chrome de los
+   widgets (que van últimos en el DOM por prioridad de mouse): sin esto, el
+   texto soltado sobre un campo quedaba bajo su tinte — "cambiaba de color". */
+.seg-box.selected, .seg-box.editing, .seg-box.edited { z-index: 20; }
+.seg-text { white-space: pre; outline: none; min-height: 100%; width: max-content; color: #000; }
+/* RESALTADO pendiente: capa DETRÁS del texto (primer hijo, z bajo), anclada al
+   box → sigue el transform del drag. Alpha (no mix-blend-mode) para tintar
+   consistente bajo cualquier stacking context (un ancestro transformado aísla
+   el multiply). El horneado final (server) sí usa multiply exacto. */
+.seg-hl {
+  position: absolute;
+  left: -1px;
+  top: -1px;
+  z-index: 0;
+  border-radius: 1px;
+  opacity: .45;
+  pointer-events: none;
+}
+/* Resaltado GUARDADO (HighlightNode): box overlay movible/borrable. */
+.hl-box {
+  position: absolute;
+  border-radius: 1px;
+  opacity: .45;
+  cursor: move;
+  outline: 1px solid transparent;
+  outline-offset: 1px;
+}
+.hl-box:hover { outline-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.hl-box.selected { outline-color: var(--accent); opacity: .5; z-index: 21; }
+.hl-box.locked { pointer-events: none; }
+.hl-del {
+  position: absolute;
+  top: -11px;
+  right: -11px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 9999px;
+  background: #ef4444;
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,.3);
+  opacity: 1;
+}
+/* Link GUARDADO (LinkNode): área clickeable movible/borrable. */
+.link-box {
+  position: absolute;
+  border-radius: 2px;
+  cursor: move;
+  outline: 1px dashed transparent;
+  outline-offset: 1px;
+}
+.link-box:hover { outline-color: color-mix(in srgb, var(--accent) 65%, transparent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.link-box.selected { outline-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); z-index: 21; }
+.link-box.locked { pointer-events: none; }
+.link-tag {
+  position: absolute;
+  top: -24px;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 320px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: #1d4ed8;
+  color: #fff;
+  font-size: 11px;
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(0,0,0,.25);
+}
+.link-tag button { display: grid; place-items: center; opacity: .8; }
+.link-tag button:hover { opacity: 1; }
+/* EL editor (TextEditLayer): textarea transparente ENCIMA de un backdrop que
+   dibuja los tramos estilados (bold/italic/color). Ambos superpuestos, mismas
+   métricas → el caret del textarea cae sobre el glifo dibujado. */
+.seg-backdrop {
+  position: absolute; top: 0; left: 0; pointer-events: none;
+  white-space: pre; overflow: hidden; color: #000;
+}
+/* Lbl colgante del editor: el marcador de lista fijo (no editable) a la
+   izquierda del cuerpo — el gap real es el `left` del backdrop/textarea. */
+.seg-lbl {
+  position: absolute; top: 0; left: 0; pointer-events: none;
+  white-space: pre; overflow: visible; color: #000;
+}
+textarea.seg-textarea {
+  position: absolute; top: 0; left: 0; z-index: 1; /* caret ARRIBA del backdrop */
+  background: transparent; border: 0; outline: none;
+  padding: 0; margin: 0; resize: none; overflow: hidden; white-space: pre;
+}
+/* Velo esmerilado sobre la posición ORIGINAL de una imagen/widget MIENTRAS se
+   arrastra (al soltar, el preview horneado extirpa el original y el velo se va).
+   El texto editado ya no lo usa: sus operadores se extirpan del preview local. */
+.seg-mask {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.93);
+  backdrop-filter: blur(1.5px);
+}
+
+/* Selección múltiple: marquee + caja de grupo. */
+.marquee {
+  position: absolute; z-index: 35; pointer-events: none;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.group-box {
+  position: absolute; z-index: 34; cursor: move;
+  border: 1.5px dashed var(--accent); border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.group-tag {
+  position: absolute; top: -22px; left: 0; display: flex; align-items: center; gap: 4px;
+  font-size: 11px; color: #fff; background: var(--accent);
+  padding: 1px 4px 1px 6px; border-radius: 4px; white-space: nowrap;
+}
+.group-tag button { display: grid; place-items: center; background: transparent; color: #fff; opacity: .85; padding: 1px; }
+.group-tag button:hover { opacity: 1; }
+
+/* Handle de resize compartido: SIEMPRE presente (no hace falta seleccionar
+   primero) — se revela con el hover del nodo o con la selección. */
+.seg-grip {
+  position: absolute; right: -5px; bottom: -5px; width: 10px; height: 10px;
+  background: #fff; border: 2px solid var(--accent); border-radius: 3px; cursor: nwse-resize;
+  opacity: 0; transition: opacity .12s;
+}
+.seg-box:hover .seg-grip, .seg-box.selected .seg-grip,
+.shape-box:hover .seg-grip, .shape-box.selected .seg-grip,
+.img-box:hover .seg-grip, .img-box.selected .seg-grip,
+.widget-box:hover .seg-grip, .widget-box.selected .seg-grip { opacity: 1; }
+
+/* Imágenes */
+/* Formas vectoriales (banners/fondos): un marco seleccionable/arrastrable. NO
+   pinta fondo salvo durante el drag (el rect real lo pinta el canvas debajo). */
+.shape-box { position: absolute; cursor: pointer; outline: 1px dashed transparent; outline-offset: 1px; border-radius: 1px; }
+.shape-box:hover { outline-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.shape-box.selected { outline: 1px solid var(--accent); cursor: move; }
+.shape-box.dragging { outline-style: solid; }
+.img-box { position: absolute; cursor: pointer; outline: 1px solid transparent; outline-offset: 1px; border-radius: 2px; }
+.img-box:hover { outline-color: color-mix(in srgb, var(--accent) 55%, transparent); background-color: color-mix(in srgb, var(--accent) 5%, transparent); }
+/* Durante el drag/ghost, NUNCA pintar un background-color que tape la imagen. */
+.img-box.ghost:hover { background-color: transparent; }
+.img-box.selected { outline-color: var(--accent); cursor: move; }
+.img-box.edited { outline-color: transparent; }
+.img-box.edited.selected { outline-color: var(--accent); }
+/* El sticker de una imagen movida lleva sus píxeles limpios como background-image
+   inline (nada de `background` shorthand acá — resetearía la imagen). El marco
+   punteado SOLO mientras se arrastra (.dragging); persistente sería ruido visual. */
+.img-box.ghost { background-repeat: no-repeat; }
+.img-box.ghost.dragging { outline: 2px dashed var(--edited); }
+.ghost-label { position: absolute; top: -18px; left: 0; font-size: 10px; color: var(--edited); white-space: nowrap; }
+.img-removed { position: absolute; outline: 2px dashed var(--danger); background: color-mix(in srgb, var(--danger) 7%, transparent); cursor: pointer; }
+.img-removed.selected { outline-color: var(--accent); }
+.img-removed .ghost-label { color: var(--danger); top: 2px; left: 4px; }
+
+/* Campos de formulario. SIN fondo permanente: el canvas ya pinta la apariencia
+   real del campo, y el tinte teñía cualquier texto que quedara debajo. */
+.widget-box {
+  position: absolute; cursor: pointer; outline: 1.5px dashed color-mix(in srgb, var(--field) 45%, transparent);
+  outline-offset: 1px; border-radius: 3px;
+}
+.widget-box:hover { outline-color: var(--field); background: color-mix(in srgb, var(--field) 10%, transparent); }
+.widget-box.selected { outline: 2px solid var(--field); cursor: move; }
+.widget-label {
+  position: absolute; top: -18px; left: 0; font-size: 10px; color: var(--field);
+  white-space: nowrap; background: #fff; padding: 0 3px; border-radius: 3px;
+}
+
+/* Toolbar flotante arriba del objeto seleccionado */
+.float-bar {
+  position: absolute;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  white-space: nowrap;
+}
+.fb-btn {
+  display: grid; place-items: center; width: 26px; height: 26px;
+  border: none; background: none; border-radius: 5px; color: #525252; cursor: pointer;
+}
+.fb-btn:hover { background: #f4f4f5; color: #171717; }
+.fb-btn.active { background: var(--accent); color: #fff; }
+.fb-btn.danger:hover { background: #fee2e2; color: var(--danger); }
+.fb-sep { width: 1px; height: 16px; background: var(--line); margin: 0 2px; }
+/* Botón de lista con dropdown de tipos (viñeta/número/letra/romano). */
+.fb-list { position: relative; display: inline-flex; align-items: center; }
+.fb-caret { border: 0; background: transparent; cursor: pointer; font-size: 9px; line-height: 1; padding: 2px 3px; color: var(--ink-4); border-radius: 4px; }
+.fb-caret:hover { background: #f4f4f5; color: #171717; }
+.fb-menu { position: absolute; top: 100%; left: 0; margin-top: 4px; z-index: 40; background: #fff; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.12); padding: 4px; min-width: 132px; }
+.fb-menu-item { display: block; width: 100%; text-align: left; border: 0; background: transparent; cursor: pointer; font-size: 12px; padding: 5px 8px; border-radius: 4px; color: var(--ink-2); white-space: nowrap; }
+.fb-menu-item:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--ink); }
+.fb-swatch { width: 18px; height: 18px; border-radius: 4px; border: 1px solid rgba(0,0,0,.15); cursor: pointer; padding: 0; position: relative; margin: 0 2px; }
+.fb-swatch input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.fb-input {
+  width: 46px; height: 24px; margin: 0 2px; padding: 0 4px;
+  border: 1px solid var(--line); border-radius: 5px;
+  font-size: 12px; text-align: center; outline: none;
+  appearance: textfield;
+}
+.fb-input::-webkit-inner-spin-button { appearance: none; }
+.fb-input:focus { border-color: var(--accent); }
+
+/* ACOPLADA al header (portal al dock): pierde la carcasa de tarjeta flotante
+   —posición absoluta, borde, sombra, fondo— para fundirse con la barra de
+   herramientas plana. */
+.float-bar--docked {
+  position: static; z-index: auto;
+  padding: 0; gap: 1px;
+  background: transparent; border: 0; border-radius: 0; box-shadow: none;
+}
+/* Placeholder gris cuando no hay nodo dockeable: mismo layout, deshabilitado. */
+.fb-dock-ph {
+  display: flex; align-items: center; gap: 1px;
+  opacity: .38; pointer-events: none;
+}
+
+/* Scrollbars sutiles en los paneles */
+.thin-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.thin-scroll::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }
+.thin-scroll::-webkit-scrollbar-thumb:hover { background: #a1a1aa; background-clip: content-box; }
+
+/* Panel embebido: cuando el Inspector vive DENTRO de la columna tabeada del
+   host (panelTabs), su <aside> propio pierde ancho fijo y borde (los pone el
+   contenedor). */
+.aldus-panel-embed > aside { width: 100%; border-left: 0; }

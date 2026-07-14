@@ -2,25 +2,49 @@
   "name": "aldus-editor",
   "version": "0.0.1",
   "type": "module",
-  "description": "Aldus v2 editor: editor-core sin React (ledger adapter sobre @aldus/core, preview/lift services, textEditController, styledDom) + editor-react (INodeKind registry, composition root). F6 checkpoint 1 = core/.",
+  "description": "El editor de Aldus como componente React embebible (AldusEditor) — render del PDF + overlay del grafo (registry INodeKind) + edición in-place sobre editor-core (ledger adapter, preview/lift services, TextEditController). demo/ es la app de EJEMPLO; un host real importa la lib.",
   "scripts": {
+    "dev": "vite",
+    "build": "vite build -c vite.lib.config.ts",
+    "build:demo": "vite build",
+    "preview": "vite preview",
     "test": "vitest run",
-    "build": "echo 'build real llega con vite.lib.config.ts en el checkpoint 2 (editor-react)'"
+    "prepublishOnly": "vite build -c vite.lib.config.ts"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "import": "./dist-lib/index.js"
+    },
+    "./styles.css": "./dist-lib/styles.css"
   },
-  "dependencies": {
-    "@aldus/core": "workspace:*"
-  },
+  "files": [
+    "dist-lib",
+    "README.md"
+  ],
   "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18",
     "pdfjs-dist": ">=4.10"
   },
   "devDependencies": {
+    "@aldus/core": "workspace:*",
+    "@tailwindcss/vite": "^4.3.2",
     "@types/node": "^22.10.0",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
     "jsdom": "^25.0.1",
+    "lucide-react": "^1.23.0",
     "pdfjs-dist": "^4.10.38",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.1",
+    "tailwindcss": "^4.3.2",
     "typescript": "^5.7.0",
+    "vite": "^6.0.7",
     "vitest": "^2.1.8"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

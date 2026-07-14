@@ -46,16 +46,17 @@ export class LiftService implements IDisposable {
   readonly onLiftChanged: IEvent<LiftEntry | null> = this._onLiftChanged.event;
 
   private readonly ledgerSub: IDisposable;
-  private readonly previewSub: IDisposable;
 
   constructor(private readonly opts: LiftServiceOptions) {
     // Ecos del cambio de edits/imageEdits/pendingHighlights: re-evaluar si el
     // nodo seleccionado sigue mereciendo un lift (los mismos guards de v1,
     // acá reactivos a UN evento en vez de a un array de deps).
     this.ledgerSub = opts.ledger.onDidChange(() => { void this.reconcile(); });
-    // El grafo nuevo llegó = el preview aterrizó: si había un drop en vuelo,
-    // el documento visible ya es el re-horneado — descartar el lift.
-    this.previewSub = opts.preview.onPreviewReady(() => this.onPreviewLanded());
+    // OJO timing (v1): el lift NO se descarta cuando el PDF re-horneado
+    // PARSEA (onPreviewReady) sino cuando su GRAFO aterriza — el canvas ya
+    // blitteó el render nuevo para entonces. Descartarlo antes restauraba el
+    // back-buffer VIEJO un frame (los glifos originales "flasheaban"). El
+    // composition root llama `previewLanded()` al recibir el grafo.
   }
 
   get current(): LiftEntry | null {
@@ -141,7 +142,9 @@ export class LiftService implements IDisposable {
     }
   }
 
-  private onPreviewLanded(): void {
+  /** El grafo nuevo llegó = el preview aterrizó: si había un drop en vuelo,
+   *  el documento visible ya es el re-horneado — descartar el lift. */
+  previewLanded(): void {
     if (this.phase === 'dropPending') this.setLift(null, 'idle');
   }
 
@@ -155,7 +158,6 @@ export class LiftService implements IDisposable {
 
   dispose(): void {
     this.ledgerSub.dispose();
-    this.previewSub.dispose();
     this._onLiftChanged.dispose();
     void this.lift?.doc.destroy();
     this.lift = null;

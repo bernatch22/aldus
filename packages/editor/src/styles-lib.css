@@ -1,0 +1,40 @@
+/*
+ * styles-lib.css — el CSS de la BUILD DE LIBRERÍA (@aldus/editor/styles.css).
+ *
+ * Igual que styles.css pero SIN el preflight de Tailwind: el editor se monta
+ * dentro de la app de un HOST y un reset global le rompería el resto de la
+ * página. Solo theme (variables --color-*, que el host puede pisar para
+ * re-tintar el acento) + utilities on-demand + los estilos propios del editor.
+ */
+@layer theme, base;
+@import 'tailwindcss/theme.css' layer(theme);
+/* Utilities SIN layer (a propósito): un host puede traer un reset GLOBAL
+   no-layered (p.ej. pinecall `button { background:none; padding:… }`) que, por
+   la regla "unlayered gana a cualquier layer", pisaría las utilities layered de
+   Tailwind y rompería el editor (Aplicar sin fondo, tabs/rail chatos). Sin layer,
+   `.bg-blue-600` (0,1,0) le gana al `button` (0,0,1) del host por especificidad.
+   El mini-reset sigue en @layer base → las utilities (unlayered) le ganan igual. */
+@import 'tailwindcss/utilities.css';
+@import './custom.css';
+
+/* Mini-reset LOCAL scopeado — el sustituto del preflight para el editor.
+   ⚠️ DENTRO de @layer base: las utilities (layer posterior) SIEMPRE le ganan.
+   La primera versión estaba SIN layer → un `button { border:0; background:none }`
+   no-layered pisaba a las utilities layered y "rompía todos los estilos". */
+@layer base {
+  .aldus-editor, .aldus-editor *, .aldus-editor *::before, .aldus-editor *::after {
+    box-sizing: border-box;
+    border: 0 solid;      /* como el preflight: los `border-*` utilities solo setean width */
+    margin: 0;
+    padding: 0;
+  }
+  .aldus-editor button, .aldus-editor input, .aldus-editor select, .aldus-editor textarea {
+    background: none;
+    font: inherit;
+    color: inherit;
+  }
+  .aldus-editor button { cursor: pointer; }
+  .aldus-editor img, .aldus-editor canvas, .aldus-editor svg { display: block; }
+  .aldus-editor ul, .aldus-editor ol { list-style: none; }
+  .aldus-editor h1, .aldus-editor h2, .aldus-editor h3 { font-size: inherit; font-weight: inherit; }
+}

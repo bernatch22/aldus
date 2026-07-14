@@ -37,7 +37,7 @@ describe('EditSession — ledger de ediciones', () => {
   // pero NO restaura `next.text` → el chequeo de noop nunca da null, la entrada
   // zombie {text:'Cliente Beta Corp', sin runs} sobrevive y el bake RE-APLICA el
   // texto viejo. Fix esperado en core/edit/mergeEdits.
-  it.skip('editText de vuelta al texto ORIGINAL → la entrada se limpia (revert = null)', async () => {
+  it('editText de vuelta al texto ORIGINAL → la entrada se limpia (revert = null)', async () => {
     const doc = await graphOf(await simplePdf());
     const seg = doc.pages[0]!.segments.find(s => s.text.includes('Acme'))!;
     const session = new EditSession(doc);

@@ -205,6 +205,7 @@ export function NodeOverlay({ graph, scale, ledger, controller, edits, imageEdit
   // Seleccionar OTRO nodo cierra (con commit) el editor de texto abierto — el
   // preventDefault de los pointerdown impide el blur natural: la coordinación
   // ya no viaja por el focus del DOM sino por la llamada explícita (audit §3.5).
+  const clickLogRef = useRef<{ id: string | null }>({ id: null });
   const selectNode = (nodeId: string | null) => {
     if (editingId && editingId !== nodeId) {
       log('[aldus:forceblur] cierro editor de', editingId, 'por selección de', nodeId ?? '(nada)');
@@ -213,7 +214,13 @@ export function NodeOverlay({ graph, scale, ledger, controller, edits, imageEdit
     if (multiSel.size) setMultiSel(new Set());
     onSelect(nodeId);
     // DEBUG: al clickear un nodo de texto, dump del texto TAL CUAL (JSON pretty).
-    if (nodeId) {
+    // selectNode se dispara VARIAS veces por click (pointerdown para el drag +
+    // onClick, a veces separados por un re-render lento) → deduplicamos por
+    // CAMBIO de selección: solo loguea al pasar a un nodo DISTINTO del anterior
+    // (deseleccionar resetea, así re-clickear el mismo nodo vuelve a loguear).
+    const dup = clickLogRef.current.id === nodeId;
+    clickLogRef.current.id = nodeId;
+    if (nodeId && !dup) {
       const seg = allSegments.find(s => s.id === nodeId);
       if (seg) console.log(
         '%c[aldus] CLICK →', 'color:#2563eb;font-weight:700',

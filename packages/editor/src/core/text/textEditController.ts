@@ -102,6 +102,13 @@ interface LiveSession extends EditSession {
   lineHN: number;
   /** Alineación del texto dentro del área (display CSS + dx del bake). */
   align: 'left' | 'center' | 'right';
+  /** El VALOR inicial del textarea al abrir (puede diferir de seedText: el
+   *  ítem pelado siembra LIST_GAP). Contrato pixel-perfect: si al commit el
+   *  valor sigue siendo ESTE y no se aplicó ningún estilo (`touched`), la
+   *  sesión es un noop ABSOLUTO — ni patch ni re-bake. */
+  seedValue: string;
+  /** true apenas se aplica CUALQUIER acción de estilo/align/lista en la sesión. */
+  touched: boolean;
 }
 
 /** Snapshot del ESTILO en vivo de la sesión abierta — reemplaza
@@ -341,6 +348,8 @@ export class TextEditController implements IDisposable {
       lineH1: rect.height,
       lineHN: (s.edit?.fontSize ?? s.seg.fontSize) * 1.2 * s.scale,
       align: s.edit?.align ?? 'left',
+      seedValue: value,
+      touched: false,
     };
     // FIT de ancho: solo con el texto ORIGINAL intacto y de UNA línea (con
     // texto editado el ancho efectivo ya no describe el contenido; con '\n'
@@ -405,6 +414,7 @@ export class TextEditController implements IDisposable {
     const s = this.session;
     const ta = this.ta;
     if (!s) return;
+    s.touched = true; // cualquier acción de estilo/align/lista invalida el noop absoluto
     if (action.key === 'align') {
       // Alinear en vivo: solo el text-align (CSS); el dx se calcula al commit.
       s.align = action.align;
@@ -587,6 +597,17 @@ export class TextEditController implements IDisposable {
     const s = this.session;
     const ta = this.ta;
     if (!s) return;
+    // PIXEL PERFECT — sesión NO TOCADA = noop ABSOLUTO (ni patch ni re-bake).
+    // El chequeo de runs de abajo es FRÁGIL en docs con glifos sin /ToUnicode
+    // (acentos LibreOffice → control chars U+00xx): los dx recalculados acá con
+    // medición del BROWSER difieren de los dx del PDF, `styledRunsEqual` daba
+    // false con texto idéntico, y un simple click-in/click-out re-horneaba el
+    // párrafo — que al re-extraerse quedaba PARTIDO (el leader re-emitido caía
+    // como gap de columna y mergeBlockSegments, que exige 1 seg/línea, excluía
+    // esa línea del bloque). Entrar y salir sin tocar JAMÁS debe hornear.
+    // (`touched` cubre estilos/align/listas; el valor cubre el texto, incluso
+    // "tipeé y volví atrás"; xShiftPt cubre el corrimiento de viñeta colgante.)
+    if (ta.value === s.seedValue && !s.touched && s.xShiftPt === 0) return;
     const bodyText = ta.value.replace(/\s+$/, '');
     // dx/w REALES por LÍNEA + alineación dentro del área (frame = ancho del
     // CUERPO). applyAlign da dx desde el arranque del cuerpo; con Lbl colgante

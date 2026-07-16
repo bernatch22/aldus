@@ -1,70 +1,104 @@
-# aldus-pdf
+# aldus
 
-A **framework for building PDF apps** on a PDF's real content graph: parse the
-content-stream operators into an editable model, mutate them from code, the
-`aldus` CLI, or an **LLM agent**, and splice the result back byte-for-byte — no
-rasterizing, no white boxes, no approximated fonts. Read/edit/move text,
-highlight, link, place images, and **read/fill/build forms & signature fields**.
+**A framework for building PDF apps on a PDF's real content graph.**
 
-> Bundled build of the [`aldus`](https://github.com/bernatch22/aldus) monorepo
-> (`@aldus/core` + `@aldus/agent`) → one self-contained package.
+Aldus parses the actual content-stream operators into a typed, editable model,
+lets you mutate them — from code, a CLI, a React editor, or an LLM agent — and
+splices the result back into the file byte-for-byte. It never rasterizes, never
+paints a white box over old text, and never redraws with an approximated font.
 
-## Install
+**One package, four entry points:**
 
 ```bash
-npm i aldus-pdf      # library + the `aldus` CLI
+npm i aldus
 ```
 
-## CLI
+| | |
+|---|---|
+| `aldus` | the engine + the agent — [Library API](https://github.com/bernatch22/aldus/blob/main/docs/library.md) |
+| `aldus/editor` | the embeddable React editor — [Editor](https://github.com/bernatch22/aldus/blob/main/docs/editor.md) |
+| `aldus/server` | a ready-to-run backend — [Server](https://github.com/bernatch22/aldus/blob/main/docs/server.md) |
+| `aldus` (bin) | the CLI — [CLI](https://github.com/bernatch22/aldus/blob/main/docs/cli.md) |
+
+> **Migrating?** `aldus` replaces **`aldus-pdf`** (now `aldus`) and
+> **`aldus-editor`** (now the `aldus/editor` subpath). Both are deprecated — the
+> APIs are the same, just swap the import.
+
+## Quick start
 
 ```bash
-aldus doc.pdf                                         # opens the VISUAL EDITOR + AI in your browser
-aldus doc.pdf "Describe the content"                 # one-shot agent (LLM)
-aldus doc.pdf "Highlight the totals" -o out.pdf --open
-aldus doc.pdf --chat                                  # interactive chat in the terminal
-aldus form.pdf --fields                               # dump fields + values + positions (no LLM)
-aldus form.pdf --fill '{"name":"Ana"}' -o filled.pdf  # fill by field name (no LLM)
+aldus doc.pdf                                         # visual editor + AI in your browser
+aldus doc.pdf "Highlight the totals" -o out.pdf       # one-shot agent
+aldus form.pdf --fields                               # dump fields + positions (no LLM)
+aldus form.pdf --fill '{"name":"Ana"}' -o filled.pdf  # fill by name (no LLM)
 ```
-
-`aldus file.pdf` with no prompt boots a local server (editor + CASPER agent) and
-opens the browser — no database, no accounts. `--fields` / `--fill` are
-**deterministic** (no LLM). Agentic prompts run on the auth below.
-
-## Auth (agent)
-
-Two-level agent (cheap chat/router → strong editor). Two providers:
-
-**Claude Code subscription** (default) — no per-token bill:
-- Interactive / your machine: just run **without** `ANTHROPIC_API_KEY`.
-- Headless / servers: set `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`).
-- Models: `ALDUS_MODEL` (editor, `claude-sonnet-5`), `ALDUS_CHAT_MODEL` (router, `claude-haiku-4-5`).
-
-**OpenRouter** (`ALDUS_PROVIDER=openrouter`, `OPENROUTER_API_KEY`) — for hosted
-demos / cheaper runs. **Recommended: Gemini.** Put the cheap model on the chat
-(it reads every page) and the good one on the editor:
-- `ALDUS_OPENROUTER_CHAT_MODEL=google/gemini-3.1-flash-lite` (router)
-- `ALDUS_OPENROUTER_MODEL=google/gemini-3.5-flash` (editor)
-
-That combo (the default) is ~1.8¢/turn on a 9-page doc and ~3–9s per turn.
-
-## Library
 
 ```ts
-import { loadDoc, EditSession, runTurn, serializeDoc } from 'aldus-pdf';
-import { readFormFields, setFieldValues } from 'aldus-pdf'; // deterministic form I/O
+import { loadDoc, EditSession } from 'aldus';
 
-const doc = await loadDoc('form.pdf');
+const doc = await loadDoc('contract.pdf');
 const session = new EditSession(doc);
-await runTurn({ doc, session, prompt: 'Fill the form: name Ana, plan Pro' });
-await session.save('filled.pdf');
+
+session.editText('p1-y708-x72', 'FINAL');       // reflows the paragraph if it grows
+session.addField('signature', 1, 90, 60, 200, 40, 'signature_a');
+session.fillField('name', 'Ana');
+
+await session.save('out.pdf');
 ```
 
-## What the agent can do
+```tsx
+import { AldusEditor, configureAldusApi } from 'aldus/editor';
+import 'aldus/editor/styles.css';
 
-Text edit/move/color/size/delete · images move/delete/insert · highlight (create/
-recolor/remove) · links · watermark · header/footer · **form fields**: create any
-type (text/checkbox/radio/select/list/button/signature), move/delete, **read
-values + positions**, and **fill** (by field name or by the `[[id]]` of the
-reading view). It's aware of the full geometry & style of every element.
+configureAldusApi({ apiBase: '/api' });
+<AldusEditor docId={id} />;
+```
+
+## Why edit the graph, not the pixels
+
+Every web PDF "editor" cheats: it rasterizes, or paints a white rectangle over
+the old text and draws new text on top with whatever font it has. Aldus does what
+Acrobat does — and is honest when it can't:
+
+- **Move / scale / restyle text** → the original show operators are re-emitted
+  **verbatim** (same bytes, same font, same kerning) with a relocated matrix.
+- **New text, same font** → re-encoded through the embedded font's reverse
+  `/ToUnicode` map. A glyph missing from the subset → an explicit, *reported*
+  fallback.
+- **Font/style change** → an embedded standard font, width-fit into the original
+  slot. Explicit substitution, never a silent guess.
+- **Can't locate a segment unambiguously?** It refuses to touch it and says why.
+
+Every node has a stable id (`p1-y708-x72`). Every API addresses nodes by id —
+so the agent has no coordinates to hallucinate, and needs no vision model.
+
+## Documentation
+
+| Doc | What's in it |
+|---|---|
+| **[CLI](https://github.com/bernatch22/aldus/blob/main/docs/cli.md)** | The four modes, every flag, and the deterministic (no-LLM) operations. |
+| **[Library API](https://github.com/bernatch22/aldus/blob/main/docs/library.md)** | `EditSession` method by method, the bytes→bytes layer, forms, and exactly what the package root re-exports. |
+| **[React editor](https://github.com/bernatch22/aldus/blob/main/docs/editor.md)** | `<AldusEditor>` props, the host-integration seams (your tabs, your boxes, your tools), the API client, forensic mode. |
+| **[Server](https://github.com/bernatch22/aldus/blob/main/docs/server.md)** | Every HTTP route with body and response, the env knobs, the agent's NDJSON wire, embedding it in your own app. |
+| **[Agent](https://github.com/bernatch22/aldus/blob/main/docs/agent.md)** | The two-level architecture, per-page fan-out, auth and models, cost, adding your own tools, the guardrails. |
+
+## The agent, briefly
+
+A cheap reader model reads the whole document and either answers or delegates the
+edit to a stronger editor model running on just the affected pages — in parallel,
+one editor per page. It edits **without vision**: the typed graph is in the
+prompt and the tools take node ids.
+
+Runs on your **Claude Code subscription** (no per-token bill) or **OpenRouter**
+(~1.8¢/turn on a 9-page doc). Full matrix in
+[docs/agent.md](https://github.com/bernatch22/aldus/blob/main/docs/agent.md#auth-and-models).
+
+## What it can do
+
+Text edit/move/color/size/delete · paragraph and cross-page section replace ·
+whole-page recompose · images move/delete/insert · highlights · links ·
+watermark · header/footer · **form fields**: create any type
+(text/checkbox/radio/select/list/button/signature), move/delete, read values +
+positions, fill by name, and convert `……` placeholders into real fields.
 
 MIT · [source](https://github.com/bernatch22/aldus)

@@ -14,8 +14,25 @@ contract in natural language — Aldus gives you the primitives without fighting
 black-box "PDF editor".
 
 ```bash
-npm i aldus-pdf     # library + `aldus` CLI  ·  `aldus file.pdf` opens the editor
+npm i aldus     # library + editor + server + `aldus` CLI  ·  `aldus file.pdf` opens the editor
 ```
+
+> **Migrating from `aldus-pdf` / `aldus-editor`?** Both are deprecated in favour
+> of the single **`aldus`** package: `aldus-pdf` → `aldus`, and `aldus-editor` →
+> the `aldus/editor` subpath. Same APIs, just swap the import.
+
+## Documentation
+
+| Doc | What's in it |
+|---|---|
+| **[CLI](docs/cli.md)** | The four modes, every flag, and the deterministic (no-LLM) operations. |
+| **[Library API](docs/library.md)** | `EditSession` method by method, the bytes→bytes layer, forms, and exactly what the package root re-exports. |
+| **[React editor](docs/editor.md)** | `<AldusEditor>` props, the host-integration seams (your tabs, your boxes, your tools), the API client, forensic mode. |
+| **[Server](docs/server.md)** | Every HTTP route with body and response, the env knobs, the agent's NDJSON wire, embedding it in your own app. |
+| **[Agent](docs/agent.md)** | The two-level architecture, per-page fan-out, auth and models, cost, adding your own tools, the guardrails. |
+
+The rest of this README is the **why** and the architecture; the docs above are
+the **how**.
 
 ---
 
@@ -100,10 +117,15 @@ LLM agent — ask it to describe the document or make changes in natural languag
 
 ## The API
 
-Two packages make up the framework. `@aldus/core` is the engine — model,
+Two internal packages make up the framework. `@aldus/core` is the engine — model,
 extraction, and bake, with zero LLM. `@aldus/agent` adds an edit session, a CLI,
-and the optional agent. (`aldus-pdf` bundles both plus the server and editor into
-one install; import from it or from the scoped packages directly.)
+and the optional agent.
+
+**Neither is published.** `aldus` bundles both — plus the server and the editor —
+into one install, and is the only package you install. The snippets below name the
+scoped packages to show which layer each API lives in; when you install `aldus`,
+import them from the package root instead (`import { loadDoc, bake } from 'aldus'`).
+See [docs/library.md](docs/library.md) for exactly what the root re-exports.
 
 ### Parse a page into the graph
 
@@ -161,20 +183,25 @@ or know exactly where a signature will land.
 
 ### The agent (optional)
 
-An `EditSession` accumulates edits and creates and bakes them; `runTurn` drives it
-with an LLM that has the page graph in its prompt and the same tools a human has.
+An `EditSession` accumulates edits and creates and bakes them; `editPages` drives
+it with an LLM that has the page graph in its prompt and the same tools a human
+has (`readTurn` for read-only questions).
 
 ```ts
-import { loadDoc, EditSession, runTurn } from '@aldus/agent';
+import { createAgentContainer, loadDoc, EditSession, editPages } from '@aldus/agent';
 
+const agent = createAgentContainer();   // transport + tool registry + config
 const doc = await loadDoc('contract.pdf');
 const session = new EditSession(doc);
 
-session.editText('p1-y708-x72', 'FINAL');                       // programmatic (no LLM)
-await runTurn({ doc, session, prompt: 'Add a signature field at the bottom' }); // or natural language
+session.editText('p1-y708-x72', 'FINAL');    // programmatic (no LLM)
+await editPages({ doc, session, prompt: 'Add a signature field at the bottom' }, ...agentArgs);
 
 const { pdf, warnings } = await session.bake();
 ```
+
+See [`apps/server/src/routes/agent.ts`](apps/server/src/routes/agent.ts) for the
+exact container wiring.
 
 The agent is **two-level**: a cheap chat/router model reads the whole document and
 either answers or delegates the edit to a stronger editor model, which runs with
@@ -194,14 +221,14 @@ only the affected pages. Two transports back it, chosen in
 
 ## Embed the editor in your own app
 
-The editor ships as a React library (`aldus-editor`) — a single `<AldusEditor>`
-component you drop into your host and point at your backend. This is how a real
-host (e.g. an e-signature product) puts a document editor behind its own auth and
-routes.
+The editor ships inside `aldus` under the **`aldus/editor`** subpath — a single
+`<AldusEditor>` component you drop into your host and point at your backend. This
+is how a real host (e.g. an e-signature product) puts a document editor behind its
+own auth and routes.
 
 ```tsx
-import { AldusEditor, configureAldusApi } from 'aldus-editor';
-import 'aldus-editor/styles.css';
+import { AldusEditor, configureAldusApi } from 'aldus/editor';
+import 'aldus/editor/styles.css';
 import { GlobalWorkerOptions } from 'pdfjs-dist';
 
 // pdf.js worker (peer dep) — set once at startup:
@@ -261,8 +288,10 @@ packages/core     @aldus/core   the engine, layered:
   edit/ layout/   accumulated edits (the ledger) + deterministic geometry (reflow, charX)
   bake/ create/   THE BRAIN — locate-by-geometry, emit strategies, form/annotation creation
 packages/agent    @aldus/agent  EditSession + CLI (bin/aldus) + the two-level agent
-packages/editor   aldus-editor  the React editor library + a reference demo app
-packages/aldus-pdf aldus-pdf    the one-install distribution (lib + CLI + server + editor)
+packages/editor   (internal)    the React editor library + a reference demo app
+packages/aldus-pdf aldus        THE PUBLISHED PACKAGE — the one-install distribution
+                                (lib + CLI + server + editor, via subpaths).
+                                Only this one goes to npm; the rest are internal.
 apps/server       @aldus/server reference Express host + DocStore
 ```
 

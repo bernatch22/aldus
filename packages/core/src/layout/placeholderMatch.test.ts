@@ -211,6 +211,31 @@ describe('matchPlaceholders — modo REESCRITURA (rellenos XXXX/xxx/***)', () =>
     expect(res.notes.join(' ')).toContain('INEXISTENTE_TOTAL'); // el no-encontrado quedó anotado
   });
 
+  it('una ETIQUETA no es un placeholder: "[denominación social...]" ANCLA al run de leaders adyacente (no se borra contenido)', async () => {
+    const g = await draw(p => p.drawText('……………………. [denominacion social de la empresa], con domicilio en Lima.', { x: 60, y: 300, size: 10 }));
+    const seg = g.segments.find(s => s.text.includes('denominacion'))!;
+
+    // El LLM (visto con MiniMax) pasa la ETIQUETA como placeholder: sin leaders
+    // ni rellenos adentro NO se convierte NI se reescribe — se usa de ancla y el
+    // campo cae sobre los "……" pegados a ella. La etiqueta sobrevive.
+    const res = matchPlaceholders(linesOf(g, seg), [
+      { placeholder: '[denominacion social de la empresa]', name: 'empresa_nombre' },
+    ], ctxFor(seg));
+    expect(res.error).toBeUndefined();
+    expect(res.needsReflow).toBeFalsy(); // la etiqueta NO disparó rewrite
+    expect(res.fields).toHaveLength(1);
+    expect(res.fields[0]!.name).toBe('empresa_nombre');
+    // El campo arranca donde arrancan los leaders (x del segmento), no sobre la etiqueta.
+    expect(res.fields[0]!.x).toBeLessThan(seg.x + 60);
+
+    // Y una etiqueta SIN leaders al lado sí se rechaza con nota (cero campos, cero borrado).
+    const g2 = await draw(p => p.drawText('la empresa [nombre pendiente] firmará el acta.', { x: 60, y: 300, size: 10 }));
+    const seg2 = g2.segments[0]!;
+    const res2 = matchPlaceholders(linesOf(g2, seg2), [{ placeholder: '[nombre pendiente]', name: 'x' }], ctxFor(seg2));
+    expect(res2.fields).toHaveLength(0);
+    expect((res2.error ?? '') + res2.notes.join(' ')).toContain('no es un placeholder');
+  });
+
   it('leaders puros NO disparan reflow (el corpus con "....." queda en colocación directa)', async () => {
     const g = await draw(p => p.drawText('NOMBRE: ..............................', { x: 60, y: 300, size: 11 }));
     const seg = g.segments.find(s => s.text.includes('NOMBRE'))!;

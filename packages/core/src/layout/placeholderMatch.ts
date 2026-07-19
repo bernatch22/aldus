@@ -212,9 +212,47 @@ export function matchPlaceholders(
     const matches: Array<{ at: number; len: number; name: string }> = [];
     {
       const slice = joined.slice(at, at + len);
+      // El chequeo de borde de palabra aplica SOLO a rellenos x/X/* (un "xx"
+      // dentro de "Exxon" no es placeholder). Los LEADERS van siempre: puntos
+      // PEGADOS a una palabra ("....Direccion", Word justificado) SON un
+      // placeholder legítimo — el caso F3e.
       const runs = [...slice.matchAll(/[.…_]{2,}|[xX*]{2,}/g)]
-        .filter(m2 => !isWord(joined[at + m2.index! - 1]) && !isWord(joined[at + m2.index! + m2[0].length]));
-      if (runs.length >= 1 && !/^[.…_\s]+$/.test(slice)) {
+        .filter(m2 => /[.…_]/.test(m2[0][0]!) ||
+          (!isWord(joined[at + m2.index! - 1]) && !isWord(joined[at + m2.index! + m2[0].length])));
+      // GUARDRAIL + ANCLA: un match SIN leaders NI rellenos adentro no es un
+      // placeholder — es una ETIQUETA descriptiva ("[denominación social de la
+      // empresa]"). Convertirla la BORRA del contrato (visto con MiniMax:
+      // etiquetas reescritas como huecos + mojibake re-emitido). Pero los LLMs
+      // la pasan IGUAL, así que la usamos de ANCLA: el hueco real son los
+      // leaders PEGADOS a la etiqueta ("…………. [etiqueta]") — se convierte ESE
+      // run y la etiqueta queda intacta. Sin leaders adyacentes: nota y sigue.
+      if (runs.length === 0 && !isLeader) {
+        const LEAD_CH = /[.…_]/;
+        const SKIP_CH = /[\s[\]()"',:]/;
+        const skipTo = (i: number, dir: -1 | 1): number => {
+          let k = i;
+          while (k >= 0 && k < joined.length && SKIP_CH.test(joined[k]!)) k += dir;
+          return k;
+        };
+        let a2 = -1, b2 = -1;
+        const li = skipTo(at - 1, -1);
+        if (li >= 0 && LEAD_CH.test(joined[li]!)) {
+          b2 = li + 1; a2 = li;
+          while (a2 > 0 && LEAD_CH.test(joined[a2 - 1]!)) a2--;
+        } else {
+          const ri = skipTo(at + len, 1);
+          if (ri < joined.length && LEAD_CH.test(joined[ri]!)) {
+            a2 = ri; b2 = ri + 1;
+            while (b2 < joined.length && LEAD_CH.test(joined[b2]!)) b2++;
+          }
+        }
+        if (a2 >= 0 && b2 - a2 >= 2) {
+          matches.push({ at: a2, len: b2 - a2, name: baseName });
+        } else {
+          matchNotes.push(`(↩︎ ${JSON.stringify(f.placeholder.slice(0, 40))} no es un placeholder (sin puntos/guiones/XXXX adentro ni leaders al lado) — es texto descriptivo: no se convierte ni se borra)`);
+          continue;
+        }
+      } else if (runs.length >= 1 && !/^[.…_\s]+$/.test(slice)) {
         runs.forEach((m2, ri) => matches.push({ at: at + m2.index!, len: m2[0].length, name: ri ? `${baseName}_${ri + 1}` : baseName }));
       } else {
         matches.push({ at, len, name: baseName });

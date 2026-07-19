@@ -89,6 +89,32 @@ export class EditSession {
     return this.index.pageOf(s.id) ?? this.doc.pages.find(p => p.page === s.page)!;
   }
 
+  /** Mensaje de "id inexistente" con ANCLAS REALES. El modelo INVENTA ids
+   *  derivándolos de coordenadas corridas: tras un reflow ve `id p3-y137
+   *  @(121,132)` en el estado actualizado y prueba "p3-y132-x121" — medido: 25
+   *  tool calls de flailing en un run real de Sonnet. El id es INMUTABLE (nace
+   *  de la posición ORIGINAL del nodo); acá se lo decimos y le damos los ids
+   *  verdaderos más cercanos a la posición que intentó, para cortar el loop en 1. */
+  private notFound(id: string, what = 'el nodo de texto'): string {
+    let near = '';
+    const m = /^p(\d+)-y(\d+)(?:-x(\d+))?/.exec(id);
+    if (m) {
+      const page = this.doc.pages.find(p => p.page === Number(m[1]));
+      const y = Number(m[2]), x = m[3] ? Number(m[3]) : 0;
+      if (page) {
+        const ids = [...page.segments]
+          .filter(s => !this.isRemoved(s.id))
+          .sort((a, b) =>
+            (Math.abs(this.effBaseline(a) - y) + Math.abs(a.x - x) * 0.1) -
+            (Math.abs(this.effBaseline(b) - y) + Math.abs(b.x - x) * 0.1))
+          .slice(0, 3)
+          .map(s => s.id);
+        if (ids.length) near = ` Los ids REALES más cercanos a esa posición son: ${ids.join(', ')}.`;
+      }
+    }
+    return `⚠️ No existe ${what} "${id}". Los ids NO cambian cuando el texto se corre (nacen de la posición ORIGINAL del nodo): usá el id TAL CUAL aparece en el grafo o en el estado actualizado — nunca lo derives de coordenadas.${near}`;
+  }
+
   // ── ReflowEnv / LayoutEnv (los seams que el motor de layout de core consume) ──
   private effBaseline(seg: SegmentNode): number {
     return this.ledger.segmentEdit(seg.id)?.baseline ?? seg.baseline;
@@ -151,7 +177,7 @@ export class EditSession {
    *  sobra baja al renglón siguiente en cascada — nunca se superpone ni se sale
    *  del borde. Texto igual o más corto = camino simple (verbatim + diff). */
   async editText(id: string, text: string): Promise<string> {
-    const s = this.index.seg(id); if (!s) return `⚠️ No existe el nodo de texto "${id}".`;
+    const s = this.index.seg(id); if (!s) return this.notFound(id);
     // GUARDRAIL: reescribir un placeholder de leaders (".....", "____") con
     // relleno ("XXXX", "___", o directamente borrándolo) NO es una edición de
     // texto — es una conversión a campo, y a mano rompe el layout. La tool
@@ -185,7 +211,7 @@ export class EditSession {
    *  re-encoda con la variante de fuente correspondiente (si el PDF no la trae
    *  embebida, cae a la estándar equivalente y lo reporta). */
   styleText(id: string, opts: { bold?: boolean; italic?: boolean }): string {
-    const s = this.index.seg(id); if (!s) return `⚠️ No existe el nodo de texto "${id}".`;
+    const s = this.index.seg(id); if (!s) return this.notFound(id);
     if (opts.bold === undefined && opts.italic === undefined) return `⚠️ pasá bold y/o italic.`;
     const runs = originalStyledRuns(s).map(r => ({
       ...r,
@@ -197,22 +223,22 @@ export class EditSession {
     return `✓ Texto ${id} → ${parts.join(', ')}`;
   }
   moveText(id: string, x?: number, y?: number): string {
-    const s = this.index.seg(id); if (!s) return `⚠️ No existe el nodo de texto "${id}".`;
+    const s = this.index.seg(id); if (!s) return this.notFound(id);
     this.ledger.patchSegment(s, { x, baseline: y });
     return `✓ Texto ${id} movido a @(${x ?? Math.round(s.x)},${y ?? Math.round(s.baseline)})`;
   }
   colorText(id: string, color: string): string {
-    const s = this.index.seg(id); if (!s) return `⚠️ No existe el nodo de texto "${id}".`;
+    const s = this.index.seg(id); if (!s) return this.notFound(id);
     this.ledger.patchSegment(s, { color });
     return `✓ Texto ${id} → color ${color}`;
   }
   resizeText(id: string, fontSize: number): string {
-    const s = this.index.seg(id); if (!s) return `⚠️ No existe el nodo de texto "${id}".`;
+    const s = this.index.seg(id); if (!s) return this.notFound(id);
     this.ledger.patchSegment(s, { fontSize });
     return `✓ Texto ${id} → ${fontSize}pt`;
   }
   deleteText(id: string): string {
-    const s = this.index.seg(id); if (!s) return `⚠️ No existe el nodo de texto "${id}".`;
+    const s = this.index.seg(id); if (!s) return this.notFound(id);
     this.ledger.patchSegment(s, { remove: true });
     return `✓ Texto ${id} eliminado`;
   }
@@ -231,7 +257,7 @@ export class EditSession {
    * El pie/folio (baseline < 58) nunca se corre.
    */
   deleteTextPullUp(id: string, mode: 'gap' | 'top' = 'gap'): string {
-    const s = this.index.seg(id); if (!s) return `⚠️ No existe el nodo de texto "${id}".`;
+    const s = this.index.seg(id); if (!s) return this.notFound(id);
     const page = this.pageOf(s);
     const myBase = this.effBaseline(s);
     const below = page.segments
@@ -368,17 +394,17 @@ export class EditSession {
     if (this.index.highlight(id)) return this.deleteHighlight(id);
     if (this.index.link(id)) return this.deleteLink(id);
     if (this.pendingField(id) >= 0) return this.deleteField(id); // campo pendiente por nombre
-    return `⚠️ No existe ningún elemento con id "${id}".`;
+    return this.notFound(id, "ningún elemento con id");
   }
 
   // ── CREACIONES (nodos nuevos — cola aplicada post-bake) ──
   highlightText(segId: string, color?: string): string {
-    if (!this.index.seg(segId)) return `⚠️ No existe el nodo de texto "${segId}".`;
+    if (!this.index.seg(segId)) return this.notFound(segId);
     this.creates.push({ kind: 'highlightSeg', segId, color });
     return `✓ Resaltado sobre ${segId}${color ? ` (${color})` : ''}`;
   }
   linkText(segId: string, url: string): string {
-    if (!this.index.seg(segId)) return `⚠️ No existe el nodo de texto "${segId}".`;
+    if (!this.index.seg(segId)) return this.notFound(segId);
     this.creates.push({ kind: 'linkSeg', segId, url });
     return `✓ Link sobre ${segId} → ${url}`;
   }
@@ -441,7 +467,7 @@ export class EditSession {
    * + delete_text renglón por renglón (eso deja agujeros y piezas sueltas).
    */
   async replaceParagraph(id: string, text: string, endId?: string): Promise<string> {
-    const s = this.index.seg(id); if (!s) return `⚠️ No existe el nodo de texto "${id}".`;
+    const s = this.index.seg(id); if (!s) return this.notFound(id);
     if (!text.trim()) return `⚠️ replace_paragraph necesita el texto nuevo (para borrar usá delete_text).`;
     const env = this.reflowEnv();
     let para = paragraphOf(this.pageOf(s), s, env);
@@ -449,7 +475,7 @@ export class EditSession {
       // BLOQUE multi-párrafo (una cláusula con varios párrafos): todas las líneas
       // de la MISMA columna entre id y end_id, cruzando los gaps entre párrafos.
       const e = this.index.seg(endId);
-      if (!e) return `⚠️ No existe el nodo de texto "${endId}" (end_id).`;
+      if (!e) return this.notFound(endId, "el nodo de texto (end_id)");
       if (e.page !== s.page) return `⚠️ id y end_id deben estar en la misma página.`;
       const page = this.pageOf(s);
       // Rango en LÍNEAS VISUALES: de la primera línea de `id` a la última de
@@ -557,7 +583,7 @@ export class EditSession {
    */
   async placeholdersToFields(id: string, fields: Array<{ placeholder: string; name: string; width?: number }>): Promise<string> {
     const s = this.index.seg(id);
-    if (!s) return `⚠️ No existe el nodo de texto "${id}".`;
+    if (!s) return this.notFound(id);
     if (!fields.length) return `⚠️ placeholders_to_fields necesita al menos un {placeholder,name}.`;
     const page = this.pageOf(s);
     const env = this.reflowEnv();

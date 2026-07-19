@@ -272,6 +272,30 @@ Cada tool nueva = 1 archivo + 1 bind + 1 golden test + 1 corrida CLI tuya.
   cero solapes campo↔texto y cero "elde"; replay determinístico del ledger real de
   Sonnet + suite 361 verdes (+12 tests).
 
+### F3g — Costo y robustez multi-modelo ✅ HECHO (2026-07-19, "¿POR QUÉ gasta tanto?")
+Medido con `usage: {include: true}` (OpenRouter devuelve el COSTO real por request — ahora
+se loguea gateado en el transporte): una corrida Sonnet del contrato costaba **$1.08 / 308s**.
+Tres causas, tres fixes, todos de contrato:
+- **Reasoning apagado** (`reasoning: {enabled: false}` en el transporte): OpenRouter le
+  encendía extended thinking a Sonnet — 5-8k tokens de salida POR tool call a $15/M era el
+  66% del costo. En este agente el LLM solo detecta/nombra; el layout es del código.
+- **Tramos FUSIONADOS en serialize** (solo display, el grafo no se toca): un PDF con
+  /ToUnicode roto parte cada acento en su run ("identificaci|ó|n") y ese confeti era el
+  55-60% del prompt — la página más ruidosa (p2 del contrato) hacía que Sonnet dijera
+  "no puedo llamar tools" y quedara SIN convertir. Fusionada, p2 convierte (6 campos).
+- **Anti-invención de ids** (`notFound()` con anclas): tras un corrimiento el modelo veía
+  `id p3-y137 @(121,132)` e inventaba "p3-y132-x121" — 25 tool calls de flailing. El error
+  ahora enseña que el id es INMUTABLE y lista los ids reales más cercanos (25→2 ⚠️).
+- Además: **etiqueta ≠ placeholder** ("[denominación social…]" sin leaders/rellenos adentro
+  ANCLA al run de leaders adyacente en vez de convertirse — MiniMax la reescribía y borraba
+  contenido + re-emitía el mojibake) y **prompt caching** anthropic (cache_control en el
+  system; pega en turnos largos, no en ráfagas de 19s).
+- Bench de baratos (mismo harness): deepseek-v4-flash emite el tool call como TEXTO (inútil),
+  glm-5.2 narra sin ejecutar, minimax-m2.5 ejecuta rápido (44s) pero sobre-convierte — con
+  los guardrails nuevos ya no destruye. Ninguno reemplaza a Sonnet como editor todavía.
+- ✅ Verificado (1 corrida): **$0.405 / 19s**, 4/4 páginas (p2 incluida), flailing 25→2,
+  output 47k→4.7k tokens. Suite 363 verdes.
+
 ### F4b — Fix core: los renglones extra del reflow pertenecen AL PÁRRAFO ✅ (2026-07-15)
 - Bug (visto por Berna): al crecer un párrafo, la línea extra salía en OTRA fuente.
   Raíz: el reflow la creaba como un `create` de texto suelto → bake con fuente

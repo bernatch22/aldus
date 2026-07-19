@@ -146,6 +146,22 @@ describe('placeholders_to_fields — defensas §4 del audit (vía EditSession)',
     expect(session.count).toBe(0); // no acumuló NADA
   });
 
+  it('1c. id INVENTADO desde coordenadas → el error enseña la regla y da los ids REALES cercanos (corta el flailing)', async () => {
+    const bytes = await pdfWith([500, 400], (page, f) => {
+      page.drawText('Primera línea del documento.', { x: 60, y: 300, size: 11, font: f.regular });
+      page.drawText('Segunda línea, un poco más abajo.', { x: 60, y: 280, size: 11, font: f.regular });
+    });
+    const doc = await graphOf(bytes);
+    const session = new EditSession(doc);
+    // El modelo vio "@(60,278)" tras un corrimiento e inventa el id desde ahí.
+    const msg = session.moveText('p1-y278-x60', 100);
+    expect(msg).toContain('⚠️');
+    expect(msg).toContain('nunca lo derives de coordenadas');
+    // El id REAL del nodo a esa altura aparece como ancla.
+    const real = doc.pages[0]!.segments.find(s => s.text.includes('Segunda'))!;
+    expect(msg).toContain(real.id);
+  });
+
   it('6. relleno XXXX → se REESCRIBE como hueco EN BLANCO (las X desaparecen) y el campo NO pisa texto', async () => {
     const bytes = await pdfWith([500, 400], (page, f) => {
       page.drawText('regirá desde el XX de XXXXXX de XXXX en adelante.', { x: 60, y: 300, size: 11, font: f.regular });

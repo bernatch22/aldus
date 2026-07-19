@@ -16,11 +16,25 @@ const log = createLogger('aldus:transport:openrouter');
 interface ToolCall { id: string; type: 'function'; function: { name: string; arguments: string } }
 interface Msg {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
+  content: string | null | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }>;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
 }
 type OpenAITool = { type: 'function'; function: { name: string; description: string; parameters: unknown } };
+
+/** PROMPT CACHING (modelos anthropic/*): el system — el grafo de la página, el
+ *  grueso del contexto — es IDÉNTICO en cada pasada del loop de function-calling
+ *  (N tool calls = N requests que lo re-mandan entero). Con `cache_control` las
+ *  relecturas cuestan el 10%: medido, un turno de 25 tool calls pasaba de
+ *  ~200k tokens de input a precio lleno a ~8k llenos + el resto cacheado.
+ *  Los demás vendors de OpenRouter cachean solos (Gemini) o lo ignoran. */
+function withSystemCache(messages: Msg[], model: string): Msg[] {
+  if (!model.startsWith('anthropic/')) return messages;
+  return messages.map(m =>
+    m.role === 'system' && typeof m.content === 'string'
+      ? { ...m, content: [{ type: 'text' as const, text: m.content, cache_control: { type: 'ephemeral' as const } }] }
+      : m);
+}
 
 export class OpenRouterTransport implements ILlmTransport {
   constructor(private readonly cfg: Pick<IAgentOpenRouterConfig, 'key' | 'baseUrl'>) {}
@@ -50,10 +64,20 @@ export class OpenRouterTransport implements ILlmTransport {
         },
         body: JSON.stringify({
           model,
-          messages,
+          messages: withSystemCache(messages, model),
           tools,
           tool_choice: 'auto',
           stream: true,
+          // Contabilidad REAL: el último chunk del stream trae usage con el
+          // COSTO en USD de este request — se loguea (gateado) para que "cuánto
+          // gasta" sea un número medido, no una estimación.
+          usage: { include: true },
+          // SIN reasoning: OpenRouter le enciende extended thinking a los modelos
+          // que lo traen (Sonnet pensaba 5-8k tokens POR tool call a $15/M — el
+          // 66% del costo de un turno medido). En este agente el LLM solo DETECTA
+          // y nombra; el layout es del código determinístico — no hay nada que
+          // amerite thinking. Modelos sin reasoning lo ignoran.
+          reasoning: { enabled: false },
           // Cap explícito: sin esto OpenRouter RESERVA el máximo de output del
           // modelo (Sonnet = 64k) para el chequeo de crédito y devuelve 402 aunque
           // el turno emita 200 tokens. Un turno (tool calls + reporte corto) nunca
@@ -91,11 +115,15 @@ export class OpenRouterTransport implements ILlmTransport {
           if (!t.startsWith('data:')) continue;
           const data = t.slice(5).trim();
           if (!data || data === '[DONE]') continue;
-          let json: { error?: { message?: string }; choices?: Array<{ delta?: { content?: string; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> } }> };
+          let json: { error?: { message?: string }; usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number; prompt_tokens_details?: { cached_tokens?: number } }; choices?: Array<{ delta?: { content?: string; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> } }> };
           try { json = JSON.parse(data); } catch { continue; }
           // OpenRouter puede mandar el error DENTRO del stream — silenciarlo deja
           // una respuesta vacía imposible de diagnosticar.
           if (json.error) throw new Error(`OpenRouter (stream): ${json.error.message || JSON.stringify(json.error)}`);
+          if (json.usage?.cost !== undefined) {
+            const u = json.usage;
+            log(`usage: ${u.prompt_tokens ?? 0} in (${u.prompt_tokens_details?.cached_tokens ?? 0} cacheados) + ${u.completion_tokens ?? 0} out = $${u.cost!.toFixed(4)}`);
+          }
           const delta = json.choices?.[0]?.delta;
           if (!delta) continue;
           if (delta.content) { content += delta.content; onEvent?.({ type: 'text', delta: delta.content, agent }); }

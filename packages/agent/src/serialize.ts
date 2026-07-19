@@ -46,6 +46,25 @@ export function serializeReading(doc: DocGraph): string {
   return out.join('\n').trimEnd();
 }
 
+/** Tramos FUSIONADOS para el prompt: runs adyacentes de la misma línea que se
+ *  TOCAN (gap < 1.5pt) y comparten estilo se muestran como uno. Un salto de
+ *  línea dentro del bloque (x vuelve al margen → gap muy negativo) o un gap
+ *  real (placeholder, columna) SIEMPRE cortan tramo. */
+function fusedRuns(s: SegmentNode): Array<{ x: number; width: number; text: string; bold: boolean; italic: boolean }> {
+  const out: Array<{ x: number; width: number; text: string; bold: boolean; italic: boolean }> = [];
+  for (const run of s.runs) {
+    const last = out[out.length - 1];
+    const gap = last ? run.x - (last.x + last.width) : Infinity;
+    if (last && last.bold === run.font.bold && last.italic === run.font.italic && gap > -2 && gap < 1.5) {
+      last.text += run.text;
+      last.width = run.x + run.width - last.x;
+    } else {
+      out.push({ x: run.x, width: run.width, text: run.text, bold: run.font.bold, italic: run.font.italic });
+    }
+  }
+  return out;
+}
+
 /** Estilo del segmento (del run DOMINANTE — el de mayor tamaño): negrita,
  *  itálica, fuente PostScript y color si se conoce. Compacto para el prompt. */
 function styleOf(s: SegmentNode): string {
@@ -196,11 +215,17 @@ export function serializeDoc(doc: DocGraph, pages?: number | number[]): string {
       for (const s of segs) {
         const t = s.text.replace(/\n/g, '\\n');
         out.push(`- ${s.id} @(${r(s.x)},${r(s.baseline)}) ${r(s.width)}×${r(s.height)} ${r(s.fontSize)}pt ${styleOf(s)}: ${JSON.stringify(t)}`);
-        // Geometría INTRA-nodo: cada run del stream con su x/ancho reales. Sin
-        // esto el LLM no puede saber DÓNDE cae un "xxxx" dentro de la línea.
-        if (s.runs.length > 1) {
-          const tr = s.runs
-            .map(run => `@${r(run.x)} w${r(run.width)}${run.font.bold ? ' bold' : ''}${run.font.italic ? ' italic' : ''} ${JSON.stringify(run.text)}`)
+        // Geometría INTRA-nodo: cada tramo con su x/ancho reales. Sin esto el
+        // LLM no puede saber DÓNDE cae un "xxxx" dentro de la línea. FUSIONADOS
+        // para el prompt (el grafo no se toca): un PDF con /ToUnicode roto parte
+        // cada acento en su propio run ("identificaci|ó|n" = 3 tramos de 5pt) y
+        // ese confeti era el 55-60% del prompt — el modelo se ahogaba (medido:
+        // la página más ruidosa hizo que el editor "no pudiera llamar tools").
+        // Los gaps REALES (placeholders, columnas) siguen siendo tramos propios.
+        const fused = fusedRuns(s);
+        if (fused.length > 1) {
+          const tr = fused
+            .map(run => `@${r(run.x)} w${r(run.width)}${run.bold ? ' bold' : ''}${run.italic ? ' italic' : ''} ${JSON.stringify(run.text)}`)
             .join(' | ');
           out.push(`    tramos: ${tr}`);
         }

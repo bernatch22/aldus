@@ -49,6 +49,8 @@ interface FieldCrop { name: string; page: number; x: number; y: number; width: n
 /** Ledger de tool calls con args + RESULTADO: se envuelve el run de CADA tool
  *  del registry (los eventos del wire solo traen el nombre). */
 const toolLedger: Array<{ tool: string; args: unknown; result: string }> = [];
+/** Ruteos del reader (qué páginas mandó al editor) + el reporte de vuelta. */
+const routes: Array<{ pages: number[]; parallel: boolean; request: string; report: string; toolCalls: number }> = [];
 
 /** Renderiza un PDF a PNGs por página; devuelve {page → ruta}. */
 async function renderPdf(pdf: string, dir: string, prefix: string, dpi: number): Promise<Map<number, string>> {
@@ -120,6 +122,7 @@ async function main(): Promise<void> {
     // ── 1. Flujo REAL de dos agentes: reader → editPages → output.pdf ──
     let answer = '';
     toolLedger.length = 0;
+    routes.length = 0;
     if (values.reuse && existsSync(outPdf)) {
       console.log('   (reuse: salteo el LLM, uso output.pdf existente)');
     } else {
@@ -129,19 +132,25 @@ async function main(): Promise<void> {
       await readTurn({
         doc, session, prompt,
         onEvent: ev => { if (ev.type === 'text' && ev.agent !== 'editor') answer += ev.delta; },
+        // El RUTEO del reader es la decisión más frágil del turno (un modelo
+        // barato enumerando páginas): se registra qué pidió y qué reportó cada
+        // editor, o un "me olvidé la página 2" queda invisible en el ledger.
         editor: async route => {
+          console.log(`   → edit_document págs [${route.pages.join(',')}] parallel=${route.parallel ?? false}: "${route.request.slice(0, 90)}"`);
           const r = await editPages({ doc, session, request: route.request, pages: route.pages, parallel: route.parallel }, registry, config);
+          routes.push({ pages: route.pages, parallel: !!route.parallel, request: route.request, report: r.text, toolCalls: r.toolCalls });
+          console.log(`   ← editor: ${r.toolCalls} tool call/s · ${r.text.replace(/\n/g, ' ⏎ ').slice(0, 160)}`);
           return r.text || `✓ editor corrió ${r.toolCalls} tool/s.`;
         },
       }, registry, config);
       console.log(`   LLM listo en ${Math.round((Date.now() - t0) / 1000)}s — ${session.count} edición(es)`);
       if (session.count === 0) {
         console.log('   ⚠️ el agente no hizo NINGUNA edición');
-        await writeFile(path.join(dir, 'summary.json'), JSON.stringify({ prompt, answer, toolCalls: toolLedger, applied: [], warnings: ['sin ediciones'] }, null, 2));
+        await writeFile(path.join(dir, 'summary.json'), JSON.stringify({ prompt, answer, routes, toolCalls: toolLedger, applied: [], warnings: ['sin ediciones'] }, null, 2));
         continue;
       }
       const { applied, warnings } = await session.save(outPdf);
-      await writeFile(path.join(dir, 'summary.json'), JSON.stringify({ prompt, answer, toolCalls: toolLedger, applied, warnings }, null, 2));
+      await writeFile(path.join(dir, 'summary.json'), JSON.stringify({ prompt, answer, routes, toolCalls: toolLedger, applied, warnings }, null, 2));
       for (const w of warnings) console.log(`   ⚠️ ${w}`);
     }
 

@@ -3,6 +3,20 @@
 Newest first; dates `YYYY-MM-DD`. This file is the source of truth for the notes
 of every GitHub Release.
 
+## 0.3.1 — 2026-07-19 — hotfix: never let the reasoning opt-out cost a turn
+
+`0.3.0` sent `reasoning: {enabled: false}` on every OpenRouter request. Endpoints
+that *mandate* reasoning reject it with `400 "Reasoning is mandatory for this
+endpoint and cannot be disabled"` — which killed the whole turn instead of just
+losing an optimisation. It hit production immediately: the public demo's reader
+(`google/gemini-3.5-flash`) 400'd on every request while local runs (flash-lite
+reader + Sonnet editor) never touched a mandatory-reasoning endpoint.
+
+The flag is now self-healing: on that specific 400 the model is recorded and the
+request retried without it, and the flag is never sent for that model again. No
+allowlist to maintain, works for any present or future endpoint, and the cost
+optimisation still applies everywhere it is accepted.
+
 ## 0.3.0 — 2026-07-19 — filler placeholders become real fields, and the agent turn gets 2.7× cheaper
 
 ### Placeholders: `XXXX` / `xxx` / `***` are now converted (not painted over)

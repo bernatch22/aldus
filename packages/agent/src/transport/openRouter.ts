@@ -28,6 +28,13 @@ type OpenAITool = { type: 'function'; function: { name: string; description: str
  *  relecturas cuestan el 10%: medido, un turno de 25 tool calls pasaba de
  *  ~200k tokens de input a precio lleno a ~8k llenos + el resto cacheado.
  *  Los demás vendors de OpenRouter cachean solos (Gemini) o lo ignoran. */
+/** Modelos que RECHAZAN `reasoning: {enabled:false}` ("Reasoning is mandatory
+ *  for this endpoint"). Se APRENDE del 400 en la primera llamada y no se vuelve
+ *  a mandar la flag para ese modelo: sin esto, apagar el reasoning (una
+ *  optimización de costo) rompía el turno entero contra esos endpoints
+ *  (producción: el reader gemini-3.5-flash del demo, HTTP 400 en cada request). */
+const REASONING_MANDATORY = new Set<string>();
+
 function withSystemCache(messages: Msg[], model: string): Msg[] {
   if (!model.startsWith('anthropic/')) return messages;
   return messages.map(m =>
@@ -76,8 +83,10 @@ export class OpenRouterTransport implements ILlmTransport {
           // que lo traen (Sonnet pensaba 5-8k tokens POR tool call a $15/M — el
           // 66% del costo de un turno medido). En este agente el LLM solo DETECTA
           // y nombra; el layout es del código determinístico — no hay nada que
-          // amerite thinking. Modelos sin reasoning lo ignoran.
-          reasoning: { enabled: false },
+          // amerite thinking. Se OMITE en los endpoints que lo exigen (aprendido
+          // del 400; ver REASONING_MANDATORY) — la optimización nunca puede
+          // costar el turno.
+          ...(REASONING_MANDATORY.has(model) ? {} : { reasoning: { enabled: false } }),
           // Cap explícito: sin esto OpenRouter RESERVA el máximo de output del
           // modelo (Sonnet = 64k) para el chequeo de crédito y devuelve 402 aunque
           // el turno emita 200 tokens. Un turno (tool calls + reporte corto) nunca
@@ -95,6 +104,13 @@ export class OpenRouterTransport implements ILlmTransport {
     if (!res.ok || !res.body) {
       const body = await res.text().catch(() => '');
       sub.dispose();
+      // El endpoint EXIGE reasoning: se aprende y se reintenta SIN la flag (una
+      // sola vez — el Set ya quedó marcado, la recursión no puede ciclar).
+      if (res.status === 400 && /reasoning is mandatory/i.test(body) && !REASONING_MANDATORY.has(model)) {
+        REASONING_MANDATORY.add(model);
+        log(`${model} exige reasoning → reintento sin la flag (y no la vuelvo a mandar para este modelo)`);
+        return this.streamCompletion(model, messages, tools, agent, onEvent, ct);
+      }
       throw new Error(`OpenRouter ${res.status}: ${body.slice(0, 300)}`);
     }
 

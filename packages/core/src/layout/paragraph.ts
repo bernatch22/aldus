@@ -49,8 +49,10 @@ export interface Paragraph {
 }
 
 /** `drop`: el rango se elimina del texto SIN emitir hueco (la parte del
- *  placeholder que no es el campo — p. ej. el label "[company legal name]"). */
-export interface ReflowHole { li: number; from: number; to: number; name: string; target: number; drop?: boolean }
+ *  placeholder que no es el campo — p. ej. el label "[company legal name]").
+ *  `rewrite`: el placeholder es RELLENO sin leaders (XXXX, xxx, ***) — se
+ *  reescribe como GAP EN BLANCO al ancho `target` (dispara el reflow). */
+export interface ReflowHole { li: number; from: number; to: number; name: string; target: number; drop?: boolean; rewrite?: boolean }
 export interface ReflowTok { kind: 'word' | 'hole'; text?: string; w: number; bold?: boolean; italic?: boolean; hole?: ReflowHole; line?: number }
 
 /** Las líneas VISUALES de un segmento (runLines — la misma fuente de verdad del
@@ -87,11 +89,31 @@ export function paragraphOf(page: PageGraph, s: SegmentNode, env: LayoutEnv): Pa
   const leading = lines.length > 1
     ? (lines[0]!.baseline - lines[lines.length - 1]!.baseline) / (lines.length - 1)
     : s.fontSize * 1.15;
-  const rightEdge = Math.max(...lines.map(l => l.x + l.width));
+  // spaceW MEDIDO del propio párrafo (mediana de los espacios reales, vía charX):
+  // una línea JUSTIFICADA (Word) estira los espacios con Tw y la re-emisión
+  // HEREDA ese estado — el 0.28em fijo subestimaba el ancho rendido de cada
+  // tramo y el run siguiente se anclaba ADENTRO del anterior ("regirá desde
+  // elde" pegado, campos corridos). Clampeado a [0.2em, 0.6em]; sin espacios,
+  // cae al 0.28em de siempre.
+  const spaceGaps: number[] = [];
+  for (const l of lines) {
+    const cx = charXOf(l);
+    for (let i = 0; i < l.text.length; i++) if (l.text[i] === ' ') spaceGaps.push(cx[i + 1]! - cx[i]!);
+  }
+  spaceGaps.sort((a, b) => a - b);
+  const spaceW = spaceGaps.length
+    ? Math.min(Math.max(spaceGaps[Math.floor(spaceGaps.length / 2)]!, s.fontSize * 0.2), s.fontSize * 0.6)
+    : s.fontSize * 0.28;
+  // Borde derecho REAL: una línea corta y suelta (un encabezado tipo "DE UNA
+  // PARTE,") NO define su propio límite — puede crecer hasta donde llegan las
+  // demás líneas de su COLUMNA (`all` ya está filtrada por mismo anclaje x y
+  // tamaño). Sin esto, editarla a un texto apenas más largo "no entra" en su
+  // propio ancho y se parte en dos renglones sin necesidad.
+  const rightEdge = Math.max(...lines.map(l => l.x + l.width), ...all.map(l => l.x + l.width));
   return {
     page, lines, leading, rightEdge,
     capacity: rightEdge - Math.min(...lines.map(l => l.x)),
-    spaceW: s.fontSize * 0.28,
+    spaceW,
     paraBottom: lines[lines.length - 1]!.baseline,
   };
 }

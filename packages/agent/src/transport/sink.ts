@@ -37,7 +37,18 @@ export interface TurnErrorEvent {
   error: string;
 }
 
-export type AgentWireEvent = AgentEvent | TurnDoneEvent | TurnErrorEvent;
+/** Evento de DOMINIO del host: lo emite una tool del host (Signwax: firmante
+ *  agregado, invitación enviada, navegación…) vía `ctx.emit(name, data)`. El
+ *  agente no lo interpreta — lo pasa al wire tal cual para que el UI del host
+ *  reaccione (renderizar una card, navegar, refrescar). Es el canal por el que
+ *  la extensión OCP habla con su propia interfaz. */
+export interface HostEvent {
+  type: 'host';
+  name: string;
+  data: unknown;
+}
+
+export type AgentWireEvent = AgentEvent | TurnDoneEvent | TurnErrorEvent | HostEvent;
 
 /** A dónde fluyen los eventos de un turno del agente. `end()` cierra el canal
  *  (SIEMPRE se llama, incluso tras un error — el transporte queda limpio). */

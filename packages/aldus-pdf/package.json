@@ -1,7 +1,7 @@
 {
-  "name": "aldus-pdf",
-  "version": "0.7.0",
-  "description": "Pixel-perfect PDF editing over a PDF's real content graph, plus an LLM agent — read, edit, highlight, link, fill/build forms. `aldus file.pdf` opens the full visual editor + AI in your browser; also a library and a scriptable CLI.",
+  "name": "aldus",
+  "version": "0.2.0",
+  "description": "Pixel-perfect PDF editing over a PDF real content graph, plus a two-agent LLM (reader + editor). One package: the engine+agent (aldus), the embeddable React editor (aldus/editor), and a ready server (aldus/server). `aldus file.pdf` opens the full visual editor + AI in your browser.",
   "keywords": [
     "pdf",
     "pdf-editor",
@@ -27,6 +27,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./editor": {
+      "import": "./dist/editor-lib/index.js"
+    },
+    "./editor/styles.css": "./dist/editor-lib/styles.css",
     "./server": "./dist/server.mjs"
   },
   "files": [
@@ -59,5 +63,17 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
   }
 }

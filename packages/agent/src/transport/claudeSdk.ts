@@ -70,9 +70,12 @@ export class ClaudeSdkTransport implements ILlmTransport {
             // Solo las tools de Aldus cuentan/se muestran; las internas del SDK
             // (p. ej. ToolSearch, que canUseTool deniega) no son ruido para el UI.
             if (name.startsWith('mcp__aldus__')) {
+              // El prefijo MCP es un detalle del SDK: NO cruza al wire. Afuera
+              // (eventos, toolsUsed) la tool se llama como la bindeó su IAgentTool.
+              const bare = name.replace('mcp__aldus__', '');
               toolCalls++;
-              toolsUsed.push(name.replace('mcp__aldus__', ''));
-              req.onEvent?.({ type: 'tool', name, agent: req.role });
+              toolsUsed.push(bare);
+              req.onEvent?.({ type: 'tool', name: bare, agent: req.role });
             }
           }
         } else if (message.type === 'result') {

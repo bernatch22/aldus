@@ -9,7 +9,7 @@ import { defineConfig } from 'tsup';
  * @anthropic-ai/claude-agent-sdk, pdfjs-dist y @aldus/core quedan external.
  */
 export default defineConfig({
-  entry: { index: 'src/index.ts', cli: 'src/host/cli.ts' },
+  entry: { index: 'src/index.ts', cli: 'src/cli.ts' },
   format: ['esm'],
   dts: true,
   sourcemap: true,

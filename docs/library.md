@@ -113,10 +113,19 @@ await session.placeholdersToFields('p1-y620-x72', [
 
 `placeholdersToFields` is the deterministic one to reach for: you say *which*
 placeholder becomes *which* field, and `matchPlaceholders` locates each gap
-(elastic leaders, multi-line flex, Word de-hyphenation), expands to the maximal
-run, sweeps orphan leaders, and places the field directly over the real rect —
-**without touching the text**, so there's no reflow. Field widths are clipped to
-the filler run, so a field can never cover a letter.
+(elastic leaders, multi-line flex, Word de-hyphenation, overlapping context
+phrases), narrows every match to its filler/leader run (the context words the
+model quoted survive), and picks one of TWO automatic modes:
+
+- **Usable leader runs (`.....`/`____`)** → the field lands directly over the
+  printed rect, **without touching the text** (zero reflow). Field widths clip
+  to the filler run, so a field can never cover a letter.
+- **Leaderless fillers (`XXXX`, `xxx`, `***`)** → the filler is REMOVED: the
+  hole is re-emitted as a BLANK GAP at the data's useful width, the paragraph
+  reflows (extra line + content below shifted if needed), and each field lands
+  on the MEASURED gap between re-extracted runs — bounded by the neighbouring
+  text, so overlap is impossible by construction. A sweep converts every other
+  filler/leader run of the paragraph in the same call (a second call returns ↩︎).
 
 ### Inspecting and finishing
 

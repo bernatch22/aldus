@@ -8,15 +8,15 @@
 import type { z } from 'zod';
 import type { CancellationToken } from '@aldus/core';
 
-/** Quién emite el evento: el CHAT (router barato) o el EDITOR (fuerte). */
-export type AgentRole = 'chat' | 'editor';
+/** Quién emite el evento: el READER (barato, lee y rutea) o el EDITOR (fuerte, aplica). */
+export type AgentRole = 'reader' | 'editor';
 
 /** Eventos en vivo de un turno (para streamear al panel). Cada evento lleva
  *  `agent` para que el UI pueda renderizar el pase del editor como un bloque
  *  propio, en orden cronológico real (chat → editor → chat). */
 export type AgentEvent =
-  | { type: 'text'; delta: string; agent: AgentRole }   // token(s) de texto
-  | { type: 'tool'; name: string; agent: AgentRole };   // arrancó una tool
+  | { type: 'text'; delta: string; agent: AgentRole; page?: number }   // token(s) de texto
+  | { type: 'tool'; name: string; agent: AgentRole; page?: number };   // arrancó una tool
 
 /** Una tool ADVERTIDA en una pasada. El shape zod (tools Aldus) deja al transporte
  *  SDK armar un MCP tool validante; ausente en tools del host (traen su JSON
@@ -32,6 +32,13 @@ export interface PassTool {
  *  de ejecutar sus tools. `onToolCall` es el ÚNICO seam de ejecución: el
  *  orquestador es dueño del dispatch (runTool para el editor; captura de ruta
  *  para el chat) — el transporte solo lo invoca y devuelve su string al modelo. */
+/** Un turno de conversación previo (para la MEMORIA del reader entre requests).
+ *  Va DESPUÉS del system (que trae el doc) y ANTES del prompt actual. */
+export interface ChatTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface PassRequest {
   model: string;
   system: string;
@@ -39,6 +46,9 @@ export interface PassRequest {
   role: AgentRole;
   tools: PassTool[];
   maxTurns: number;
+  /** Historial conversacional previo (memoria). El transporte lo intercala entre
+   *  system y prompt. Vacío/undefined = turno fresco. */
+  history?: ChatTurn[];
   /** false = un solo intercambio (fase CHAT: el modelo delega y para). true =
    *  loop de function-calling hasta que no queden tools (fase EDITOR). El SDK
    *  lo ignora (query() loopea solo); el OpenRouter lo respeta. */

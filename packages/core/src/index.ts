@@ -116,9 +116,11 @@ export {
 } from './layout/reflow.js';
 export {
   matchPlaceholders,
+  placeFieldsInGaps,
   targetWidthFor,
   defaultFieldWidthHints,
   looksLikeLeaderRewrite,
+  looksLikePlaceholderConversion,
   type PlaceholderField,
   type FieldPlacement,
   type PlaceholderMatchResult,

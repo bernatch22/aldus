@@ -7,9 +7,11 @@
  * provider sort) — acá adentro de la clase; el loop de function-calling respeta
  * `req.loop` (fase CHAT = un intercambio; fase EDITOR = loop hasta sin tools).
  */
-import type { CancellationToken } from '@aldus/core';
+import { createLogger, type CancellationToken } from '@aldus/core';
 import type { IAgentOpenRouterConfig } from '../config.js';
 import type { AgentEvent, AgentRole, ILlmTransport, PassRequest, PassResult } from './transport.js';
+
+const log = createLogger('aldus:transport:openrouter');
 
 interface ToolCall { id: string; type: 'function'; function: { name: string; arguments: string } }
 interface Msg {
@@ -52,6 +54,11 @@ export class OpenRouterTransport implements ILlmTransport {
           tools,
           tool_choice: 'auto',
           stream: true,
+          // Cap explícito: sin esto OpenRouter RESERVA el máximo de output del
+          // modelo (Sonnet = 64k) para el chequeo de crédito y devuelve 402 aunque
+          // el turno emita 200 tokens. Un turno (tool calls + reporte corto) nunca
+          // se acerca a 8k — y el chequeo de crédito pasa holgado.
+          max_tokens: 8192,
           // Sesgo a proveedores de alta throughput — OpenRouter a veces rutea a
           // un backend encolado (primera llamada de minutos); esto lo evita.
           provider: { sort: 'throughput' },
@@ -110,10 +117,15 @@ export class OpenRouterTransport implements ILlmTransport {
   async chat(req: PassRequest, ct: CancellationToken): Promise<PassResult> {
     if (!this.cfg.key) throw new Error('falta OPENROUTER_API_KEY (o un token de sesión del llm-proxy)');
     // `resume` = el array de mensajes acumulado de una pasada previa (misma
-    // conversación); si no, se arranca fresco [system, user].
+    // conversación); si no, se arranca fresco: system + HISTORIAL (memoria entre
+    // requests) + prompt actual.
     const messages: Msg[] = Array.isArray(req.resume)
       ? [...(req.resume as Msg[]), { role: 'user', content: req.prompt }]
-      : [{ role: 'system', content: req.system }, { role: 'user', content: req.prompt }];
+      : [
+          { role: 'system', content: req.system },
+          ...(req.history ?? []).map(h => ({ role: h.role, content: h.content })),
+          { role: 'user', content: req.prompt },
+        ];
     const tools: OpenAITool[] = req.tools.map(t => ({
       type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters },
     }));
@@ -124,15 +136,17 @@ export class OpenRouterTransport implements ILlmTransport {
     const maxTurns = req.loop ? req.maxTurns : 1;
 
     for (let turn = 0; turn < maxTurns; turn++) {
+      const t0 = Date.now();
       const { content, toolCalls: calls } = await this.streamCompletion(req.model, messages, tools, req.role, req.onEvent, ct);
+      log(`pasada ${turn + 1}/${maxTurns} (${req.role}): ${Date.now() - t0}ms · ${content.length} chars · ${calls.length} tool_call/s`);
       text += content;
-      if (!calls.length) break; // el modelo terminó (sin tools) → fin de la pasada
+      if (!calls.length) break; // el modelo terminó (sin tools)
 
       messages.push({ role: 'assistant', content: content || null, tool_calls: calls });
       for (const tc of calls) {
         toolCalls++;
         toolsUsed.push(tc.function.name);
-        req.onEvent?.({ type: 'tool', name: `mcp__aldus__${tc.function.name}`, agent: req.role });
+        req.onEvent?.({ type: 'tool', name: tc.function.name, agent: req.role });
         let args: Record<string, unknown> = {};
         try { args = JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>; } catch { /* args vacíos */ }
         const result = await req.onToolCall(tc.function.name, args);
@@ -141,6 +155,18 @@ export class OpenRouterTransport implements ILlmTransport {
       // Fase CHAT (loop=false): un solo intercambio — el modelo delegó y para
       // (v1 no re-consultaba al chat tras edit_document).
       if (!req.loop) break;
+    }
+    // Un turno con loop NO puede terminar MUDO — pase lo que pase: presupuesto
+    // agotado a mitad de tools, o el modelo devolvió una completion vacía (Gemini
+    // lo hace tras varios tool-results). UNA pasada final SIN tools lo obliga a
+    // responder con lo que juntó.
+    if (req.loop && !text.trim()) {
+      log(`turno terminó MUDO tras ${toolCalls} tool/s → pasada final forzada sin tools`);
+      messages.push({ role: 'user', content: 'Respondé AHORA al pedido original con lo que ya averiguaste con las tools (si no encontraste algo, decilo). Solo texto — no llames más tools.' });
+      const t0 = Date.now();
+      const { content } = await this.streamCompletion(req.model, messages, [], req.role, req.onEvent, ct);
+      log(`pasada final: ${Date.now() - t0}ms · ${content.length} chars`);
+      text += content;
     }
     return { text, toolsUsed, toolCalls, resume: messages };
   }

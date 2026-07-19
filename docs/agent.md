@@ -157,11 +157,16 @@ const myTool: IAgentTool = {
 
 The agent is deliberately fenced where models are unreliable:
 
-- **`edit_text` refuses to rewrite dotted/underscore placeholders** and points at
-  `placeholders_to_fields` instead — filling `"....."` with `"XXXX"` by hand
-  breaks the layout; the deterministic tool doesn't.
-- **Field widths clip to the filler run**, so a sloppy range from the model can
-  never cover a letter.
+- **`edit_text` refuses to rewrite placeholders — both families** (dotted/
+  underscore leaders AND `XXXX`/`xxx`/`***` fillers) and points at
+  `placeholders_to_fields` instead. Models try to emulate the tool by writing
+  spaces, `"DD/MM/AAAA"` or `"[Label]"` over fillers (seen in a real Gemini
+  run): that *looks* like a blank but isn't fillable, and breaks the layout.
+- **Fillers are rewritten as BLANK GAPS**: `placeholders_to_fields` removes the
+  `XXXX` run, reflows the paragraph, and lands the field on the measured gap
+  between re-extracted runs — bounded by neighbouring text, so it can never
+  cover a letter. Leader placeholders keep the direct, zero-reflow placement
+  (field widths clip to the filler run).
 - **`watermark` / `headerFooter` are idempotent** — in a fan-out, N page editors
   applying the same watermark leave one, not N stacked.
 - **`replace_paragraph` refuses a paragraph already modified this session**,

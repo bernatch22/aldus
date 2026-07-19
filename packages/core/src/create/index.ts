@@ -18,6 +18,7 @@ export { ICreateOp, appendAnnot } from './registry.js';
 export { addFormField, FIELD_DEFAULT_SIZE, MODERN_WIDGET, type IFieldCreator, type NewFieldSpec } from './fields.js';
 export { setFieldOptions, addRadioOption } from './fieldOptions.js';
 export { addText, type NewTextSpec } from './text.js';
+export { composePageBlocks, type PageBlock, type ComposeResult } from './composePage.js';
 export { addWatermark } from './watermark.js';
 export { addHeaderFooter } from './headerFooter.js';
 export { addHighlight, highlightAppearance } from './highlight.js';

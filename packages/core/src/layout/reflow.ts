@@ -22,10 +22,13 @@
  * que no corre el folio/pie (#13), holes elásticos (#14).
  */
 
+import { createLogger } from '../common/log.js';
 import type { PageGraph, SegmentNode, StyledRun } from '../model/nodes.js';
 import type { SegmentEdit } from '../model/edits.js';
 import type { SegmentPatch } from '../edit/mergeEdits.js';
 import type { LayoutEnv, Paragraph, ReflowTok } from './paragraph.js';
+
+const log = createLogger('aldus:reflow');
 
 /** Una CREACIÓN pendiente que el reflow toca (emite texto extra; re-ancla campos
  *  de llamadas anteriores). Permisiva a propósito — F5 usa su CreateOp union. */
@@ -143,30 +146,45 @@ export async function reflowApply(
   };
 
   const BOUNDARY_PAD = 2; // aire al cambiar de estilo (deriva de estimación)
-  const dxFix = new Map<string, number>(); // "fila:texto" → corrimiento medido
+  // Corrección de anclas MEDIDA, por (fila, índice de run emitido). La clave
+  // vieja era el TEXTO del run: en un párrafo español "de" aparece 4 veces —
+  // el fix del que colisionaba se aplicaba a TODOS los inocentes y el culpable
+  // podía quedar igual. La clave posicional pega el fix al run exacto.
+  const dxFix = new Map<string, number>();
+  // Los runs emitidos de la ÚLTIMA aplicación, por fila global: el measure loop
+  // los necesita para (a) matchear cada colisión medida con SU run emitido y
+  // (b) detectar anclas PISADAS aunque pdf.js fusione los items solapados.
+  let emittedRows: StyledRun[][] = [];
+  // Un HUECO se emite como GAP GEOMÉTRICO PURO: NINGÚN glifo — el run anterior
+  // se cierra, el cursor avanza el ancho del hueco, y el run siguiente se ancla
+  // con dx PASADO el gap. El campo se ubica después midiendo los gaps grandes
+  // entre runs re-extraídos ({@link placeFieldsInGaps}): los bordes de run son
+  // geometría EXACTA de la extracción → el campo no puede pisar texto jamás.
+  // (La versión anterior emitía espacios/puntos y estimaba posiciones con charX
+  // sobre runs mixtos: la deriva corría los campos ENCIMA del texto.)
   const rowRuns = (row: ReflowTok[], scale: number, rowIdx: number): StyledRun[] => {
     const runs: StyledRun[] = [];
     let cursor = 0;
+    let afterHole = false;
     for (const t of row) {
-      const isFirst = runs.length === 0;
+      const isFirst = runs.length === 0 && !afterHole;
       const sep = isFirst ? 0 : spaceW;
-      const text = t.kind === 'word' ? t.text! : ' '.repeat(Math.max(3, Math.round(holeW(t, scale) / spaceW)));
-      const w = t.kind === 'word' ? t.w : holeW(t, scale);
-      const bold = t.kind === 'word' ? !!t.bold : false;
-      const italic = t.kind === 'word' ? !!t.italic : false;
+      if (t.kind === 'hole') { cursor += sep + holeW(t, scale); afterHole = true; continue; }
+      const bold = !!t.bold, italic = !!t.italic;
       const last = runs[runs.length - 1];
-      if (last && (t.kind === 'hole' || (last.bold === bold && last.italic === italic))) {
-        last.text += (isFirst ? '' : ' ') + text; // mismo estilo (o hueco): fluye en el run
+      if (last && !afterHole && last.bold === bold && last.italic === italic) {
+        last.text += ' ' + t.text!; // mismo estilo y sin gap en el medio: fluye en el run
       } else {
-        runs.push({ text, bold, italic, dx: cursor + sep + (isFirst ? 0 : BOUNDARY_PAD) });
+        runs.push({ text: t.text!, bold, italic, dx: cursor + sep + (runs.length ? BOUNDARY_PAD : 0) });
       }
-      cursor += sep + w;
+      afterHole = false;
+      cursor += sep + t.w;
     }
-    void rowIdx;
-    for (const r of runs) {
-      const fix = dxFix.get(r.text.trim().slice(0, 30)); // por TEXTO, no por fila
-      if (fix) r.dx += fix;                              // (incremento acotado al acumular)
-    }
+    runs.forEach((r, j) => {
+      const fix = dxFix.get(`${rowIdx}:${j}`);
+      if (fix) r.dx += fix;
+    });
+    emittedRows[rowIdx] = runs;
     return runs;
   };
 
@@ -218,6 +236,7 @@ export async function reflowApply(
     // es POR SEGMENTO: cada bloque recibe SUS filas unidas con '\n' (el bake
     // emite cada línea con su leading) — un segmento-por-renglón recibe
     // exactamente una fila, como siempre.
+    emittedRows = [];
     env.creates.length = createStart;
     for (const g of paraSegs) env.deleteSeg(g.id);
     {
@@ -226,6 +245,15 @@ export async function reflowApply(
         const count = lines.filter(l => l.seg === g).length;
         const rows: StyledRun[][] = [];
         for (let i = 0; i < count; i++, k++) rows.push(k < layout.length ? rowRuns(layout[k]!, scale, k) : []);
+        // Los renglones EXTRA del overflow pertenecen al PÁRRAFO (un párrafo es
+        // un conjunto de nodos): van al ÚLTIMO segmento como filas '\n' extra,
+        // horneadas por el camino de segment-edit — fuente EMBEBIDA del bloque
+        // con fallback por glifo, igual que el editor. Antes eran un create de
+        // texto suelto, que dibuja SIEMPRE con fuente estándar → la última
+        // línea de un párrafo que crecía salía en otra tipografía.
+        if (g === paraSegs[paraSegs.length - 1]) {
+          for (; k < layout.length; k++) rows.push(rowRuns(layout[k]!, scale, k));
+        }
         while (rows.length && rows[rows.length - 1]!.length === 0) rows.pop();
         const flat: StyledRun[] = [];
         rows.forEach((rr, i) => {
@@ -242,11 +270,7 @@ export async function reflowApply(
         else env.putSeg(g, { remove: true, ...blPatch });
       }
     }
-    for (let e = 0; e < extraLines; e++) {
-      const bl = paraBottom - leading * (e + 1);
-      const text = layout[lines.length + e]!.map(t => (t.kind === 'word' ? t.text! : ' '.repeat(Math.max(3, Math.round(holeW(t, scale) / spaceW))))).join(' ');
-      env.creates.push({ kind: 'text', page: s.page, x: s.x, y: bl + s.fontSize, text, size: s.fontSize });
-    }
+    // (Los renglones extra ya viajan dentro del último segmento — ver arriba.)
     // Corrimiento del contenido INFERIOR, en AMBOS sentidos y por SPAN REAL: el
     // nuevo fondo del bloque es la baseline de la última línea USADA (si se
     // achicó) o paraBottom − extra·leading (si creció). Así, un bloque multi-
@@ -281,28 +305,62 @@ export async function reflowApply(
     let maxOver = 0; // cuánto se pasó del borde el renglón más ancho
     let collided = false;
     const MIN_GAP = spaceW * 0.7;
+    // Incremento ACOTADO por pasada: la deriva real de estimación converge en
+    // 2-3 pasadas; una "colisión" de cientos de pt contra contenido ajeno en
+    // pleno corrimiento NO es deriva y sin tope empujaba tramos fuera de página.
+    const bump = (rowIdx: number, runIdx: number, delta: number, why: string): void => {
+      const key = `${rowIdx}:${runIdx}`;
+      dxFix.set(key, (dxFix.get(key) ?? 0) + Math.min(delta, spaceW * limits.dxFixMaxSpaces));
+      log(`  fix ${key} +${Math.round(Math.min(delta, spaceW * limits.dxFixMaxSpaces) * 10) / 10} (${why}) → ${Math.round(dxFix.get(key)! * 10) / 10}`);
+    };
     for (let k = 0; k < layout.length; k++) {
       const bl = k < lines.length ? lineBl[k]! : paraBottom - leading * (k - lines.length + 1);
+      const rowX0 = k < lines.length ? lines[k]!.x : s.x;
       const rowSegs = (rePage?.segments ?? [])
         .filter(x => Math.abs(x.baseline - bl) < 6 && x.x >= s.x - 3)
         .sort((a, b) => a.x - b.x);
       const flat = rowSegs.flatMap(seg => seg.runs).sort((a, b) => a.x - b.x);
+      const emitted = emittedRows[k] ?? [];
+      // El run emitido cuyo ANCLA está más cerca de una x medida (el fix va al
+      // run EXACTO, no a todos los que comparten texto).
+      const nearestEmitted = (x: number): number => {
+        let bj = -1, bd = Infinity;
+        emitted.forEach((r, j) => { const d = Math.abs(rowX0 + r.dx - x); if (d < bd) { bd = d; bj = j; } });
+        return bj;
+      };
       for (let i = 0; i < flat.length; i++) {
         maxOver = Math.max(maxOver, flat[i]!.x + flat[i]!.width - rightEdge);
         if (i > 0) {
           const gap = flat[i]!.x - (flat[i - 1]!.x + flat[i - 1]!.width);
-          if (gap < MIN_GAP) {
+          // Colisión = SOLAPE REAL (gap negativo). Un gap ≈0 NO es colisión:
+          // pdf.js parte los items de un tramo re-emitido EXACTAMENTE en el
+          // cambio de estilo (bold→regular) y reporta tangencia SIEMPRE — el
+          // viejo umbral `< MIN_GAP` disparaba eterno ahí, acumulaba fixes y
+          // el texto terminaba desbordando el margen (abort espurio).
+          if (gap < -0.5) {
             collided = true;
-            const key = flat[i]!.text.trim().slice(0, 30);
-            // Incremento ACOTADO por pasada (4 espacios): la deriva real de
-            // estimación converge en 2-3 pasadas; una "colisión" de cientos de
-            // pt contra contenido ajeno en pleno corrimiento NO es deriva y sin
-            // tope empujaba tramos fuera de la página.
-            dxFix.set(key, (dxFix.get(key) ?? 0) + Math.min(MIN_GAP - gap, spaceW * limits.dxFixMaxSpaces));
+            const bj = nearestEmitted(flat[i]!.x);
+            if (bj > 0) bump(k, bj, MIN_GAP - gap, `solape ${Math.round(gap * 10) / 10} en "${flat[i]!.text.slice(0, 12)}"`);
           }
         }
       }
+      // ANCLAS PISADAS: cuando el run anterior rinde MÁS ancho que lo estimado
+      // (línea justificada: la re-emisión hereda el Tw estirado), el run se
+      // dibuja ADENTRO del anterior y pdf.js FUSIONA ambos items — el chequeo
+      // de gaps no ve nada ("regirá desde elde"). Se detecta por ancla: si a la
+      // x esperada de un run emitido no ARRANCA ningún item medido y un item la
+      // ATRAVIESA, el anterior lo pisó → se corre el ancla.
+      for (let j = 1; j < emitted.length; j++) {
+        const anchorX = rowX0 + emitted[j]!.dx;
+        const startsHere = flat.some(r => Math.abs(r.x - anchorX) < 2.5);
+        if (startsHere) continue;
+        const spanning = flat.find(r => r.x < anchorX - 2 && r.x + r.width > anchorX + 1);
+        if (!spanning) continue;
+        collided = true;
+        bump(k, j, spanning.x + spanning.width - anchorX + MIN_GAP, `ancla pisada @${Math.round(anchorX)} por "${spanning.text.slice(0, 12)}" (end ${Math.round(spanning.x + spanning.width)})`);
+      }
     }
+    log(`iter ${iter}: filas=${layout.length}/${lines.length} scale=${Math.round(scale * 100) / 100} capShrink=${Math.round(capShrink)} maxOver=${Math.round(maxOver * 10) / 10} collided=${collided} fixes=${dxFix.size}`);
     const overflow = maxOver > 3;
     if (!overflow && !collided) break;
     // Última pasada y sigue desbordado: NO se entrega un layout roto — se

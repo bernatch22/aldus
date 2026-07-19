@@ -110,4 +110,10 @@ await import('./server-impl.mjs');
 run('pnpm --filter aldus-editor build:demo', { env: { ...process.env, VITE_BASE: '/' } });
 cpSync(path.join(repo, 'packages/editor/dist-demo'), path.join(dir, 'dist/editor'), { recursive: true });
 
-console.log('✓ dist/index.js (+d.ts) + dist/cli.js + dist/server.mjs(+impl) + dist/editor/ (SPA)');
+// 6. Editor como LIBRERÍA React (subpath `aldus/editor`) → dist/editor-lib.
+//    UN SOLO package con subpaths: react/react-dom son peers OPCIONALES, así
+//    quien usa solo el motor (`import 'aldus'` en un server) no los arrastra.
+run('pnpm --filter aldus-editor build');
+cpSync(path.join(repo, 'packages/editor/dist-lib'), path.join(dir, 'dist/editor-lib'), { recursive: true });
+
+console.log('✓ dist/index.js (+d.ts) + dist/cli.js + dist/server.mjs(+impl) + dist/editor/ (SPA) + dist/editor-lib/ (React)');

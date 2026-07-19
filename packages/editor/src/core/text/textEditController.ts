@@ -577,8 +577,14 @@ export class TextEditController implements IDisposable {
     const bodyPx = s.lblRuns ? s.bodyDx * s.scale : 0;
     const bodyW = Math.max(s.minW - bodyPx, Math.ceil(maxW) + 1);
     const lineH = lines.length > 1 ? s.lineHN : s.lineH1;
-    // El alto calza con el mask del box: al menos el área (minHeightCss).
-    const height = `${Math.ceil(Math.max(lines.length * lineH, s.minHeightCss))}px`;
+    // El alto calza con el mask del box: al menos el área (minHeightCss) Y al
+    // menos el bloque ORIGINAL. El fondo blanco del host TAPA los glifos
+    // originales del canvas mientras se edita; si el usuario BORRA un salto de
+    // línea (4→3 líneas), encoger el host destapaba la última línea original
+    // de abajo → "texto duplicado" fantasma durante la edición.
+    const seedLines = s.seedValue.split('\n').length;
+    const seedCoverH = seedLines > 1 ? seedLines * s.lineHN : s.lineH1;
+    const height = `${Math.ceil(Math.max(lines.length * lineH, seedCoverH, s.minHeightCss))}px`;
     for (const el of [ta, this.backdropEl]) {
       el.style.width = `${bodyW}px`;
       el.style.height = height;

@@ -148,13 +148,19 @@ describe('reflow de párrafo (determinístico, bake+medición real)', () => {
         expect(run.x + run.width, `run "${run.text.slice(0, 30)}" se pasa del borde\n${dump}`).toBeLessThanOrEqual(rightEdge + 3);
       }
     }
-    // (b) gaps mínimos: dentro de cada fila, ningún par de runs se pisa.
+    // (b) gaps mínimos: dentro de cada FILA VISUAL, ningún par de runs se pisa.
+    // La fila es la baseline del RUN (no la del segmento): un párrafo es un
+    // conjunto de nodos y el último puede ser MULTILÍNEA (los renglones extra
+    // del reflow viven ahí desde el fix de fuente) — agrupar por baseline de
+    // segmento apilaría sus 3 filas en una y daría solapes falsos.
     const rows = new Map<number, Array<{ x: number; width: number; text: string }>>();
     for (const s of re.segments.filter(x => x.baseline > 400 && x.x >= 55)) {
-      const key = Math.round(s.baseline);
-      const row = rows.get(key) ?? [];
-      row.push(...s.runs);
-      rows.set(key, row);
+      for (const run of s.runs) {
+        const key = Math.round(run.baseline);
+        const row = rows.get(key) ?? [];
+        row.push(run);
+        rows.set(key, row);
+      }
     }
     for (const [, runs] of rows) {
       const flat = [...runs].sort((a, b) => a.x - b.x);
@@ -167,7 +173,10 @@ describe('reflow de párrafo (determinístico, bake+medición real)', () => {
     const belowAfter = re.segments.find(s => s.text.startsWith('Cláusula'))!;
     expect(belowAfter.baseline).toBeLessThan(belowBefore - 10);
     expect(Math.abs((belowBefore - belowAfter.baseline) % 14)).toBeLessThanOrEqual(1);
-    // (d) el párrafo ganó renglones.
-    expect(paraZone(re).length).toBeGreaterThan(paraZone(g).length);
+    // (d) el párrafo ganó RENGLONES (filas visuales, no segmentos: los extra
+    // viven dentro del último segmento como bloque multilínea).
+    const visualRows = (segs: ReturnType<typeof paraZone>) =>
+      segs.reduce((n, s) => n + s.text.split('\n').length, 0);
+    expect(visualRows(paraZone(re))).toBeGreaterThan(visualRows(paraZone(g)));
   }, 60_000);
 });

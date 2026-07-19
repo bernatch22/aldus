@@ -237,7 +237,12 @@ export function SegmentBox({ seg, pageWidth, pageHeight, scale, selected, editin
             />
           );
         })}
-        {masked && (
+        {masked && !editing && (
+          // El FANTASMA (estado nuevo dibujado por el box). NUNCA mientras se
+          // EDITA: el TextEditController ya dibuja el texto vivo en su backdrop,
+          // y este fantasma — posicionado por dx — puede ser MÁS ANCHO que la
+          // tapa del controller (una línea unida que desborda la columna): su
+          // cola asomaba por la derecha como texto "duplicado" flotante.
           <div
             className="seg-text"
             style={{ position: 'relative', zIndex: 1, ...containerStyle(seg, edit, scale), ...(edit?.align ? { width: '100%', textAlign: edit.align } : {}) }}

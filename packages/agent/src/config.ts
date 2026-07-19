@@ -1,72 +1,60 @@
 /**
- * config.ts — every environment knob of the agent, documented in ONE place.
+ * config.ts — TODOS los knobs de entorno del agente, en un lugar.
  *
- * v2: los knobs viven en la interfaz {@link IAgentConfig} (INYECTABLE — los tests
- * del orquestador pasan la suya, sin depender del entorno). `loadAgentConfig()`
- * lee el entorno UNA vez y devuelve la data plana (igual que el `config` const de
- * v1); `defaultAgentConfig` es el singleton listo para los hosts.
+ * DOS AGENTES, cada uno con su modelo y su transporte:
+ *   - READER  (barato y rápido): tiene el doc inline (input grande) y contesta;
+ *              delega ediciones. Default flash-lite: solo rutea, no edita.
+ *   - EDITOR  (fuerte): aplica ediciones con las tools sobre el grafo scoped.
+ *              Default SONNET. Se probó Gemini (más rápido y barato) pero se
+ *              sale del carril en documentos con placeholders: emula
+ *              placeholders_to_fields a mano con edit_text (escribe espacios,
+ *              "DD de MM de AAAA", "[Día de Inicio]") — texto que PARECE un
+ *              hueco pero no se puede completar. El guardrail lo rechaza, pero
+ *              el modelo insiste; Sonnet respeta la tool determinística.
  *
- * DOS proveedores de LLM, misma arquitectura de DOS NIVELES (chat barato que
- * describe/delega → editor fuerte que aplica con las tools reales):
- *   - 'subscription' (default): Claude Agent SDK sobre la SUSCRIPCIÓN de Claude
- *     Code (corré SIN ANTHROPIC_API_KEY). Haiku router + Sonnet editor.
- *   - 'openrouter': endpoint OpenAI-compatible (OpenRouter, o el llm-proxy del
- *     .dev). Para el demo público (la suscripción no se puede exponer en server)
- *     y para PROBAR modelos alternativos (DeepSeek, Gemini Flash, etc.).
+ * El TRANSPORTE se deriva del id del modelo — sin knob de provider:
+ *   `vendor/slug` (contiene '/') → OpenRouter · `claude-*` → Claude Agent SDK.
  *
- * | Variable                    | Default                        | Meaning                                  |
- * |-----------------------------|--------------------------------|------------------------------------------|
- * | ALDUS_PROVIDER              | subscription                   | 'subscription' | 'openrouter'.           |
- * | ALDUS_MODEL                 | claude-sonnet-5                | Editor — subscription.                   |
- * | ALDUS_CHAT_MODEL            | claude-haiku-4-5               | Chat/router — subscription.              |
- * | ALDUS_MAX_TURNS             | 24                             | Max turnos del editor por request.       |
- * | ANTHROPIC_API_KEY           | (unset)                        | Dejar SIN setear para facturar la sub.   |
- * | CLAUDE_CODE_OAUTH_TOKEN     | (unset)                        | Token de `claude setup-token` (headless).|
- * | OPENROUTER_API_KEY          | (unset)                        | Bearer de OpenRouter (o token del proxy).|
- * | OPENROUTER_BASE_URL         | https://openrouter.ai/api/v1   | Base OpenAI-compatible.                  |
- * | ALDUS_OPENROUTER_MODEL      | google/gemini-3.5-flash        | Editor — OpenRouter (tool-calling fino). |
- * | ALDUS_OPENROUTER_CHAT_MODEL | google/gemini-3.1-flash-lite   | Chat/router — OpenRouter (barato+rápido).|
+ * | Variable                | Default                      | Qué es                          |
+ * |-------------------------|------------------------------|---------------------------------|
+ * | ALDUS_READER_MODEL      | google/gemini-3.1-flash-lite | Modelo del reader (rutea).      |
+ * | ALDUS_EDITOR_MODEL      | claude-sonnet-5              | Modelo del editor (edita).      |
+ * | ALDUS_MAX_TURNS         | 24                           | Máx. turnos del editor.         |
+ * | OPENROUTER_API_KEY      | (unset)                      | Bearer de OpenRouter.           |
+ * | OPENROUTER_BASE_URL     | https://openrouter.ai/api/v1 | Base OpenAI-compatible.         |
+ * | ANTHROPIC_API_KEY       | (unset)                      | UNSET = facturar la suscripción.|
+ * | CLAUDE_CODE_OAUTH_TOKEN | (unset)                      | Token headless de la sub.       |
  */
+import { createToken } from '@aldus/core';
 
-export type AgentProvider = 'subscription' | 'openrouter';
-
+/** OpenRouter: credenciales del endpoint OpenAI-compatible. */
 export interface IAgentOpenRouterConfig {
   key: string;
   baseUrl: string;
-  model: string;
-  chatModel: string;
 }
 
 export interface IAgentConfig {
-  provider: AgentProvider;
-  model: string;
-  chatModel: string;
+  readerModel: string;
+  editorModel: string;
   maxTurns: number;
   openrouter: IAgentOpenRouterConfig;
+}
+export const IAgentConfig = createToken<IAgentConfig>('IAgentConfig');
+
+/** `vendor/slug` viaja por OpenRouter; lo demás por el Claude Agent SDK. */
+export function isOpenRouterModel(model: string): boolean {
+  return model.includes('/');
 }
 
 /** Lee TODOS los knobs del entorno una vez y arma la data plana. */
 export function loadAgentConfig(env: NodeJS.ProcessEnv = process.env): IAgentConfig {
-  const provider: AgentProvider = env.ALDUS_PROVIDER === 'openrouter' ? 'openrouter' : 'subscription';
   return {
-    provider,
-    model: env.ALDUS_MODEL || 'claude-sonnet-5',
-    chatModel: env.ALDUS_CHAT_MODEL || 'claude-haiku-4-5',
+    readerModel: env.ALDUS_READER_MODEL || 'google/gemini-3.1-flash-lite',
+    editorModel: env.ALDUS_EDITOR_MODEL || 'claude-sonnet-5',
     maxTurns: Number(env.ALDUS_MAX_TURNS || 24),
     openrouter: {
       key: env.OPENROUTER_API_KEY || '',
       baseUrl: (env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, ''),
-      // Combo recomendado (mejor calidad/costo, medido): el CHAT ve TODO el doc
-      // (input grande) → conviene el BARATO (flash-lite, $0.25/M in); el EDITOR
-      // hace el tool-calling fino → el bueno (3.5-flash). ~1.8¢/turno en un doc de
-      // 9 págs — la mitad que todo-3.5-flash, misma calidad y MÁS rápido (el
-      // chat-lite rutea en ~1.3s). Todo-lite es ~0.6¢ pero el editor se ensucia
-      // (mete tools de más, llena menos campos).
-      model: env.ALDUS_OPENROUTER_MODEL || 'google/gemini-3.5-flash',
-      chatModel: env.ALDUS_OPENROUTER_CHAT_MODEL || 'google/gemini-3.1-flash-lite',
     },
   };
 }
-
-/** Singleton listo para los hosts (server/CLI). Los tests inyectan el suyo. */
-export const defaultAgentConfig: IAgentConfig = loadAgentConfig();

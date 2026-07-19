@@ -98,13 +98,18 @@ describe('reflow de párrafo (determinístico, bake+medición real)', () => {
           .toBeLessThanOrEqual(rightEdge + 3);
       }
     }
-    // (b) gaps mínimos: dentro de cada fila, ningún par de runs/segmentos se pisa.
+    // (b) gaps mínimos: dentro de cada FILA VISUAL, ningún par de runs se pisa.
+    // Fila = baseline del RUN: los renglones extra del reflow viven DENTRO del
+    // último segmento (multilínea) desde el fix de fuente — agrupar por baseline
+    // de segmento apilaría sus filas y daría solapes falsos.
     const rows = new Map<number, Array<{ x: number; width: number; text: string }>>();
     for (const s of re.pages[0]!.segments.filter(x => x.baseline > 400 && x.x >= 55)) {
-      const key = Math.round(s.baseline);
-      const row = rows.get(key) ?? [];
-      row.push(...s.runs);
-      rows.set(key, row);
+      for (const run of s.runs) {
+        const key = Math.round(run.baseline);
+        const row = rows.get(key) ?? [];
+        row.push(run);
+        rows.set(key, row);
+      }
     }
     for (const [, runs] of rows) {
       const flat = [...runs].sort((a, b) => a.x - b.x);
@@ -118,7 +123,10 @@ describe('reflow de párrafo (determinístico, bake+medición real)', () => {
     const belowAfter = re.pages[0]!.segments.find(s => s.text.startsWith('Cláusula'))!;
     expect(belowAfter.baseline).toBeLessThan(belowBefore - 10);
     expect(Math.abs((belowBefore - belowAfter.baseline) % 14)).toBeLessThanOrEqual(1);
-    // (d) el párrafo efectivamente ganó renglones.
-    expect(paraZone(re).length).toBeGreaterThan(paraZone(doc).length);
+    // (d) el párrafo ganó RENGLONES (filas visuales, no segmentos: los extra
+    // viven dentro del último segmento como bloque multilínea).
+    const visualRows = (segs: Array<{ text: string }>) =>
+      segs.reduce((n, s) => n + s.text.split('\n').length, 0);
+    expect(visualRows(paraZone(re))).toBeGreaterThan(visualRows(paraZone(doc)));
   }, 60_000);
 });

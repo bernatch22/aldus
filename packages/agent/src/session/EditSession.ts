@@ -19,8 +19,8 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import {
   applyTextDiff, originalStyledRuns, effectiveGeometry,
-  paragraphOf, paraLinesOf, paragraphToks, reflowApply, matchPlaceholders,
-  looksLikeLeaderRewrite, EditLedger,
+  paragraphOf, paraLinesOf, paragraphToks, reflowApply, matchPlaceholders, placeFieldsInGaps,
+  looksLikeLeaderRewrite, looksLikePlaceholderConversion, EditLedger,
   NeverCancelled, throwIfCancelled,
   type CancellationToken,
   type SegmentEdit, type ImageEdit, type SegmentNode, type WidgetKind, type FontBucket,
@@ -29,6 +29,7 @@ import {
 } from '@aldus/core';
 import {
   bake, addHighlight, addLink, addText, addWatermark, addHeaderFooter, addFormField, insertImage, setFieldValues,
+  composePageBlocks, type PageBlock,
 } from '@aldus/core/bake';
 import type { DocGraph } from '../graph.js';
 import { graphFromBytes } from '../graph.js';
@@ -68,6 +69,9 @@ export class EditSession {
    *  reflow de core mutará in-place: emite renglones extra, re-ancla campos);
    *  guarda objetos {@link CreateOp} y `applyCreate` los narrowa por `kind`. */
   private readonly creates: ReflowCreate[] = [];
+  /** Los creates de la ÚLTIMA composición de cada página (replacePage):
+   *  re-componer la misma página descarta los anteriores (reemplaza, no acumula). */
+  private readonly composedByPage = new Map<number, ReflowCreate[]>();
   /** Valores de formulario a COMPLETAR, por nombre de campo (setFieldValues). */
   private readonly fills = new Map<string, string | boolean | string[]>();
   /** Token de cancelación del turno (threaded al loop de 6 bakes del reflow). */
@@ -120,6 +124,27 @@ export class EditSession {
   private readonly reExtract = async (bytes: Uint8Array): Promise<PageGraph[]> =>
     (await graphFromBytes(bytes)).pages;
 
+  /**
+   * Ancho PROMEDIO por carácter para estimar el wrap del texto nuevo. Estimarlo
+   * del nodo puntual falla: si el nodo va en MAYÚSCULAS (letras anchas) sobre-
+   * estima → el wrap corta temprano → renglones cortos; si es multilínea, su
+   * `width` (una fila) sobre su `text.length` (todas) sub-estima.
+   *
+   * Se muestrean las LÍNEAS VISUALES de PROSA del mismo tamaño (LineNode: una
+   * fila real, con su ancho y su largo verdaderos), descartando las dominadas
+   * por leaders/placeholders ("……", "....", "[…]") que no representan el ancho
+   * de una letra. Da un promedio fiel e independiente del nodo elegido.
+   */
+  private columnAvgCharW(s: SegmentNode): number {
+    const page = this.pageOf(s);
+    const leaderRatio = (t: string): number => (t.match(/[.…_\[\]]/g)?.length ?? 0) / Math.max(1, t.length);
+    const prose = page.lines.filter(l =>
+      Math.abs(l.fontSize - s.fontSize) < 1 && l.text.trim().length >= 8 && leaderRatio(l.text) < 0.15);
+    const totW = prose.reduce((n, l) => n + l.width, 0);
+    const totC = prose.reduce((n, l) => n + l.text.length, 0);
+    return totC > 20 ? totW / totC : s.width / Math.max(1, s.text.length);
+  }
+
   // ── EDICIONES de texto (nodos existentes) ──
   /** Edita el texto de un nodo. Si el texto NUEVO es más ancho de lo que entra
    *  en su renglón, el PÁRRAFO se reconstruye (reflow determinístico): lo que
@@ -132,7 +157,7 @@ export class EditSession {
     // texto — es una conversión a campo, y a mano rompe el layout. La tool
     // correcta lo hace determinístico.
     if (looksLikeLeaderRewrite(s.text, text)) {
-      return `⚠️ ${id} contiene placeholders de puntos/guiones. NO los reescribas con edit_text: usá placeholders_to_fields(id, fields=[{placeholder,name}]) — convierte los huecos en campos reales sin romper el layout.`;
+      return `⚠️ ${id} contiene placeholders (puntos/guiones o rellenos XXXX/xxx/***). NO los reescribas con edit_text: escribir espacios, "DD/MM/AAAA" o "[Etiqueta]" NO crea un campo rellenable y rompe el layout. Usá placeholders_to_fields(id, fields=[{placeholder,name}]) — convierte cada hueco en un campo AcroForm real (los rellenos los elimina sola).`;
     }
     const styled = applyTextDiff(originalStyledRuns(s), text);
 
@@ -140,7 +165,7 @@ export class EditSession {
     // el espaciado justificado → sobreestima → seguro). Si no crece, ni mido.
     const env = this.reflowEnv();
     const para = paragraphOf(this.pageOf(s), s, env);
-    const avgCharW = s.width / Math.max(1, s.text.length);
+    const avgCharW = this.columnAvgCharW(s);
     const fits = text.length <= s.text.length || s.x + text.length * avgCharW <= para.rightEdge + 2;
     if (fits) {
       this.ledger.patchSegment(s, { runs: styled });
@@ -192,6 +217,44 @@ export class EditSession {
     return `✓ Texto ${id} eliminado`;
   }
 
+  /**
+   * Elimina un nodo Y SUBE lo que queda debajo. Reusa el patrón del reflow
+   * (`below` corridos por un `dy`), sin reconstruir párrafo. Dos modos:
+   *
+   *  - 'gap' (cerrar hueco): `dy` = el salto del nodo al primer contenido de
+   *    abajo → ese sube a donde estaba el nodo, el resto conserva su separación.
+   *  - 'top' (subir al tope): además reclama el MARGEN SUPERIOR — el primer
+   *    contenido de abajo se lleva cerca del borde de la página (margen mínimo),
+   *    así todo el bloque se pega arriba. Útil cuando el nodo borrado era lo más
+   *    alto y "cerrar el hueco" no alcanza a mover nada a la vista.
+   *
+   * El pie/folio (baseline < 58) nunca se corre.
+   */
+  deleteTextPullUp(id: string, mode: 'gap' | 'top' = 'gap'): string {
+    const s = this.index.seg(id); if (!s) return `⚠️ No existe el nodo de texto "${id}".`;
+    const page = this.pageOf(s);
+    const myBase = this.effBaseline(s);
+    const below = page.segments
+      .filter(o => o.id !== id && !this.isRemoved(o.id) && this.effBaseline(o) < myBase - 1 && this.effBaseline(o) >= 58)
+      .sort((a, b) => this.effBaseline(b) - this.effBaseline(a)); // el más alto primero
+    this.ledger.patchSegment(s, { remove: true });
+    if (!below.length) return `✓ Texto ${id} eliminado (nada debajo que subir).`;
+
+    const firstBelow = below[0]!;
+    let dy = myBase - this.effBaseline(firstBelow); // cerrar hueco
+    if (mode === 'top') {
+      // Reclamar el margen: el primer contenido sube hasta un margen superior
+      // mínimo (~56pt del borde, menos el ascenso de su fuente). Nunca lo baja.
+      const TOP_MARGIN = 56;
+      const target = page.height - TOP_MARGIN - firstBelow.fontSize;
+      dy = Math.max(dy, target - this.effBaseline(firstBelow));
+    }
+    if (dy <= 0.5) return `✓ Texto ${id} eliminado.`;
+    for (const o of below) this.ledger.patchSegment(o, { baseline: this.effBaseline(o) + dy });
+    const what = mode === 'top' ? 'subidos al tope de la página' : 'subidos para cerrar el hueco';
+    return `✓ Texto ${id} eliminado y ${below.length} bloque(s) de abajo ${what} (${Math.round(dy)}pt).`;
+  }
+
   // ── EDICIONES de imagen (nodos existentes) ──
   moveImage(id: string, patch: { x?: number; y?: number; width?: number; height?: number }): string {
     const im = this.index.img(id); if (!im) return `⚠️ No existe la imagen "${id}".`;
@@ -205,15 +268,40 @@ export class EditSession {
   }
 
   // ── EDICIONES de campo / highlight / link existentes ──
+  /** Un campo PENDIENTE de esta sesión (create encolado) por su nombre. */
+  private pendingField(name: string): number {
+    return this.creates.findIndex(c => c.kind === 'field' && c.name === name);
+  }
   moveField(id: string, x?: number, y?: number): string {
-    const w = this.index.widget(id); if (!w) return `⚠️ No existe el campo "${id}".`;
-    this.ledger.patchRect(w, { x, y });
-    return `✓ Campo ${id} movido a @(${x ?? Math.round(w.x)},${y ?? Math.round(w.y)})`;
+    const w = this.index.widget(id);
+    if (w) {
+      this.ledger.patchRect(w, { x, y });
+      return `✓ Campo ${id} movido a @(${x ?? Math.round(w.x)},${y ?? Math.round(w.y)})`;
+    }
+    // Campo PENDIENTE (recién convertido/creado en esta sesión): se muta el create.
+    const qi = this.pendingField(id);
+    if (qi >= 0) {
+      const c = this.creates[qi]!;
+      if (x !== undefined) c.x = x;
+      if (y !== undefined) c.y = y;
+      return `✓ Campo pendiente "${id}" movido a @(${Math.round(c.x as number)},${Math.round(c.y as number)})`;
+    }
+    return `⚠️ No existe el campo "${id}". Campos disponibles: ${this.fieldNames().join(', ') || '(ninguno)'}.`;
   }
   deleteField(id: string): string {
-    const w = this.index.widget(id); if (!w) return `⚠️ No existe el campo "${id}".`;
-    this.ledger.patchRect(w, { remove: true });
-    return `✓ Campo ${id} eliminado`;
+    const w = this.index.widget(id);
+    if (w) {
+      this.ledger.patchRect(w, { remove: true });
+      return `✓ Campo ${id} eliminado`;
+    }
+    // Campo PENDIENTE: descartar el create (y su fill, si lo tenía).
+    const qi = this.pendingField(id);
+    if (qi >= 0) {
+      this.creates.splice(qi, 1);
+      this.fills.delete(id);
+      return `✓ Campo pendiente "${id}" descartado (aún no estaba horneado).`;
+    }
+    return `⚠️ No existe el campo "${id}". Campos disponibles: ${this.fieldNames().join(', ') || '(ninguno)'}.`;
   }
   recolorHighlight(id: string, color: string): string {
     const h = this.index.highlight(id); if (!h) return `⚠️ No existe el resaltado "${id}".`;
@@ -229,6 +317,58 @@ export class EditSession {
     const l = this.index.link(id); if (!l) return `⚠️ No existe el link "${id}".`;
     this.ledger.patchRect(l, { remove: true });
     return `✓ Link ${id} eliminado`;
+  }
+
+  /**
+   * REEMPLAZA una PÁGINA ENTERA por contenido estructurado con estilos. La
+   * división del trabajo de siempre: el LLM describe los BLOQUES (título,
+   * encabezados, párrafos, viñetas); composePageBlocks (core) hace TODO el
+   * layout — tipografía por tipo, wrap con medición real de fuente, márgenes,
+   * espaciados. Borra el texto existente de la página y encola los bloques
+   * como creates. Los campos/imágenes de la página quedan (borralos aparte).
+   */
+  async replacePage(pageNum: number, blocks: PageBlock[], bucket: FontBucket = 'serif'): Promise<string> {
+    const page = this.doc.pages.find(p => p.page === pageNum);
+    if (!page) return `⚠️ No existe la página ${pageNum} (el documento tiene ${this.doc.pages.length}).`;
+    if (!blocks.length) return `⚠️ replace_page necesita al menos un bloque.`;
+
+    const { specs, truncated, lines } = await composePageBlocks(blocks, page.width, page.height, bucket);
+    if (!specs.length) return `⚠️ ningún bloque entró en la página (¿demasiado contenido?).`;
+
+    // RE-COMPONER reemplaza, no acumula: si esta página ya fue compuesta en
+    // esta sesión, descartar aquellos creates (el modelo a veces llama dos
+    // veces — refinando el contenido — y sin esto ambas versiones se horneaban
+    // ENCIMADAS: la página salía con todo el texto doble).
+    const prev = this.composedByPage.get(pageNum);
+    if (prev) for (const c of prev) { const i = this.creates.indexOf(c); if (i >= 0) this.creates.splice(i, 1); }
+
+    let removed = 0;
+    for (const seg of page.segments) {
+      if (!this.isRemoved(seg.id)) { this.ledger.patchSegment(seg, { remove: true }); removed++; }
+    }
+    const mine: ReflowCreate[] = specs.map(spec => ({ kind: 'text' as const, ...spec, page: pageNum }));
+    this.creates.push(...mine);
+    this.composedByPage.set(pageNum, mine);
+
+    const again = prev ? ' (recompuesta: la versión anterior de esta sesión fue descartada)' : '';
+    const trunc = truncated.length ? ` ⚠️ ${truncated.length} bloque/s NO entraron (página llena): ${truncated.join(' · ')}` : '';
+    return `✓ Página ${pageNum} recompuesta: ${removed} bloques viejos eliminados → ${specs.length} bloques nuevos (${lines} líneas, tipografía por tipo).${again}${trunc}`;
+  }
+
+  /**
+   * Elimina CUALQUIER elemento por id, detectando su tipo (texto, imagen, campo,
+   * resaltado, link). Una sola puerta para el agente en vez de una tool por tipo:
+   * despacha al delete específico según qué nodo resuelve el índice. El texto
+   * usa deleteText (sin subir nada); para subir lo de abajo está deleteTextPullUp.
+   */
+  deleteElement(id: string): string {
+    if (this.index.seg(id)) return this.deleteText(id);
+    if (this.index.img(id)) return this.deleteImage(id);
+    if (this.index.widget(id)) return this.deleteField(id);
+    if (this.index.highlight(id)) return this.deleteHighlight(id);
+    if (this.index.link(id)) return this.deleteLink(id);
+    if (this.pendingField(id) >= 0) return this.deleteField(id); // campo pendiente por nombre
+    return `⚠️ No existe ningún elemento con id "${id}".`;
   }
 
   // ── CREACIONES (nodos nuevos — cola aplicada post-bake) ──
@@ -271,10 +411,19 @@ export class EditSession {
     return `✓ Imagen "${path}" en p${page} @(${x},${y})`;
   }
   watermark(text: string, color?: string, opacity?: number): string {
+    // GLOBAL (todas las páginas): idempotente. En el fan-out, los N editores de
+    // página aplican la misma marca; sin esto quedaban N copias encimadas.
+    if (this.creates.some(c => c.kind === 'watermark' && c.text === text)) {
+      return `↩︎ ya hay una marca de agua ${JSON.stringify(text)} — no la repito.`;
+    }
     this.creates.push({ kind: 'watermark', text, color, opacity });
     return `✓ Marca de agua: ${JSON.stringify(text)}`;
   }
   headerFooter(op: { header?: string; footer?: string; pageNumbers?: boolean }): string {
+    // GLOBAL: idempotente por (header, footer, pageNumbers) — ver watermark.
+    if (this.creates.some(c => c.kind === 'headerFooter' && c.header === op.header && c.footer === op.footer && c.pageNumbers === op.pageNumbers)) {
+      return `↩︎ ese encabezado/pie ya está aplicado — no lo repito.`;
+    }
     this.creates.push({ kind: 'headerFooter', ...op });
     return `✓ Encabezado/pie aplicado`;
   }
@@ -331,7 +480,15 @@ export class EditSession {
     if (para.lines.some(l => this.isRestyled(l.seg.id))) {
       return `↩︎ Ese párrafo/bloque ya fue modificado en esta sesión — no repitas la llamada (una sola llamada cubre toda la cláusula con end_id).`;
     }
-    const avgCharW = s.width / Math.max(1, s.text.length);
+    // GUARDRAIL a nivel BLOQUE (criterio de INTENCIÓN, no de pérdida — una
+    // reescritura legítima de cláusula puede rozar leaders vecinos): párrafo con
+    // placeholders + texto nuevo con PSEUDO-placeholders ("[Día inicio]",
+    // espacios, "DD/MM") = conversión a mano — Sonnet usó esta tool como escape
+    // cuando edit_text se lo rechazó (visto en un run real).
+    if (looksLikePlaceholderConversion(para.lines.map(l => l.text).join('\n'), text)) {
+      return `⚠️ Ese párrafo contiene placeholders (leaders o rellenos XXXX/xxx/***). NO los reescribas con replace_paragraph: escribir "[Etiqueta]", espacios o "DD/MM" NO crea un campo rellenable. Usá placeholders_to_fields(id, fields=[{placeholder,name}]) — convierte cada hueco en un campo AcroForm real (los rellenos los elimina sola).`;
+    }
+    const avgCharW = this.columnAvgCharW(s);
     const toks: ReflowTok[] = [...text.matchAll(/\S+/g)].map(m => ({
       kind: 'word' as const, text: m[0], w: m[0].length * avgCharW, bold: false, italic: false,
     }));
@@ -348,19 +505,64 @@ export class EditSession {
   }
 
   /**
+   * Reemplaza una SECCIÓN entera por un párrafo — CRUZANDO PÁGINAS. Es lo que
+   * replace_paragraph no puede (id/end_id deben ser de la misma página): acá
+   * start_id y end_id pueden estar en páginas distintas. El span (todos los
+   * nodos de texto en orden de lectura entre ambos, en TODAS las páginas que
+   * toca) se colapsa: el PRIMER nodo pasa a ser el párrafo nuevo (con reflow en
+   * su página), el resto se elimina. Mismo-página → delega en replaceParagraph.
+   */
+  async replaceSection(startId: string, endId: string, text: string): Promise<string> {
+    const a = this.index.seg(startId); if (!a) return `⚠️ No existe el nodo "${startId}".`;
+    const b = this.index.seg(endId); if (!b) return `⚠️ No existe el nodo "${endId}".`;
+    if (!text.trim()) return `⚠️ replace_section necesita el texto nuevo.`;
+    // Ordenar por lectura (página asc; dentro, baseline desc) → s primero.
+    const readBefore = (x: SegmentNode, y: SegmentNode): number =>
+      x.page !== y.page ? x.page - y.page : this.effBaseline(y) - this.effBaseline(x);
+    const [s, e] = readBefore(a, b) <= 0 ? [a, b] : [b, a];
+    if (s.page === e.page) return this.replaceParagraph(s.id, text, e.id);
+
+    const sBase = this.effBaseline(s), eBase = this.effBaseline(e);
+    const inSpan = (seg: SegmentNode): boolean => {
+      const y = this.effBaseline(seg);
+      const afterStart = seg.page > s.page || (seg.page === s.page && y <= sBase + 0.5);
+      const beforeEnd = seg.page < e.page || (seg.page === e.page && y >= eBase - 0.5);
+      return afterStart && beforeEnd;
+    };
+    const span = this.doc.pages.flatMap(p => p.segments).filter(seg => !this.isRemoved(seg.id) && inSpan(seg));
+    // GUARDRAIL: mismo que replace_paragraph — una sección con placeholders no
+    // se "convierte" reescribiéndola con etiquetas/espacios (eso no crea campos).
+    if (looksLikePlaceholderConversion(span.map(seg => seg.text).join('\n'), text)) {
+      return `⚠️ Esa sección contiene placeholders (leaders o rellenos XXXX/xxx/***). NO los reescribas con replace_section: usá placeholders_to_fields por párrafo — convierte cada hueco en un campo AcroForm real.`;
+    }
+    let removed = 0;
+    for (const seg of span) if (seg.id !== s.id) { this.ledger.patchSegment(seg, { remove: true }); removed++; }
+    const r = await this.replaceParagraph(s.id, text);
+    if (r.startsWith('⚠️')) return r;
+    return `✓ Sección ${s.id}→${e.id} reemplazada (${removed + 1} nodos en ${e.page - s.page + 1} páginas): el primero pasó a ser el párrafo nuevo, el resto se eliminó.`;
+  }
+
+  /**
    * DETERMINÍSTICO — el LLM DETECTA (pasa los substrings de placeholder + nombre
    * y opcionalmente el ancho útil) y el CÓDIGO (matchPlaceholders de core) hace
-   * TODO el layout: localiza cada hueco (leader elástico, flex multi-línea,
-   * des-hifenado Word), expande al run máximo, barre los leaders huérfanos, y
-   * coloca cada campo DIRECTAMENTE sobre el rect real (charXOf), sin tocar el
-   * texto (cero reflow). `id` = cualquier línea del párrafo; `fields` en orden.
+   * TODO el layout. DOS modos automáticos:
+   *  - LEADERS usables (...../____) → campo DIRECTAMENTE sobre el rect real
+   *    (charXOf), sin tocar el texto (cero reflow).
+   *  - RELLENOS sin leader (XXXX, xxx, ***) → el placeholder se REESCRIBE como
+   *    GAP EN BLANCO al ancho útil del dato y el párrafo se reacomoda
+   *    (reflowApply); los campos se colocan al final sobre los GAPS MEDIDOS del
+   *    preview horneado (placeFieldsInGaps) — acotados por los runs vecinos,
+   *    imposible pisar texto.
+   * `id` = cualquier línea del párrafo; `fields` en orden.
    */
   async placeholdersToFields(id: string, fields: Array<{ placeholder: string; name: string; width?: number }>): Promise<string> {
     const s = this.index.seg(id);
     if (!s) return `⚠️ No existe el nodo de texto "${id}".`;
     if (!fields.length) return `⚠️ placeholders_to_fields necesita al menos un {placeholder,name}.`;
     const page = this.pageOf(s);
-    const { lines } = paragraphOf(page, s, this.layoutEnv);
+    const env = this.reflowEnv();
+    const para = paragraphOf(page, s, env);
+    const { lines } = para;
 
     // Idempotencia: rects ya ocupados por widgets del documento o campos ya
     // encolados por esta sesión (misma página).
@@ -368,26 +570,69 @@ export class EditSession {
     const queuedFields: OccupiedRect[] = this.creates
       .filter(c => c.kind === 'field' && c.page === s.page)
       .map(c => ({ x: c.x as number, y: c.y as number, width: c.width as number }));
+    const ctx = { page: s.page, fontSize: s.fontSize, existingWidgets, queuedFields, nodeId: id };
 
-    const res = matchPlaceholders(lines, fields, {
-      page: s.page, fontSize: s.fontSize, existingWidgets, queuedFields, nodeId: id,
-    });
+    // Nombre ÚNICO en la sesión: los auto-nombres del barrido (campo_N) arrancan
+    // de 0 en CADA llamada → colisionaban entre párrafos y addFormField los
+    // renombraba a "texto_N" (nombres basura en el PDF final).
+    const used = new Set(this.fieldNames());
+    const uniq = (n: string): string => {
+      let out = n; let i = 2;
+      while (used.has(out)) out = `${n}_${i++}`;
+      used.add(out);
+      return out;
+    };
+
+    const res = matchPlaceholders(lines, fields, ctx);
     if (res.error) return `⚠️ ${res.error}`;
-    for (const f of res.fields) {
-      this.creates.push({ kind: 'field', fieldType: f.fieldType, page: f.page, x: f.x, y: f.y, width: f.width, height: f.height, name: f.name });
+    if (!res.needsReflow) {
+      for (const f of res.fields) {
+        this.creates.push({ kind: 'field', fieldType: f.fieldType, page: f.page, x: f.x, y: f.y, width: f.width, height: f.height, name: uniq(f.name) });
+      }
+      if (res.nothingNew) return `↩︎ Nada nuevo que convertir en ese párrafo (los placeholders ya tienen campo). No repitas la llamada.`;
+      return `✓ ${res.fields.length} campo(s) creados SOBRE los placeholders (texto intacto, sin reflow): ${res.notes.join(' · ')}`;
     }
-    if (res.nothingNew) return `↩︎ Nada nuevo que convertir en ese párrafo (los placeholders ya tienen campo). No repitas la llamada.`;
-    return `✓ ${res.fields.length} campo(s) creados SOBRE los placeholders (texto intacto, sin reflow): ${res.notes.join(' · ')}`;
+
+    // ── REESCRITURA + REFLOW (hay rellenos XXXX/xxx/***) ────────────────────
+    // Acá el texto SÍ se reescribe: cada hueco se emite como GAP EN BLANCO al
+    // ancho ÚTIL del dato — el relleno DESAPARECE del documento — y reflowApply
+    // reacomoda el párrafo (renglón extra + contenido inferior corrido si
+    // crece; huecos elásticos si la página no da). La colocación final es por
+    // GAPS MEDIDOS (placeFieldsInGaps) sobre el rePage que el reflow ya midió.
+    if (para.lines.some(l => this.isRestyled(l.seg.id))) {
+      return `↩︎ Ese párrafo ya fue convertido en esta sesión — no repitas la llamada (UNA llamada con todos los fields[] cubre el párrafo).`;
+    }
+    const toks = paragraphToks(para, res.holes!);
+    const { layout, rePage, aborted, extraLines, scale } = await reflowApply(s, para, toks, env, this.reExtract);
+    if (aborted) return `⚠️ Los campos no entran en el párrafo ni comprimiendo (la página no tiene lugar para crecer). No modifiqué nada.`;
+    const placed = placeFieldsInGaps(para, s.x, layout, rePage, scale, ctx);
+    for (const f of placed.fields) {
+      this.creates.push({ kind: 'field', fieldType: f.fieldType, page: f.page, x: f.x, y: f.y, width: f.width, height: f.height, name: uniq(f.name) });
+    }
+    if (!placed.fields.length) return `↩︎ Nada nuevo que convertir en ese párrafo. No repitas la llamada.`;
+    const grew = extraLines ? ` (+${extraLines} renglón/es, contenido inferior corrido)` : '';
+    return `✓ ${placed.fields.length} campo(s): placeholders reescritos como huecos EN BLANCO (el relleno XXXX/*** se ELIMINÓ del texto) y campo sobre cada hueco${grew}: ${[...res.notes, ...placed.notes].join(' · ')}`;
+  }
+
+  /** Los nombres de campo ALCANZABLES: widgets del documento + campos PENDIENTES
+   *  encolados por esta sesión (placeholders_to_fields / add_form_field). */
+  private fieldNames(): string[] {
+    const doc = this.doc.pages.flatMap(p => p.widgets.map(w => w.fieldName));
+    const queued = this.creates.filter(c => c.kind === 'field' && typeof c.name === 'string').map(c => c.name as string);
+    return [...new Set([...doc, ...queued])];
   }
 
   /** COMPLETA un campo de formulario por su NOMBRE o por su id de widget
-   *  ([[p1-w3]] de la vista de Lectura — se resuelve al fieldName). Valor:
-   *  texto para text/select/radio, true/false para checkbox. Determinístico. */
+   *  ([[p1-w3]] de la vista de Lectura — se resuelve al fieldName). Vale también
+   *  para un campo PENDIENTE de esta sesión (recién convertido/creado): el bake
+   *  completa los formularios AL FINAL, sobre el PDF ya con los campos creados.
+   *  Valor: texto para text/select/radio, true/false para checkbox. */
   fillField(nameOrId: string, value: string | boolean | string[]): string {
     let fieldName = nameOrId;
-    if (!this.doc.pages.some(p => p.widgets.some(w => w.fieldName === fieldName))) {
+    const known = this.fieldNames();
+    if (!known.includes(fieldName)) {
       const byId = this.index.widget(nameOrId.replace(/^\[\[|\]\]$/g, ''));
-      if (!byId) return `⚠️ No existe un campo llamado "${nameOrId}" (ni como fieldName ni como id).`;
+      if (!byId) return `⚠️ No existe un campo llamado "${nameOrId}" (ni como fieldName ni como id). Campos disponibles: ${known.join(', ') || '(ninguno)'}.`;
       fieldName = byId.fieldName;
     }
     this.fills.set(fieldName, value);
@@ -409,6 +654,26 @@ export class EditSession {
     for (const e of edits) segments.set(e.segmentId, e);
     for (const e of imageEdits) images.set(e.imageId, e);
     this.ledger.restore({ ...snap, segments, images });
+  }
+
+  /** La vista EFECTIVA de una página: los segmentos del grafo con el ledger
+   *  aplicado (texto/posición actuales, eliminados marcados). Es lo que las
+   *  tools devuelven como "estado actualizado" tras cada edición (patrón MCP:
+   *  el system prompt no se re-escribe — la vista fresca viaja en el resultado). */
+  effectiveSegments(page: number): Array<{ id: string; text: string; x: number; baseline: number; removed: boolean; edited: boolean }> {
+    const p = this.doc.pages.find(pg => pg.page === page);
+    if (!p) return [];
+    return p.segments.map(s => {
+      const e = this.ledger.segmentEdit(s.id);
+      return {
+        id: s.id,
+        text: e?.text ?? s.text,
+        x: e?.x ?? s.x,
+        baseline: e?.baseline ?? s.baseline,
+        removed: e?.remove === true,
+        edited: !!e && e.remove !== true,
+      };
+    });
   }
 
   /** Ediciones de texto/imagen acumuladas (lo que el editor sabe aplicar a su

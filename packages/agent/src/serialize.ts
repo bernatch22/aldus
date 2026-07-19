@@ -1,17 +1,50 @@
 /**
- * serialize.ts — el grafo del documento como texto compacto para EMBEBER en el
- * system prompt del agente. La idea del diseño: el agente NO tiene una tool de
- * lectura; ve TODO el contenido acá y responde/edita directo, referenciando los
- * ids exactos. Formato pensado para pocos tokens y para que el modelo ancle sus
- * ediciones a ids reales.
+ * serialize.ts — el grafo del documento como texto para el prompt. DOS vistas,
+ * una por agente:
+ *
+ *  - {@link serializeReading} (READER): el contenido COMPLETO en orden de
+ *    lectura, sin ids ni coordenadas. Va INLINE en el system prompt — el reader
+ *    contesta en una pasada, sin tools de lectura.
+ *  - {@link serializeDoc} (EDITOR): el grafo con ids exactos, SCOPED a las
+ *    páginas que el reader ruteó vía edit_document. Es lo que permite editar
+ *    anclando a ids reales sin alucinar coordenadas — y el motivo del split en
+ *    dos agentes: el editor nunca come el grafo entero.
  *
  * Coordenadas: puntos PDF, origen abajo-izquierda, x→derecha, y→arriba. Para el
  * texto la `y` es la BASELINE (lo que consumen las tools move_text).
  */
-import type { SegmentNode } from '@aldus/core';
-import type { DocGraph } from '../graph.js';
+import type { PageGraph, SegmentNode } from '@aldus/core';
+import type { DocGraph } from './graph.js';
 
 const r = (n: number): number => Math.round(n);
+
+/** Los segmentos de una página en ORDEN DE LECTURA: de arriba abajo (y crece
+ *  hacia arriba) y, a igual altura, de izquierda a derecha. */
+export function readingOrder(p: PageGraph): string[] {
+  return [...p.segments]
+    .sort((a, b) => (Math.abs(b.baseline - a.baseline) > 2 ? b.baseline - a.baseline : a.x - b.x))
+    .map(s => s.text.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+}
+
+/**
+ * El documento COMPLETO como texto de lectura (sin ids ni coordenadas — eso es
+ * del editor). Es el system prompt del reader: un contrato entero entra por
+ * centavos en un modelo barato y se contesta en UNA pasada.
+ */
+export function serializeReading(doc: DocGraph): string {
+  const out: string[] = [];
+  for (const p of doc.pages) {
+    out.push(`── Página ${p.page} ──`);
+    const text = readingOrder(p);
+    out.push(text.length ? text.join('\n') : '(sin texto)');
+    if (p.widgets.length) {
+      out.push(`[${p.widgets.length} campo/s de formulario: ${p.widgets.map(w => w.fieldName).join(', ')}]`);
+    }
+    out.push('');
+  }
+  return out.join('\n').trimEnd();
+}
 
 /** Estilo del segmento (del run DOMINANTE — el de mayor tamaño): negrita,
  *  itálica, fuente PostScript y color si se conoce. Compacto para el prompt. */

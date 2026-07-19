@@ -104,6 +104,120 @@ describe('matchPlaceholders — colocación directa por charX', () => {
     expect(res.fields).toHaveLength(0);
     expect(res.nothingNew).toBe(true);
   });
+
+  it('recorte al relleno: un placeholder SLOPPY que invade la etiqueta NO tapa la palabra (regresión "Banco: ....Direccion")', async () => {
+    // Word justificado pega la palabra a los leaders en el mismo run. Si el LLM
+    // marca de más ("......Direccion"), el campo debe caer SOLO sobre los puntos.
+    const g = await draw(p => p.drawText('Banco: ....................Direccion .......', { x: 60, y: 300, size: 11 }));
+    const seg = g.segments.find(s => s.text.includes('Banco'))!;
+
+    const res = matchPlaceholders(linesOf(g, seg), [{ placeholder: '....................Direccion', name: 'banco' }], ctxFor(seg));
+    const field = res.fields.find(f => f.name === 'banco')!;
+    expect(field).toBeDefined();
+
+    const lib = await PDFDocument.create();
+    const helv = await lib.embedFont(StandardFonts.Helvetica);
+    const dotsEnd = 60 + helv.widthOfTextAtSize('Banco: ' + '.'.repeat(20), 11);
+    // El borde derecho del campo cae en/antes del fin de los puntos, NO sobre "Direccion".
+    expect(field.x + field.width).toBeLessThanOrEqual(dotsEnd + 6);
+  });
+});
+
+describe('matchPlaceholders — modo REESCRITURA (rellenos XXXX/xxx/***)', () => {
+  it('relleno XXXX sin leader → needsReflow con holes rewrite al ancho útil (cero fields directos)', async () => {
+    const g = await draw(p => p.drawText('regirá desde el XX de XXXXXX de XXXX en adelante.', { x: 60, y: 300, size: 11 }));
+    const seg = g.segments.find(s => s.text.includes('regirá'))!;
+
+    const res = matchPlaceholders(linesOf(g, seg), [
+      { placeholder: 'XX', name: 'dia' },
+      { placeholder: 'XXXXXX', name: 'mes' },
+      { placeholder: 'XXXX', name: 'anio' },
+    ], ctxFor(seg));
+    expect(res.error).toBeUndefined();
+    expect(res.needsReflow).toBe(true);
+    expect(res.fields).toHaveLength(0); // la colocación es POST-reflow (placeFieldsInGaps)
+    const named = res.holes!.filter(h => h.rewrite && !h.drop);
+    expect(named).toHaveLength(3);
+    // 'dia'/'mes'/'anio' matchean el hint NARROW (5.5×fs) — ancho útil, no el del "XX" impreso.
+    for (const h of named) expect(h.target).toBeCloseTo(11 * 5.5, 1);
+  });
+
+  it('split defensivo: la FRASE "XX de XXXXXX de XXXX" como UN field → 3 holes (las palabras del medio NO son hueco)', async () => {
+    const g = await draw(p => p.drawText('regirá desde el XX de XXXXXX de XXXX en adelante.', { x: 60, y: 300, size: 11 }));
+    const seg = g.segments.find(s => s.text.includes('regirá'))!;
+
+    const res = matchPlaceholders(linesOf(g, seg), [{ placeholder: 'XX de XXXXXX de XXXX', name: 'fecha_inicio' }], ctxFor(seg));
+    expect(res.needsReflow).toBe(true);
+    const named = res.holes!.filter(h => !h.drop && h.name);
+    expect(named.map(h => h.name)).toEqual(['fecha_inicio', 'fecha_inicio_2', 'fecha_inicio_3']);
+    // Ningún hole cubre los "de" (los rangos son solo los runs de X).
+    const line = linesOf(g, seg)[0]!;
+    for (const h of named) expect(line.text.slice(h.from, h.to)).toMatch(/^[xX]+$/);
+  });
+
+  it('barrido de rellenos: se pasa UN xxxx → TODOS los runs x/X del párrafo se convierten (auto-nombrados)', async () => {
+    const g = await draw(p => p.drawText('Nombre: XXXXXXXX y documento xxxxxx del titular.', { x: 60, y: 300, size: 11 }));
+    const seg = g.segments.find(s => s.text.includes('Nombre'))!;
+
+    const res = matchPlaceholders(linesOf(g, seg), [{ placeholder: 'XXXXXXXX', name: 'nombre' }], ctxFor(seg));
+    expect(res.needsReflow).toBe(true);
+    const named = res.holes!.filter(h => !h.drop && h.name);
+    expect(named).toHaveLength(2);
+    expect(named[0]!.name).toBe('nombre');
+    expect(named[1]!.name).toMatch(/^campo_/); // el huérfano, auto-nombrado
+  });
+
+  it('recorte al run: "el señor ***" (frase-contexto) → el hueco cubre SOLO el ***, las palabras sobreviven', async () => {
+    const g = await draw(p => p.drawText('y el señor ***, identificado con DNI Nº ***, según poderes.', { x: 60, y: 300, size: 11 }));
+    const seg = g.segments.find(s => s.text.includes('señor'))!;
+
+    const res = matchPlaceholders(linesOf(g, seg), [
+      { placeholder: 'el señor ***', name: 'nombre_apoderado' },
+      { placeholder: 'DNI Nº ***', name: 'dni_apoderado' },
+    ], ctxFor(seg));
+    expect(res.needsReflow).toBe(true);
+    const named = res.holes!.filter(h => !h.drop && h.name);
+    expect(named).toHaveLength(2);
+    const line = linesOf(g, seg)[0]!;
+    // Cada hueco cubre EXACTAMENTE el run de asteriscos — ni "el señor" ni "DNI Nº".
+    for (const h of named) expect(line.text.slice(h.from, h.to)).toBe('***');
+  });
+
+  it('frases-contexto SOLAPADAS ("XXXXXX de XXXX" + "de XXXX hasta") → sin error y sin huecos duplicados', async () => {
+    const g = await draw(p => p.drawText('regirá desde el XX de XXXXXX de XXXX hasta el XXX de XXXXX.', { x: 60, y: 300, size: 11 }));
+    const seg = g.segments.find(s => s.text.includes('regirá'))!;
+
+    const res = matchPlaceholders(linesOf(g, seg), [
+      { placeholder: 'el XX de', name: 'dia_inicio' },
+      { placeholder: 'XXXXXX de XXXX', name: 'mes_inicio' },
+      { placeholder: 'de XXXX hasta', name: 'anio_inicio' },  // solapa con el anterior
+      { placeholder: 'el XXX de', name: 'dia_fin' },
+      { placeholder: 'INEXISTENTE_TOTAL', name: 'fantasma' }, // no está: nota, NO error
+    ], ctxFor(seg));
+    expect(res.error).toBeUndefined();
+    expect(res.needsReflow).toBe(true);
+    const named = res.holes!.filter(h => !h.drop && h.name);
+    // 5 runs de X en la línea (XX, XXXXXX, XXXX, XXX, XXXXX — el barrido cierra
+    // los no pasados), CERO duplicados: los rangos no se solapan entre sí.
+    expect(named).toHaveLength(5);
+    const line = linesOf(g, seg)[0]!;
+    for (const h of named) expect(line.text.slice(h.from, h.to)).toMatch(/^[xX]+$/);
+    for (let i = 0; i < named.length; i++) {
+      for (let j = i + 1; j < named.length; j++) {
+        const a = named[i]!, b = named[j]!;
+        expect(a.li !== b.li || a.to <= b.from || b.to <= a.from).toBe(true); // sin solape
+      }
+    }
+    expect(res.notes.join(' ')).toContain('INEXISTENTE_TOTAL'); // el no-encontrado quedó anotado
+  });
+
+  it('leaders puros NO disparan reflow (el corpus con "....." queda en colocación directa)', async () => {
+    const g = await draw(p => p.drawText('NOMBRE: ..............................', { x: 60, y: 300, size: 11 }));
+    const seg = g.segments.find(s => s.text.includes('NOMBRE'))!;
+    const res = matchPlaceholders(linesOf(g, seg), [{ placeholder: '.....', name: 'nombre' }], ctxFor(seg));
+    expect(res.needsReflow).toBeFalsy();
+    expect(res.fields).toHaveLength(1);
+  });
 });
 
 describe('looksLikeLeaderRewrite — guardrail XXXX (def #1)', () => {
@@ -112,5 +226,20 @@ describe('looksLikeLeaderRewrite — guardrail XXXX (def #1)', () => {
     expect(looksLikeLeaderRewrite('Fecha: ____________', 'Fecha: 01/01')).toBe(true);
     expect(looksLikeLeaderRewrite('Cliente Acme', 'Cliente Beta')).toBe(false); // sin leaders, no aplica
     expect(looksLikeLeaderRewrite('DATE: ......', 'DATE: ......')).toBe(false);  // sigue con leaders, ok
+  });
+
+  it('reescribir RELLENOS (XXXX/xxx/***) también es rewrite — el editor Gemini los emulaba con espacios/"DD"/"[Etiqueta]"', () => {
+    // Vistos en un run real: espacios, siglas de fecha, y labels entre corchetes.
+    expect(looksLikeLeaderRewrite('regirá desde el XX de XXXXXX de XXXX.', 'regirá desde el      de        de     .')).toBe(true); // emulación con ESPACIOS
+    expect(looksLikeLeaderRewrite('desde el XXX de XXXXXX de XXXX.', 'desde el DD de MM de AAAA.')).toBe(true);
+    // Un "XX" AISLADO corto no dispara (roman numeral / "siglo XX" es texto legítimo).
+    expect(looksLikeLeaderRewrite('durante el siglo XX la industria', 'durante el siglo XIX la industria')).toBe(false);
+    expect(looksLikeLeaderRewrite('representada por xxxxxxxx, con D.N.I. N° xxxxxx', 'representada por [Nombre], con D.N.I. N° [DNI]')).toBe(true);
+    expect(looksLikeLeaderRewrite('el señor ***, identificado', 'el señor [nombre], identificado')).toBe(true);
+    expect(looksLikeLeaderRewrite('Partida N° xxxxxxxxxxx del Registro', 'Partida N°            del Registro')).toBe(true);
+    // El relleno que SOBREVIVE en el texto nuevo no es reescritura (edición legítima alrededor).
+    expect(looksLikeLeaderRewrite('Nombre: xxxxxx (titular)', 'Nombre: xxxxxx (apoderado)')).toBe(false);
+    // "exxon"/"Maxxx" dentro de palabra: no son rellenos.
+    expect(looksLikeLeaderRewrite('la empresa Exxon SA', 'la empresa Chevron SA')).toBe(false);
   });
 });

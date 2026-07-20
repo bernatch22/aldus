@@ -10,17 +10,35 @@ coordinates to hallucinate.
 ```
 prompt ──▶ READER (cheap, reads the whole doc)
               ├── answers directly ─────────────▶ you
+              ├── fills form fields ────────────▶ you
               └── routes an edit ──▶ EDITOR (strong, only the affected pages)
                                        └── report ──▶ reader ──▶ you
 ```
 
-- The **reader** (`readTurn`) sees the whole document and either answers your
-  question or decides this is an edit and delegates.
+- The **reader** (`readTurn`) sees the whole document and answers your question.
+  It can also **fill form fields on its own** — `fill_field`/`fill_fields` are
+  `level: 'both'` because filling needs only a field *name*, which the reading
+  view already lists, not the graph. Everything else it delegates.
 - The **editor** (`editPages`) runs with only the pages that matter, and has the
   edit tools.
 
 This is cost tuning, not two brains: point both at the same model if you'd
 rather have one.
+
+### Routed, or addressed directly
+
+The arrow from reader to editor is **optional**, and it's just the `editor`
+callback you pass to `readTurn`:
+
+- **Pass it** → the reader gets an `edit_document({pages, request})` tool and
+  routes edits itself. One conversation, the model picks the scope.
+- **Omit it** → the reader is read-only-plus-filling and says so when asked for
+  anything else. You then call `editPages` yourself, with the scope *you* decide.
+
+The bundled editor UI takes the second path: CASPER has two tabs (**Lectura** /
+**Edición**), one conversation each, and the editor tab is scoped to the page
+you're looking at instead of to a page list a cheap model guessed. The server
+picks between them on `mode` — see [server.md](server.md#agent).
 
 ### Fan-out
 
@@ -34,10 +52,12 @@ failing doesn't take down the others; if *all* fail, it propagates.
 
 ## Usage
 
-The simplest path is the CLI — it wires all of this for you:
+The simplest path is the CLI — one verb per agent, and it wires all of this for
+you ([cli.md](cli.md)):
 
 ```bash
-aldus doc.pdf "Highlight the totals" -o out.pdf
+aldus ask  doc.pdf "What does clause 4 say?"        # reader → stdout
+aldus edit doc.pdf "Highlight the totals" -o out.pdf  # editor → a new PDF
 ```
 
 Programmatically:
@@ -57,6 +77,8 @@ const { text } = await readTurn(
   {
     doc, session, prompt: 'Highlight the totals', history: [],
     onEvent: ev => console.log(ev),
+    // OPTIONAL — this callback IS the reader→editor door. Drop it and the
+    // reader answers + fills fields only, never delegating.
     editor: async route => {
       const r = await editPages(
         { doc, session, request: route.request, pages: route.pages, parallel: route.parallel },
@@ -71,41 +93,76 @@ const { text } = await readTurn(
 const fin = await session.finishTurn();   // { kind: 'baked' | 'edits', … }
 ```
 
-`apps/server/src/routes/agent.ts` is the reference wiring, including
+To address the editor **directly** — no reader in front, you choose the scope:
+
+```ts
+const r = await editPages(
+  { doc, session, request: 'Highlight the totals', pages: [3] },
+  registry, config,
+);
+const fin = await session.finishTurn();
+```
+
+`apps/server/src/routes/agent.ts` is the reference wiring for both, including
 cancellation and per-document history.
 
 ## Auth and models
 
-### Claude Code subscription (default)
+### There is no provider knob
 
-No per-token bill.
+The transport is derived from the **model id**, and nothing else:
 
-- **Interactive / your machine**: just run **without** `ANTHROPIC_API_KEY`. The
-  CLI launcher deletes it from the child process on purpose (`ALDUS_USE_API_KEY=1`
+```
+vendor/slug   (contains '/')   → OpenRouter
+claude-*                       → Claude Agent SDK
+```
+
+So you pick a provider by naming a model. The two agents are configured
+independently — the default deliberately puts each on a different provider.
+
+| Variable | Default | |
+|---|---|---|
+| `ALDUS_READER_MODEL` | `google/gemini-3.1-flash-lite` | the reader → OpenRouter |
+| `ALDUS_EDITOR_MODEL` | `claude-sonnet-5` | the editor → Claude SDK |
+| `ALDUS_MAX_TURNS` | `24` | the editor's turn budget |
+| `OPENROUTER_API_KEY` | — | required by any `vendor/slug` model |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | any OpenAI-compatible endpoint |
+| `ANTHROPIC_API_KEY` | — | **unset = bill the Claude Code subscription** |
+| `CLAUDE_CODE_OAUTH_TOKEN` | — | the subscription, headless |
+
+`aldus tools` prints the models and transports actually in effect — the fastest
+way to check your config is what you think it is.
+
+### Claude Code subscription
+
+No per-token bill, best quality, but it can't run on a public server.
+
+- **Interactive / your machine**: run **without** `ANTHROPIC_API_KEY`. The CLI
+  launcher deletes it from the child process on purpose (`ALDUS_USE_API_KEY=1`
   keeps it).
 - **Headless / servers**: set `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`).
 
-| Var | Default |
-|---|---|
-| `ALDUS_MODEL` | `claude-sonnet-5` (editor) |
-| `ALDUS_CHAT_MODEL` | `claude-haiku-4-5` (reader) |
+If the session expires you'll see `Failed to authenticate: OAuth session
+expired` — run `claude login`, or move that agent to OpenRouter:
 
-Best quality — but it can't run on a public server.
+```bash
+export ALDUS_EDITOR_MODEL='anthropic/claude-sonnet-4.5'   # same model, via OpenRouter
+export OPENROUTER_API_KEY=sk-or-...
+```
 
 ### OpenRouter
 
-For hosted demos and cheaper runs. Any OpenAI-compatible model.
+For hosted demos and cheaper runs — any OpenAI-compatible model:
 
 ```bash
-ALDUS_PROVIDER=openrouter
-OPENROUTER_API_KEY=...
-ALDUS_OPENROUTER_CHAT_MODEL=google/gemini-3.1-flash-lite   # reader
-ALDUS_OPENROUTER_MODEL=google/gemini-3.5-flash             # editor
+export OPENROUTER_API_KEY=sk-or-...
+export ALDUS_READER_MODEL='google/gemini-3.1-flash-lite'
+export ALDUS_EDITOR_MODEL='anthropic/claude-sonnet-4.5'
 ```
 
-Put the cheap model on the reader (it reads every page) and the good one on the
-editor. That pairing — the default — measures **~1.8¢/turn on a 9-page doc,
-~3–9s per turn**.
+Put the cheap model on the reader (it gets the whole document) and the good one
+on the editor. The default pairing measures **~1.8¢/turn on a 9-page doc, ~3–9s
+per turn**.
 
 ## What it can do
 
@@ -144,14 +201,20 @@ import { IAgentTool } from 'aldus';
 const myTool: IAgentTool = {
   name: 'list_signers',
   description: 'Lists the signers of this agreement.',
-  level: 'chat',                    // 'chat' | 'editor' | 'both'
+  level: 'reader',                  // 'reader' | 'editor' | 'both'
   shape: { docId: z.string() },     // zod → JSON Schema automatically
   run: async (ctx, args) => `…`,
 };
 ```
 
 `level` decides which model sees it: query/action tools belong on the cheap
-`chat` level; anything that mutates the document belongs on `editor`.
+`reader` level; anything that mutates the document belongs on `editor`.
+
+Use `'both'` only for tools that need the document *and* make sense from a
+reading turn — `fill_field` is the one native example. Note the consequence: a
+**document-less turn** (the org-level host chat, no `doc`/`session`) is offered
+`'reader'` tools *only*, since `'both'` tools would have no `EditSession` to
+mutate. A host tool that must work without a document belongs on `'reader'`.
 
 ## Guardrails worth knowing
 

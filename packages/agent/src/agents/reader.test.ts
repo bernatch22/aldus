@@ -2,15 +2,18 @@
  * reader.test.ts — el reader con el CONTENIDO INLINE (transporte fake, cero
  * gasto). Verifica:
  *   1. el system prompt lleva el documento COMPLETO en orden de lectura,
- *   2. una consulta no necesita (ni tiene) tools de lectura,
- *   3. las tools del HOST sí entran (dominio) y el guard anti-repetición corre.
+ *   2. una consulta no necesita (ni tiene) tools de lectura — las únicas nativas
+ *      que ve son fill_field/fill_fields (nivel 'both'): rellenar un formulario
+ *      es la ÚNICA edición que hace solo, sin delegar en el editor,
+ *   3. sin documento esas 'both' desaparecen (no hay session que mutar),
+ *   4. las tools del HOST sí entran (dominio) y el guard anti-repetición corre.
  */
 import { describe, expect, it } from 'vitest';
 import { NeverCancelled } from '@aldus/core';
 import { readTurn } from './reader.js';
 import { loadAgentConfig } from '../config.js';
 import type { DocGraph } from '../graph.js';
-import type { EditSession } from '../session/EditSession.js';
+import { EditSession } from '../session/EditSession.js';
 import { IAgentTool } from '../tools/contract.js';
 import { createAgentContainer } from '../ioc.js';
 import { IToolRegistry } from '../tools/registry.js';
@@ -46,7 +49,9 @@ const doc = {
   ],
 } as unknown as DocGraph;
 
-const session = {} as EditSession;
+// Sesión REAL sobre el doc de prueba: un `{} as EditSession` le mentía al tipo y
+// reventaba apenas el reader empezó a pedirle la vista efectiva del documento.
+const session = new EditSession(doc);
 const config = loadAgentConfig({ ALDUS_READER_MODEL: 'google/gemini-3.5-flash', OPENROUTER_API_KEY: 'x' } as NodeJS.ProcessEnv);
 
 /** Transporte de guion: llama las tools que le digan y devuelve un texto fijo. */
@@ -84,7 +89,7 @@ describe('readTurn — contenido inline', () => {
     expect(req.role).toBe('reader');
   });
 
-  it('una consulta pura no tiene NINGUNA tool: cierra en una pasada', async () => {
+  it('una consulta pura no tiene tools de LECTURA — solo las de rellenar campos', async () => {
     const container = createAgentContainer({ config });
     let req!: PassRequest;
     const res = await readTurn(
@@ -92,7 +97,10 @@ describe('readTurn — contenido inline', () => {
       container.get(IToolRegistry), config, NeverCancelled,
     );
 
-    expect(req.tools).toEqual([]);   // sin tools de lectura — el contenido ya está
+    // Ninguna tool para LEER (el contenido ya está inline) ni para editar (sin
+    // `editor` no hay edit_document). Las únicas son las de nivel 'both': el
+    // reader completa formularios solo, sin despertar al editor.
+    expect(req.tools.map(t => t.name)).toEqual(['fill_field', 'fill_fields']);
     expect(res.toolsUsed).toEqual([]);
     expect(res.text).toBe('ok');
   });
@@ -110,7 +118,7 @@ describe('readTurn — contenido inline', () => {
       container.get(IToolRegistry), config, NeverCancelled,
     );
 
-    expect(req.tools.map(t => t.name)).toEqual(['list_signers']);
+    expect(req.tools.map(t => t.name)).toEqual(['fill_field', 'fill_fields', 'list_signers']);
     expect(res.text).toContain('ana@x.com');
   });
 

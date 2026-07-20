@@ -32,11 +32,17 @@ function classify(message: string): ToolOutcome {
   return { ok: true, code: 'ok', retriable: false, message };
 }
 
+/** `docLess` = el turno NO tiene documento (chat org-level del host). Deja SOLO
+ *  las tools de nivel EXACTO 'reader': las 'both' (fill_field…) mutan la
+ *  EditSession, y sin documento no hay ninguna — ofrecérselas al modelo es
+ *  invitarlo a una llamada que {@link docLessContext} sólo puede rechazar. */
+export interface ToolFilter { docLess?: boolean }
+
 export interface IToolRegistry {
   /** Las tools visibles para un agente (level exacto o 'both'). */
-  forLevel(level: Exclude<AgentLevel, 'both'>): IAgentTool[];
+  forLevel(level: Exclude<AgentLevel, 'both'>, filter?: ToolFilter): IAgentTool[];
   /** Las tools en el formato del transporte (JSON Schema derivado del zod). */
-  passTools(level: Exclude<AgentLevel, 'both'>): PassTool[];
+  passTools(level: Exclude<AgentLevel, 'both'>, filter?: ToolFilter): PassTool[];
   /** Valida args → corre → outcome. Nunca lanza. */
   dispatch(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome>;
 }
@@ -50,12 +56,13 @@ export class ToolRegistry implements IToolRegistry {
     if (dup.length) throw new Error(`IAgentTool duplicada/s: ${[...new Set(dup)].join(', ')}`);
   }
 
-  public forLevel(level: Exclude<AgentLevel, 'both'>): IAgentTool[] {
+  public forLevel(level: Exclude<AgentLevel, 'both'>, filter?: ToolFilter): IAgentTool[] {
+    if (filter?.docLess) return this.tools.filter(t => t.level === 'reader');
     return this.tools.filter(t => t.level === level || t.level === 'both');
   }
 
-  public passTools(level: Exclude<AgentLevel, 'both'>): PassTool[] {
-    return this.forLevel(level).map(t => ({
+  public passTools(level: Exclude<AgentLevel, 'both'>, filter?: ToolFilter): PassTool[] {
+    return this.forLevel(level, filter).map(t => ({
       name: t.name,
       description: t.description,
       shape: t.shape,

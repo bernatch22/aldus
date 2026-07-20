@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import { StandardFonts, PDFDocument } from 'pdf-lib';
 import { EditSession } from '../src/session/EditSession.js';
 import { graphOf, pdfWith } from './helpers.js';
+import { serializeDoc } from '../src/serialize.js';
 
 /** ¿El widget PISA algún run de texto de su renglón? (modo rewrite: los campos
  *  van sobre GAPS en blanco acotados por los runs vecinos — jamás tapan texto). */
@@ -162,6 +163,37 @@ describe('placeholders_to_fields — defensas §4 del audit (vía EditSession)',
     expect(msg).toContain(real.id);
   });
 
+  it('1d. operar sobre un nodo YA ELIMINADO → ⚠️ accionable, NUNCA un crash (el bug del loop infinito)', async () => {
+    // Reportado en producción: replace_paragraph colapsa un bloque (borra sus
+    // líneas) y el modelo sigue referenciando esas líneas. paragraphOf no
+    // encontraba el ancla (isRemoved la filtra), leía all[-1].baseline y
+    // reventaba; el registry lo mostraba como "error interno" OPACO, el modelo
+    // reintentaba, el dedupe lo bloqueaba con "ya corriste esto", y el turno
+    // moría dando vueltas. Las tres tools de párrafo deben avisar, no explotar.
+    const bytes = await pdfWith([500, 400], (page, f) => {
+      page.drawText('Primera línea del bloque que vamos a colapsar.', { x: 60, y: 300, size: 11, font: f.regular });
+      page.drawText('Segunda línea del mismo bloque, con más texto.', { x: 60, y: 288, size: 11, font: f.regular });
+      page.drawText('Tercera línea del bloque, cierra el párrafo.', { x: 60, y: 276, size: 11, font: f.regular });
+    });
+    const doc = await graphOf(bytes);
+    const segs = doc.pages[0]!.segments;
+    const first = segs.find(s => s.text.includes('Primera'))!;
+    const last = segs.find(s => s.text.includes('Tercera'))!;
+    const session = new EditSession(doc);
+
+    expect(await session.replaceParagraph(first.id, 'Acme Ink', last.id)).toContain('✓');
+    // `last` quedó ELIMINADO por el colapso: las tres tools deben devolver ⚠️.
+    for (const call of [
+      () => session.replaceParagraph(last.id, 'Texto nuevo'),
+      () => session.editText(last.id, 'Texto nuevo'),
+      () => session.replaceSection(last.id, first.id, 'Texto nuevo'),
+    ]) {
+      const msg = await call();               // <- antes: TypeError sin atrapar
+      expect(msg).toContain('⚠️');
+      expect(msg).toContain('YA FUE ELIMINADO');
+    }
+  });
+
   it('6. relleno XXXX → se REESCRIBE como hueco EN BLANCO (las X desaparecen) y el campo NO pisa texto', async () => {
     const bytes = await pdfWith([500, 400], (page, f) => {
       page.drawText('regirá desde el XX de XXXXXX de XXXX en adelante.', { x: 60, y: 300, size: 11, font: f.regular });
@@ -284,5 +316,33 @@ describe('placeholders_to_fields — defensas §4 del audit (vía EditSession)',
     expect(widgets[0]!.fieldName).toBe('nombre');
     expect(widgets[1]!.fieldName).toMatch(/^campo_/); // el huérfano, auto-nombrado
     for (const w of widgets) expect(overlapsText(re.pages[0]!, w)).toBe(false);
+  });
+});
+
+describe('vista EFECTIVA en el prompt (el grafo no miente entre turnos)', () => {
+  it('tras editar/borrar, serializeDoc muestra el texto NUEVO y omite los nodos eliminados', async () => {
+    // Bug real: el grafo se extrae del PDF en disco y no cambia durante el turno;
+    // las ediciones viven en el ledger. Serializando el grafo crudo, el 2º turno
+    // le mostraba al modelo el documento ANTERIOR a sus propias ediciones — citaba
+    // textos ya reemplazados y anclaba en nodos borrados ("edito y no lo encuentra").
+    const bytes = await pdfWith([500, 400], (page, f) => {
+      page.drawText('Primera línea que vamos a reemplazar entera.', { x: 60, y: 300, size: 11, font: f.regular });
+      page.drawText('Segunda línea del mismo bloque de texto.', { x: 60, y: 288, size: 11, font: f.regular });
+      page.drawText('Tercera línea, cierra el bloque completo.', { x: 60, y: 276, size: 11, font: f.regular });
+    });
+    const doc = await graphOf(bytes);
+    const first = doc.pages[0]!.segments.find(s => s.text.includes('Primera'))!;
+    const last = doc.pages[0]!.segments.find(s => s.text.includes('Tercera'))!;
+    const session = new EditSession(doc);
+    await session.replaceParagraph(first.id, 'Acme Ink', last.id);
+
+    const stale = serializeDoc(doc, 1);                            // sin la vista
+    const fresh = serializeDoc(doc, 1, session.effectiveView());   // con la vista
+
+    expect(stale).toContain('Tercera línea');       // el grafo crudo miente…
+    expect(fresh).not.toContain('Tercera línea');   // …la vista efectiva no
+    expect(fresh).not.toContain(last.id);           // el nodo borrado NO se lista
+    expect(fresh).toContain('Acme Ink');            // y el editado muestra su texto de HOY
+    expect(fresh).toContain('editado en esta sesión');
   });
 });

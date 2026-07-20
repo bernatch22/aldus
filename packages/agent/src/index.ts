@@ -1,5 +1,5 @@
 /**
- * API pública de @aldus/agent — y del paquete npm `aldus-pdf` (dist/index.js
+ * API pública de @aldus/agent — y del paquete npm `aldus` (su dist/index.js
  * bundlea este archivo). Es LA superficie que consume un producto host
  * (p.ej. un e-sign): motor puro, bytes in → bytes/datos out, sin DB ni auth.
  *

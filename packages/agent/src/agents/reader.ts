@@ -7,17 +7,26 @@
  * en UNA pasada, sin round-trips de tools para leer.
  *
  * Las tools de nivel 'reader' son las del HOST (Signwax: list_signers,
- * list_agreements…) — dominio, no lectura. La ÚNICA puerta a la edición es
+ * list_agreements…) — dominio, no lectura — MÁS las nativas de nivel 'both':
+ * hoy `fill_field`/`fill_fields`, que rellenan por NOMBRE de campo y por eso no
+ * necesitan el grafo. Rellenar un formulario es la edición que se pide LEYENDO,
+ * así que el reader la hace solo, barato, sin despertar al editor.
+ *
+ * Para MODIFICAR el documento (texto, layout, campos nuevos) la única puerta es
  * `edit_document({pages, request})`: delega en el agente EDITOR con el grafo
  * scoped a esas páginas (ese scoping es el motivo del split en dos agentes: el
  * editor nunca come el documento entero). El reader NO conoce al editor — el
  * host le inyecta la puerta como callback ({@link ReadTurnOpts.editor}).
+ *
+ * Esa puerta es OPCIONAL a propósito: un host que expone reader y editor como
+ * DOS agentes separados (dos pestañas de chat) simplemente no pasa `editor` —
+ * el reader queda como lectura + relleno de campos, y nunca delega.
  */
 import { createLogger, NeverCancelled, type CancellationToken } from '@aldus/core';
 import { z } from 'zod';
 import type { IAgentConfig } from '../config.js';
 import type { DocGraph } from '../graph.js';
-import { serializeReading } from '../serialize.js';
+import { serializeReading, type EffectiveView } from '../serialize.js';
 import type { EditSession } from '../session/EditSession.js';
 import { docLessContext, type ToolContext } from '../tools/contract.js';
 import type { IToolRegistry } from '../tools/registry.js';
@@ -96,7 +105,13 @@ function editDocumentTool(): PassTool {
   };
 }
 
-function systemPrompt(doc: DocGraph | undefined, canEdit: boolean, context?: string): string {
+function systemPrompt(
+  doc: DocGraph | undefined,
+  canEdit: boolean,
+  canFill: boolean,
+  context?: string,
+  eff?: EffectiveView,
+): string {
   return [
     ...(doc ? [
       'Sos el asistente de un documento PDF. Abajo tenés su CONTENIDO COMPLETO,',
@@ -117,10 +132,25 @@ function systemPrompt(doc: DocGraph | undefined, canEdit: boolean, context?: str
       'edición como hecha — si no LLAMASTE la tool, NO pasó nada. Ante un pedido',
       'de edición tu PRIMERA acción es la tool call, no una respuesta.',
     ] : []),
+    ...(canFill ? [
+      '',
+      'CAMPOS DE FORMULARIO: los tenés listados abajo, página por página, con su',
+      'valor actual y el texto que va pegado a cada uno ("near"). Si el usuario',
+      'pide COMPLETARLOS/rellenarlos, hacelo VOS con fill_fields: UNA sola llamada',
+      'con todos los campos, identificados por su NOMBRE (usá el "near" para saber',
+      'qué va en cada uno — los nombres suelen ser opacos). Rellenar es lo único',
+      'que podés modificar por tu cuenta.',
+    ] : []),
+    ...(doc && !canEdit ? [
+      '',
+      'NO podés hacer ningún OTRO cambio (editar o mover texto, borrar, crear',
+      'campos nuevos, convertir placeholders). Si te lo piden, decilo claro y',
+      'mandalos al agente EDITOR — no prometas ni describas cambios que no hiciste.',
+    ] : []),
     '',
     'Contestá en el idioma en que te hablen, y sé directo: la respuesta primero.',
     ...(context ? ['', '=== CONTEXTO ===', context] : []),
-    ...(doc ? ['', `=== DOCUMENTO: ${doc.path} (${doc.pages.length} página/s) ===`, serializeReading(doc)] : []),
+    ...(doc ? ['', `=== DOCUMENTO: ${doc.path} (${doc.pages.length} página/s) ===`, serializeReading(doc, eff)] : []),
   ].join('\n');
 }
 
@@ -135,8 +165,15 @@ export async function readTurn(
   const transport = opts.transport ?? transportFor(config.readerModel, config);
   // Sin documento no hay puerta a la edición: edit_document sería un sinsentido.
   const canEdit = !!opts.editor && !!opts.doc && !!opts.session;
-  const tools = [...registry.passTools('reader'), ...(canEdit ? [editDocumentTool()] : [])];
-  log(`turno: "${opts.prompt.slice(0, 60)}" · ${config.readerModel} · ${tools.length} tool/s${opts.doc ? '' : ' · sin doc'}`);
+  // Sin documento no hay EditSession: las tools de nivel 'both' (fill_field…)
+  // la mutan, así que un turno org-level recibe SOLO las 'reader' puras.
+  const hasDoc = !!opts.doc && !!opts.session;
+  const tools = [...registry.passTools('reader', { docLess: !hasDoc }), ...(canEdit ? [editDocumentTool()] : [])];
+  // Qué le contamos del relleno de campos sale de las tools que REALMENTE tiene
+  // (nivel 'both' en el registry), no de una lista hardcodeada acá: un host que
+  // no las registre no recibe un prompt que le miente.
+  const canFill = tools.some(t => t.name === 'fill_field' || t.name === 'fill_fields');
+  log(`turno: "${opts.prompt.slice(0, 60)}" · ${config.readerModel} · ${tools.length} tool/s${opts.doc ? '' : ' · sin doc'}${canFill ? ' · rellena campos' : ''}`);
 
   const emit: ToolContext['emit'] = (name, data) => opts.onHostEvent?.(name, data);
   const ctx: ToolContext = opts.doc && opts.session
@@ -162,14 +199,17 @@ export async function readTurn(
 
   const res = await transport.chat({
     model: config.readerModel,
-    system: systemPrompt(opts.doc, canEdit, opts.context),
+    // Vista EFECTIVA (ver editor.ts): el reader debe LEER el documento como
+    // quedó tras las ediciones pendientes, no como estaba en disco.
+    system: systemPrompt(opts.doc, canEdit, canFill, opts.context, opts.session?.effectiveView()),
     prompt: opts.prompt,
     history: opts.history,
     role: 'reader',
     tools,
-    // Una consulta cierra en 1 pasada; el presupuesto es para tools del host
-    // y la vuelta de edit_document (delegar → reportar).
-    maxTurns: 4,
+    // Una consulta cierra en 1 pasada; el presupuesto es para tools del host,
+    // la vuelta de edit_document (delegar → reportar) y el relleno de campos
+    // (fill_fields en batch + un reintento si algún nombre no matcheó).
+    maxTurns: 6,
     loop: true,
     onToolCall,
     onEvent: opts.onEvent,

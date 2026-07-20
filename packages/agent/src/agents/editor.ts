@@ -13,7 +13,7 @@
 import { createLogger, NeverCancelled, type CancellationToken } from '@aldus/core';
 import type { IAgentConfig } from '../config.js';
 import type { DocGraph } from '../graph.js';
-import { serializeDoc } from '../serialize.js';
+import { serializeDoc, type EffectiveView } from '../serialize.js';
 import type { EditSession } from '../session/EditSession.js';
 import type { ToolContext } from '../tools/contract.js';
 import type { IToolRegistry } from '../tools/registry.js';
@@ -54,7 +54,7 @@ export interface EditTurnResult {
   toolCalls: number;
 }
 
-function systemPrompt(doc: DocGraph, pages?: number[], siblingsPages?: number[]): string {
+function systemPrompt(doc: DocGraph, pages?: number[], siblingsPages?: number[], eff?: EffectiveView): string {
   const mine = pages && pages.length ? pages : doc.pages.map(p => p.page);
   const others = (siblingsPages ?? []).filter(p => !mine.includes(p));
   return [
@@ -103,36 +103,8 @@ function systemPrompt(doc: DocGraph, pages?: number[], siblingsPages?: number[])
     '  los ids son correctos.',
     '- Al terminar, reportá en una línea qué cambiaste (o qué no pudiste).',
     '',
-    serializeDoc(doc, pages && pages.length ? pages : undefined),
+    serializeDoc(doc, pages && pages.length ? pages : undefined, eff),
   ].join('\n');
-}
-
-/** ¿A qué página apuntó la tool? Del id (`p3-…`) o del arg `page`. */
-function pageOfArgs(args: Record<string, unknown>): number | null {
-  const id = typeof args.id === 'string' ? args.id : '';
-  const m = /^p(\d+)-/.exec(id);
-  if (m) return Number(m[1]);
-  return typeof args.page === 'number' ? args.page : null;
-}
-
-/**
- * El "estado actualizado" que acompaña a cada edición ✓ (patrón MCP edit-tool):
- * la zona alrededor del nodo tocado (±2 vecinos) con el ledger APLICADO, o los
- * nodos editados de la página si la tool no apuntó a un id. Deja registro de
- * DÓNDE se editó y refresca la vista del modelo sin re-embeber la página.
- */
-function updatedSnippet(session: EditSession, page: number, targetId?: string): string {
-  const segs = session.effectiveSegments(page).sort((a, b) => b.baseline - a.baseline);
-  if (!segs.length) return '';
-  let rows = segs;
-  const i = targetId ? segs.findIndex(s => s.id === targetId) : -1;
-  if (i >= 0) rows = segs.slice(Math.max(0, i - 2), i + 3);
-  else rows = segs.filter(s => s.edited || s.removed);
-  if (!rows.length) return '';
-  const r = (n: number): number => Math.round(n);
-  return rows
-    .map(s => `- ${s.id} @(${r(s.x)},${r(s.baseline)}): ${s.removed ? '(ELIMINADO)' : JSON.stringify(s.text)}${s.id === targetId ? '   ← editado' : ''}`)
-    .join('\n');
 }
 
 /** Un turno del editor: aplica la edición pedida sobre la sesión y reporta. */
@@ -159,17 +131,25 @@ export async function editTurn(
   const dispatch = dedupedDispatch(registry, ctx);
   const lock = opts.mutex ?? (<T>(fn: () => Promise<T>) => fn());
   const onToolCall = (name: string, args: Record<string, unknown>): Promise<string> => lock(async () => {
+    // DIFF por tool call: se fotografía el texto efectivo antes y se reporta
+    // qué cambió. Reemplaza al viejo "±2 vecinos de la página del arg `id`",
+    // que no servía justo para las tools que más mueven el documento
+    // (`placeholders_to_fields_batch` usa `groups[]` y `replace_section`
+    // `start_id`/`end_id`: sin `id` ni `page`, el modelo no recibía NADA y
+    // gastaba llamadas a ciegas para adivinar el estado).
+    const before = opts.session.snapshotText();
     const msg = await dispatch(name, args);
     if (!msg.startsWith('✓')) return msg;
-    const page = pageOfArgs(args);
-    if (page == null) return msg;
-    const snippet = updatedSnippet(opts.session, page, typeof args.id === 'string' ? args.id : undefined);
-    return snippet ? `${msg}\n\n[estado actualizado · p${page}]\n${snippet}` : msg;
+    const diff = opts.session.diffFrom(before);
+    return diff.length ? `${msg}\n\n[cambió en el documento]\n${diff.join('\n')}` : msg;
   });
 
   const res = await transport.chat({
     model: config.editorModel,
-    system: systemPrompt(opts.doc, opts.pages, opts.siblingsPages),
+    // Vista EFECTIVA: el grafo se extrae del PDF en disco, pero las ediciones de
+    // ESTE turno (y las pendientes del editor, sembradas con seed) viven en el
+    // ledger. Sin esto el editor ve el documento previo a sus propios cambios.
+    system: systemPrompt(opts.doc, opts.pages, opts.siblingsPages, opts.session.effectiveView()),
     prompt: opts.request,
     role: 'editor',
     tools,

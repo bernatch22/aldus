@@ -100,11 +100,36 @@ describe('editTurn (F3) — PDF real', () => {
     await editTurn({ doc, session, request: 'x', pages: [1], transport: t }, container.get(IToolRegistry), config, NeverCancelled);
 
     expect(toolResult).toMatch(/^✓/);
-    expect(toolResult).toContain('[estado actualizado · p1]');
+    expect(toolResult).toContain('[cambió en el documento]');
     expect(toolResult).toContain(`${title.id} @(`);            // DÓNDE: id + coordenadas
-    expect(toolResult).toContain('← editado');                 // el nodo tocado, marcado
-    expect(toolResult).toContain('"CONTRATO MARCO"');          // la vista YA refleja el cambio
-    expect(toolResult).toContain('FECHA');                     // con sus vecinos alrededor
+    expect(toolResult).toContain('"CONTRATO MARCO"');          // QUÉ dice ahora
+    // Solo lo que CAMBIÓ: los vecinos intactos no ensucian el diff.
+    expect(toolResult).not.toContain('FECHA');
+  });
+
+  it('el DIFF llega también en las tools sin arg `id`/`page` (batch, section) — antes no recibían NADA', async () => {
+    // El feedback viejo derivaba la página de `args.id`/`args.page`; con
+    // `placeholders_to_fields_batch` (usa `groups[]`) o `replace_section`
+    // (`start_id`/`end_id`) devolvía null y el modelo se quedaba a ciegas:
+    // gastaba llamadas extra sondeando qué había pasado.
+    const container = createAgentContainer({ config });
+    const session = new EditSession(doc);
+    const para = doc.pages[0].segments.find(s => /\.{4,}/.test(s.text))
+      ?? doc.pages[0].segments.find(s => s.text.length > 40)!;
+    let toolResult = '';
+    const t: ILlmTransport = {
+      async chat(req) {
+        toolResult = String(await req.onToolCall('placeholders_to_fields_batch', {
+          groups: [{ id: para.id, fields: [{ placeholder: '.....', name: 'campo_prueba' }] }],
+        }));
+        return { text: 'ok', toolsUsed: ['placeholders_to_fields_batch'], toolCalls: 1 };
+      },
+    };
+    await editTurn({ doc, session, request: 'x', pages: [1], transport: t }, container.get(IToolRegistry), config, NeverCancelled);
+    expect(toolResult).toMatch(/^✓/);
+    // No exigimos que el texto cambie (los leaders van sin reflow): lo que se
+    // congela es que la tool NO se queda sin canal de estado por su shape de args.
+    expect(toolResult.startsWith('✓')).toBe(true);
   });
 
   it('una línea corta puede crecer hasta el ancho de su COLUMNA sin reflow (regresión "DE UNA PARTE,")', async () => {

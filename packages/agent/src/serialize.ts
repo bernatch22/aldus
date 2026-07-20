@@ -18,12 +18,33 @@ import type { DocGraph } from './graph.js';
 
 const r = (n: number): number => Math.round(n);
 
+/**
+ * La vista EFECTIVA de la sesión: qué dice HOY cada nodo y cuáles ya no están.
+ *
+ * El grafo (`DocGraph`) se extrae del PDF en disco y NO cambia durante el turno;
+ * las ediciones viven en el ledger de la {@link EditSession}. Serializar el
+ * grafo crudo le muestra al modelo el documento ANTES de sus propias ediciones:
+ * en el 2º turno cita textos que ya reemplazó y ancla en nodos que borró
+ * ("edito un párrafo y después no lo encuentra"). Pasando esta vista, el prompt
+ * refleja el estado real sin re-hornear el PDF en cada turno.
+ *
+ * `undefined` para un id = sin cambios (se usa el nodo del grafo).
+ */
+export type EffectiveView = (segmentId: string) => { text: string; removed: boolean } | undefined;
+
+/** Texto efectivo de un segmento (o null si fue eliminado en la sesión). */
+function effText(s: SegmentNode, eff?: EffectiveView): string | null {
+  const e = eff?.(s.id);
+  if (e?.removed) return null;
+  return e?.text ?? s.text;
+}
+
 /** Los segmentos de una página en ORDEN DE LECTURA: de arriba abajo (y crece
  *  hacia arriba) y, a igual altura, de izquierda a derecha. */
-export function readingOrder(p: PageGraph): string[] {
+export function readingOrder(p: PageGraph, eff?: EffectiveView): string[] {
   return [...p.segments]
     .sort((a, b) => (Math.abs(b.baseline - a.baseline) > 2 ? b.baseline - a.baseline : a.x - b.x))
-    .map(s => s.text.replace(/\s+/g, ' ').trim())
+    .map(s => effText(s, eff)?.replace(/\s+/g, ' ').trim() ?? '')
     .filter(Boolean);
 }
 
@@ -32,14 +53,25 @@ export function readingOrder(p: PageGraph): string[] {
  * del editor). Es el system prompt del reader: un contrato entero entra por
  * centavos en un modelo barato y se contesta en UNA pasada.
  */
-export function serializeReading(doc: DocGraph): string {
+export function serializeReading(doc: DocGraph, eff?: EffectiveView): string {
   const out: string[] = [];
   for (const p of doc.pages) {
     out.push(`── Página ${p.page} ──`);
-    const text = readingOrder(p);
+    const text = readingOrder(p, eff);
     out.push(text.length ? text.join('\n') : '(sin texto)');
+    // Los campos, con su valor actual y el texto pegado al campo. El reader los
+    // COMPLETA solo (fill_field/fill_fields son nivel 'both'), y para eso no le
+    // alcanzaba la lista pelada de nombres: los fieldName suelen ser opacos
+    // (id-1234) y sin el "near" el modelo no sabe qué va en cada uno. Mismo
+    // `nearestLabel` que usa el editor — una sola fuente de verdad.
     if (p.widgets.length) {
-      out.push(`[${p.widgets.length} campo/s de formulario: ${p.widgets.map(w => w.fieldName).join(', ')}]`);
+      out.push(`[${p.widgets.length} campo/s de formulario — completalos por NOMBRE con fill_field/fill_fields]`);
+      for (const w of p.widgets) {
+        const val = w.value != null ? ` = ${JSON.stringify(Array.isArray(w.value) ? w.value.join(', ') : w.value)}` : ' (vacío)';
+        const opts = w.options?.length ? ` opciones:[${w.options.join(', ')}]` : '';
+        const label = nearestLabel(w, p.segments);
+        out.push(`  - ${JSON.stringify(w.fieldName)} ${w.widgetType}${val}${opts}${label ? ` near ${JSON.stringify(label)}` : ''}${w.readOnly ? ' read-only' : ''}`);
+      }
     }
     out.push('');
   }
@@ -193,7 +225,7 @@ function readingView(p: DocGraph['pages'][number]): string[] {
  * esas páginas — menos tokens y foco: el agente no divaga por páginas que no
  * necesita. Los ids siguen siendo globales, así las tools resuelven igual.
  */
-export function serializeDoc(doc: DocGraph, pages?: number | number[]): string {
+export function serializeDoc(doc: DocGraph, pages?: number | number[], eff?: EffectiveView): string {
   const out: string[] = [];
   const want = pages == null ? null : new Set(Array.isArray(pages) ? pages : [pages]);
   const list = want ? doc.pages.filter(p => want.has(p.page)) : doc.pages;
@@ -213,8 +245,17 @@ export function serializeDoc(doc: DocGraph, pages?: number | number[]): string {
       // Orden de lectura: de arriba hacia abajo, izquierda a derecha.
       const segs = [...p.segments].sort((a, b) => b.baseline - a.baseline || a.x - b.x);
       for (const s of segs) {
-        const t = s.text.replace(/\n/g, '\\n');
-        out.push(`- ${s.id} @(${r(s.x)},${r(s.baseline)}) ${r(s.width)}×${r(s.height)} ${r(s.fontSize)}pt ${styleOf(s)}: ${JSON.stringify(t)}`);
+        // Vista EFECTIVA: los nodos eliminados en esta sesión NO se listan (el
+        // modelo no puede anclar en algo que ya no está) y los editados se
+        // muestran con su texto ACTUAL.
+        const live = effText(s, eff);
+        if (live === null) continue;
+        const edited = live !== s.text;
+        const t = live.replace(/\n/g, '\\n');
+        out.push(`- ${s.id} @(${r(s.x)},${r(s.baseline)}) ${r(s.width)}×${r(s.height)} ${r(s.fontSize)}pt ${styleOf(s)}: ${JSON.stringify(t)}${edited ? '   ← editado en esta sesión' : ''}`);
+        // Los `tramos` son la geometría del texto ORIGINAL: si el nodo se editó
+        // ya no describen lo que hay en la página — se omiten en vez de mentir.
+        if (edited) continue;
         // Geometría INTRA-nodo: cada tramo con su x/ancho reales. Sin esto el
         // LLM no puede saber DÓNDE cae un "xxxx" dentro de la línea. FUSIONADOS
         // para el prompt (el grafo no se toca): un PDF con /ToUnicode roto parte

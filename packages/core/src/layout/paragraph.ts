@@ -25,6 +25,16 @@ export interface LayoutEnv {
   isRemoved(id: string): boolean;
 }
 
+/** El nodo ancla no forma parte de ninguna columna viva de la página — en la
+ *  práctica: fue ELIMINADO en esta sesión. Es una condición de negocio, no un
+ *  bug: la fachada la traduce a un ⚠️ que el modelo puede accionar. */
+export class ParagraphAnchorError extends Error {
+  constructor(public readonly segmentId: string) {
+    super(`El nodo "${segmentId}" ya no está en la página (fue eliminado en esta sesión).`);
+    this.name = 'ParagraphAnchorError';
+  }
+}
+
 /** Una LÍNEA VISUAL del párrafo. Un segmento puede ser un BLOQUE multilínea
  *  (la extracción fusiona párrafos Word en un solo segmento) — runLines lo
  *  parte; en PDFs "un segmento por renglón" es 1:1. */
@@ -81,6 +91,13 @@ export function paragraphOf(page: PageGraph, s: SegmentNode, env: LayoutEnv): Pa
     .flatMap(x => paraLinesOf(x, env))
     .sort((a, b) => b.baseline - a.baseline);
   const idx = all.findIndex(l => l.seg.id === s.id);
+  // El ancla NO está en la columna: casi siempre porque el nodo ya fue ELIMINADO
+  // en esta sesión (`isRemoved` lo filtra) y el modelo lo sigue referenciando.
+  // Sin esto, `all[-1].baseline` reventaba → el registry lo mostraba como
+  // "⚠️ error interno" (opaco), el modelo reintentaba, el dedupe lo bloqueaba y
+  // el turno entraba en loop. Se lanza un error CLARO que la fachada convierte
+  // en un ⚠️ accionable.
+  if (idx < 0) throw new ParagraphAnchorError(s.id);
   const maxLead = s.fontSize * 1.7;
   let lo = idx, hi = idx;
   while (lo > 0 && all[lo - 1]!.baseline - all[lo]!.baseline < maxLead) lo--;

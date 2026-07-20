@@ -28,6 +28,13 @@ export interface DocMeta {
  *  lo emite: el CHAT (router) o el EDITOR (segundo nivel) — el panel renderiza
  *  el pase del editor como bloque propio. */
 export type AgentRole = 'chat' | 'editor';
+
+/** QUÉ agente corre el turno — el panel lo expone como dos pestañas, cada una
+ *  su propia conversación:
+ *   - `reader`: modelo barato con el documento entero. Responde preguntas y
+ *     COMPLETA campos de formulario. No edita nada más ni delega.
+ *   - `editor`: modelo fuerte, directo sobre la página abierta. Edita de verdad. */
+export type AgentMode = 'reader' | 'editor';
 export type AgentEvent =
   | { type: 'text'; delta: string; agent?: AgentRole }
   | { type: 'tool'; name: string; agent?: AgentRole };
@@ -130,7 +137,13 @@ export class AldusApi {
   /** Corre un turno del agente LLM STREAMEADO (NDJSON). `onEvent` recibe los
    *  deltas de texto y las tool calls en vivo; la promesa resuelve con el
    *  resultado final: el SET COMPLETO de ediciones (las pendientes enviadas + las
-   *  que agregó) para que el editor reemplace su estado. `resume` continúa el chat. */
+   *  que agregó) para que el editor reemplace su estado. `resume` continúa el chat.
+   *  `mode` elige el agente ({@link AgentMode}); `page` es el scope del editor.
+   *
+   *  `signal` CORTA el turno: abortar el fetch cierra la respuesta, y el server
+   *  lo convierte en cancelación real del turno (`res.on('close') → cts.cancel()`,
+   *  routes/agent.ts) — el modelo deja de girar y no se sigue gastando. Sin él,
+   *  un turno que entra en loop no se podía parar desde la UI. */
   async agentStream(
     id: string,
     prompt: string,
@@ -139,11 +152,14 @@ export class AldusApi {
     resume: string | undefined,
     onEvent: (ev: AgentEvent) => void,
     page?: number,
+    signal?: AbortSignal,
+    mode: AgentMode = 'reader',
   ): Promise<AgentDone> {
     const res = await fetch(`${this.base}/documents/${id}/agent`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt, edits, imageEdits, resume, page }),
+      body: JSON.stringify({ prompt, edits, imageEdits, resume, page, mode }),
+      signal,
     });
     if (!res.ok || !res.body) {
       const body = await res.json().catch(() => null) as { error?: string } | null;

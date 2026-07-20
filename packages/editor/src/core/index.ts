@@ -58,5 +58,5 @@ export { PreviewService, type PreviewServiceOptions } from './preview/previewSer
 export { LiftService, type LiftEntry, type LiftPhase, type LiftServiceOptions } from './preview/liftService.js';
 
 // api — el cliente del wire, inyectable (fix del bug de capture.ts en v1).
-export { AldusApi, type AgentDone, type AgentEvent, type AgentRole, type AldusApiOptions, type DocMeta } from './api/aldusApi.js';
+export { AldusApi, type AgentDone, type AgentEvent, type AgentMode, type AgentRole, type AldusApiOptions, type DocMeta } from './api/aldusApi.js';
 export { readNdjson } from './api/ndjson.js';

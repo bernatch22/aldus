@@ -14,7 +14,8 @@ contract in natural language — Aldus gives you the primitives without fighting
 black-box "PDF editor".
 
 ```bash
-npm i aldus     # library + editor + server + `aldus` CLI  ·  `aldus file.pdf` opens the editor
+npm i aldus        # library + editor + server + the `aldus` CLI
+aldus contract.pdf # opens the visual editor in your browser
 ```
 
 > **Migrating from `aldus-pdf` / `aldus-editor`?** Both are deprecated in favour
@@ -25,14 +26,12 @@ npm i aldus     # library + editor + server + `aldus` CLI  ·  `aldus file.pdf` 
 
 | Doc | What's in it |
 |---|---|
-| **[CLI](docs/cli.md)** | The four modes, every flag, and the deterministic (no-LLM) operations. |
+| **[CLI](docs/cli.md)** | Every command and flag — the visual editor, the chat, the two agent verbs, and the deterministic form operations. |
 | **[Library API](docs/library.md)** | `EditSession` method by method, the bytes→bytes layer, forms, and exactly what the package root re-exports. |
 | **[React editor](docs/editor.md)** | `<AldusEditor>` props, the host-integration seams (your tabs, your boxes, your tools), the API client, forensic mode. |
 | **[Server](docs/server.md)** | Every HTTP route with body and response, the env knobs, the agent's NDJSON wire, embedding it in your own app. |
-| **[Agent](docs/agent.md)** | The two-level architecture, per-page fan-out, auth and models, cost, adding your own tools, the guardrails. |
-
-The rest of this README is the **why** and the architecture; the docs above are
-the **how**.
+| **[Agent](docs/agent.md)** | The two agents, per-page fan-out, auth and models, cost, adding your own tools, the guardrails. |
+| **[Architecture](ARCHITECTURE.md)** | How the packages fit, the layering, and every extension point. |
 
 ---
 
@@ -52,13 +51,10 @@ Acrobat does — and is honest when it can't:
   color, width-fit into the original glyph's slot so nothing overlaps. Explicit
   substitution — never a silent guess.
 - **Can't locate a segment unambiguously?** It refuses to touch it and says why.
-  What it can't understand, it never modifies — and it never writes an invalid
-  number into the stream.
+  What it can't understand, it never modifies.
 
 That honesty is the point: a signing, automation, or grading pipeline needs a PDF
 that is *the same document* afterward, not a re-rendered approximation.
-
----
 
 ## The mental model
 
@@ -82,23 +78,29 @@ the **bake** splices them into the real content stream. Geometry is located by
 
 ---
 
-## Run it
-
-### The CLI
+## The CLI
 
 ```bash
-aldus contract.pdf                                             # opens the editor in your browser
-aldus contract.pdf "Uppercase the title and highlight amounts" # one-shot agent, then saves
-aldus form.pdf --fields                                        # dump fields + values as JSON
-aldus form.pdf --fill '{"name":"Jane","agrees":"true"}'        # deterministic fill (no LLM)
-aldus contract.pdf --chat                                      # interactive agent in the terminal
+aldus contract.pdf                                       # the visual editor in your browser
+aldus contract.pdf --chat                                # conversation in the terminal
+
+aldus ask  contract.pdf "What are the payment terms?"    # reader → answer on stdout
+aldus edit contract.pdf "Uppercase the title" --pages 1  # editor → a new PDF
+
+aldus form.pdf --fields                                  # every field as JSON   (no LLM)
+aldus form.pdf --fill '{"name":"Jane","agrees":"true"}'  # fill by name          (no LLM)
+
+aldus tools                                              # bound tools + models in effect
 ```
 
-`aldus file.pdf` boots a local server, serves the editor, uploads the file, and
-opens your browser at that document. `--fields` / `--fill` are **deterministic** —
-they never call the LLM.
+There's **one verb per agent**, and the split is about what comes out the other
+end: `ask` answers on stdout (so it pipes), `edit` writes a PDF (so it takes `-o`
+and `--pages`). `--fields` / `--fill` are **deterministic** — they never load a
+model and never read your API key.
 
-### The web app
+Full reference in [docs/cli.md](docs/cli.md).
+
+## The web app
 
 The editor is a full WYSIWYG React app. The same bake that saves the file runs
 **in the browser** for the live preview, so what you see is what gets written.
@@ -106,116 +108,125 @@ The editor is a full WYSIWYG React app. The same bake that saves the file runs
 ```bash
 git clone git@github.com:bernatch22/aldus.git && cd aldus
 pnpm install
-pnpm dev        # server on :4100 + editor with hot-reload on :5190 → open http://localhost:5190
+pnpm dev        # server :4100 + editor with hot-reload :5190
 ```
 
 Upload a PDF, edit text in place (drag, restyle, resize), add form fields,
 highlights, links and images, then **Apply** to bake. The **CASPER** panel is the
-LLM agent — ask it to describe the document or make changes in natural language.
+LLM agent, with a tab per agent: *Lectura* for questions and filling fields,
+*Edición* for changes to the page you're on.
 
 ---
 
-## The API
+## The library
 
-Two internal packages make up the framework. `@aldus/core` is the engine — model,
-extraction, and bake, with zero LLM. `@aldus/agent` adds an edit session, a CLI,
-and the optional agent.
+`aldus` is the only package you install; it bundles the engine (`@aldus/core`)
+and the agent (`@aldus/agent`), which are internal. Everything below imports from
+the package root.
 
-**Neither is published.** `aldus` bundles both — plus the server and the editor —
-into one install, and is the only package you install. The snippets below name the
-scoped packages to show which layer each API lives in; when you install `aldus`,
-import them from the package root instead (`import { loadDoc, bake } from 'aldus'`).
-See [docs/library.md](docs/library.md) for exactly what the root re-exports.
-
-### Parse a page into the graph
+### Read a document
 
 ```ts
-import { getDocument } from 'pdfjs-dist';
-import { extractPageGraph } from '@aldus/core';
+import { loadDoc, readFormFields, readPdfInfo } from 'aldus';
+import { readFile } from 'node:fs/promises';
 
-const pdf = await getDocument({ data: bytes.slice() }).promise; // pdf.js transfers buffers → slice!
-const page = await pdf.getPage(1);
-const graph = await extractPageGraph(page);
-
-for (const seg of graph.segments) {
-  console.log(seg.id, seg.text, '@', seg.x, seg.baseline, `${seg.fontSize}pt`);
+const doc = await loadDoc('contract.pdf');
+for (const seg of doc.pages[0].segments) {
+  console.log(seg.id, JSON.stringify(seg.text), '@', seg.x, seg.baseline, `${seg.fontSize}pt`);
 }
+// p1-y708-x72 "CONTRATO DE DISTRIBUCIÓN" @ 100 720 18pt
+
+const bytes = new Uint8Array(await readFile('form.pdf'));
+const fields = await readFormFields(bytes);
+// → [{ name, type, value, options, readOnly, rects: [{ page, x, y, width, height }] }, …]
 ```
 
-### Edit + bake — the core round-trip
+### Edit and bake
+
+`EditSession` accumulates edits and bakes them. It's the same surface the agent's
+tools call — they're thin delegations to these methods.
 
 ```ts
-import { mergeSegmentEdit } from '@aldus/core';
-import { bake } from '@aldus/core/bake';
+import { loadDoc, EditSession } from 'aldus';
 
-const seg = graph.segments.find(s => s.text.includes('DRAFT'))!;
-const edit = mergeSegmentEdit(seg, null, { text: 'FINAL', baseline: seg.baseline });
+const doc = await loadDoc('contract.pdf');
+const session = new EditSession(doc);
 
-const { pdf, applied, warnings } = await bake(bytes, [edit]);
-// `pdf` is a new Uint8Array; `applied` / `warnings` are the honest report.
+session.editText('p1-y708-x72', 'FINAL');
+session.fillFields([{ name: 'signer', value: 'Jane Doe' }]);
+
+const { applied, warnings } = await session.save('out.pdf');
 ```
 
-`bake(bytes, edits)` takes a discriminated union of every edit kind (segment,
-image, widget, highlight, link, shape) and applies them all in one pass — each
-routed to its applier by `kind`.
+`bake()` always works from the **original bytes plus the full ledger**, so it's
+cumulative and repeatable — and `warnings` is the honest report of anything it
+had to substitute or refuse.
 
-### Create content and fill forms
+### Bytes in, bytes out
+
+For stateless pipelines, the creation and form primitives take and return bytes:
 
 ```ts
-import {
-  addFormField, addText, addHighlight, insertImage,
-  readFormFields, setFieldValues,
-} from '@aldus/core/bake';
+import { addFormField, setFieldValues, flattenForm } from 'aldus';
 
 let out = (await addFormField(bytes, {
   type: 'signature', page: 1, x: 90, y: 60, width: 200, height: 40, name: 'signature_a',
 })).pdf;
 
-const fields = await readFormFields(out);
-// → [{ name, type, value, options, readOnly, rects: [{ page, x, y, width, height }] }, …]
-
-out = (await setFieldValues(out, { name: 'Jane Doe', agrees: 'true', plan: 'Premium' })).pdf;
+out = (await setFieldValues(out, { name: 'Jane Doe', agrees: true, plan: 'Premium' })).pdf;
+out = (await flattenForm(out)).pdf;   // burn the values in, drop the AcroForm
 ```
 
 Field types: `text · checkbox · radio · select · list · button · signature`.
-`rects` gives you every widget's page + position — enough to overlay your own UI
-or know exactly where a signature will land.
+`rects` gives you every widget's page and position — enough to overlay your own
+UI or know exactly where a signature will land.
 
-### The agent (optional)
+Full surface in [docs/library.md](docs/library.md).
 
-An `EditSession` accumulates edits and creates and bakes them; `editPages` drives
-it with an LLM that has the page graph in its prompt and the same tools a human
-has (`readTurn` for read-only questions).
+### The agent
+
+Two agents, and the door between them is a callback you choose to wire.
 
 ```ts
-import { createAgentContainer, loadDoc, EditSession, editPages } from '@aldus/agent';
+import { createAgentContainer, loadDoc, EditSession, readTurn, editPages,
+         IToolRegistry, IAgentConfig } from 'aldus';
 
-const agent = createAgentContainer();   // transport + tool registry + config
+const c = createAgentContainer();
+const [registry, config] = [c.get(IToolRegistry), c.get(IAgentConfig)];
+
 const doc = await loadDoc('contract.pdf');
 const session = new EditSession(doc);
 
-session.editText('p1-y708-x72', 'FINAL');    // programmatic (no LLM)
-await editPages({ doc, session, prompt: 'Add a signature field at the bottom' }, ...agentArgs);
+// READER — answers from the whole document; can fill form fields.
+const { text } = await readTurn({ doc, session, prompt: 'What are the terms?' }, registry, config);
 
-const { pdf, warnings } = await session.bake();
+// EDITOR — the real edit tools, scoped to the pages you choose.
+await editPages({ doc, session, request: 'Uppercase the title', pages: [1] }, registry, config);
+
+const { warnings } = await session.save('out.pdf');
 ```
 
-See [`apps/server/src/routes/agent.ts`](apps/server/src/routes/agent.ts) for the
-exact container wiring.
+Pass `editor:` to `readTurn` and the reader gets an `edit_document` tool to
+delegate with; omit it and the reader never edits beyond filling fields. A host
+adds its own domain tools by binding `IAgentTool` in the container — the same
+contract the native tools use.
 
-The agent is **two-level**: a cheap chat/router model reads the whole document and
-either answers or delegates the edit to a stronger editor model, which runs with
-only the affected pages. Two transports back it, chosen in
-[`packages/agent/src/config.ts`](packages/agent/src/config.ts):
+**Models and transport.** There is no provider knob: the transport is derived
+from the model id — `vendor/slug` goes to OpenRouter, `claude-*` to the Claude
+Agent SDK.
 
-- **Claude Code subscription** (default) — no `ANTHROPIC_API_KEY`; set
-  `CLAUDE_CODE_OAUTH_TOKEN` for headless/server use. Best quality; can't run on a
-  public server.
-- **OpenRouter** (`ALDUS_PROVIDER=openrouter`, `OPENROUTER_API_KEY`) — any
-  OpenAI-compatible model, for hosted/public deployments. The default pairing is
-  `gemini-3.1-flash-lite` (chat) + `gemini-3.5-flash` (editor) — ~1.8¢/turn.
-  Override either with `ALDUS_OPENROUTER_CHAT_MODEL` / `ALDUS_OPENROUTER_MODEL`;
-  no code change needed.
+| Variable | Default | |
+|---|---|---|
+| `ALDUS_READER_MODEL` | `google/gemini-3.1-flash-lite` | the reader |
+| `ALDUS_EDITOR_MODEL` | `claude-sonnet-5` | the editor |
+| `ALDUS_MAX_TURNS` | `24` | the editor's turn budget |
+| `OPENROUTER_API_KEY` | — | needed by any `vendor/slug` model |
+| `ANTHROPIC_API_KEY` | — | **unset = bill the Claude Code subscription** |
+| `CLAUDE_CODE_OAUTH_TOKEN` | — | the subscription, headless |
+
+The default pairing puts the cheap model where the whole document goes and the
+strong one where the edits happen. See [docs/agent.md](docs/agent.md) for cost,
+guardrails, and the fan-out.
 
 ---
 
@@ -234,7 +245,6 @@ import { GlobalWorkerOptions } from 'pdfjs-dist';
 // pdf.js worker (peer dep) — set once at startup:
 GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).href;
 
-// Point the editor at YOUR API base (it proxies to an Aldus server, see below):
 configureAldusApi({ apiBase: '/api/aldus' });
 
 function EditDocument({ id }: { id: string }) {
@@ -252,7 +262,7 @@ function EditDocument({ id }: { id: string }) {
 | `agent` | show the CASPER agent panel (default `true`) |
 | `formTools` | show the form-field tools in the rail (default `true`) |
 | `inspectorTab` | show the properties inspector (default `true`) |
-| `panelTabs` | inject your own tabs into the right panel |
+| `panelTabs` / `panelFooter` | inject your own tabs and footer into the right panel |
 | `hostBoxes` / `hostTools` | overlay your own draggable boxes and rail tools |
 
 **The wire protocol.** The editor talks to a small REST surface — mount an
@@ -261,58 +271,47 @@ function EditDocument({ id }: { id: string }) {
 ```
 POST   /:id/bake        apply pending edits → new PDF revision
 POST   /:id/ops         instant server op (add text, watermark, header/footer, link…)
-POST   /:id/agent       run an agent turn (streams NDJSON)
+POST   /:id/agent       run an agent turn (streams NDJSON; `mode` picks the agent)
 POST   /:id/fields      form field ops     ·   POST /:id/images   insert an image
 GET    /:id/pdf         the current bytes  ·   GET/PUT /:id/edits  the pending edits
 POST   /:id/revert      roll back one revision
 POST   /   ·   GET /    upload  ·  list
 ```
 
-Your host owns the store, auth, and lifecycle; Aldus owns the editing. `@aldus/server`
-ships a reference `DocStore` (file-backed, keeps N revisions) you can swap for your
-own by binding a different implementation in its composition root.
+Your host owns the store, auth, and lifecycle; Aldus owns the editing.
+`@aldus/server` ships a reference file-backed `DocStore` (keeps N revisions) you
+can swap for your own by binding a different implementation in its composition
+root.
 
 ---
 
 ## How it's built
 
-Aldus is a pnpm monorepo layered so dependencies only ever point one way —
-protocol layers stay dumb, one layer holds the intelligence:
+A pnpm monorepo layered so dependencies only ever point one way — protocol layers
+stay dumb, one layer holds the intelligence.
 
 ```
-packages/core     @aldus/core   the engine, layered:
-  common/         pure utilities — coords, matrix, events, cancellation (zero deps)
-  pdf/            the ISO 32000 protocol: tokenizer → contentWalk → splice (dumb pipes)
-  model/          the typed vocabulary — nodes + edits
-  graph/          extraction (pdf.js → PageGraph) + the read model
-  edit/ layout/   accumulated edits (the ledger) + deterministic geometry (reflow, charX)
-  bake/ create/   THE BRAIN — locate-by-geometry, emit strategies, form/annotation creation
-packages/agent    @aldus/agent  EditSession + CLI (bin/aldus) + the two-level agent
-packages/editor   (internal)    the React editor library + a reference demo app
-packages/aldus-pdf aldus        THE PUBLISHED PACKAGE — the one-install distribution
-                                (lib + CLI + server + editor, via subpaths).
-                                Only this one goes to npm; the rest are internal.
-apps/server       @aldus/server reference Express host + DocStore
+packages/core      @aldus/core     the engine: model, extraction, bake. Zero LLM.
+packages/agent     @aldus/agent    EditSession + the two agents + the `aldus` CLI
+packages/editor    aldus-editor    the React editor            → npm
+packages/aldus-pdf aldus           the distribution            → npm
+apps/server        @aldus/server   reference Express host + DocStore
 ```
 
-Extensibility is by **contract, not modification** — each capability is one
-interface with N implementations, probed at runtime:
+`@aldus/core` and `@aldus/agent` are **internal** — `aldus` bundles them, plus
+the server and the editor, into the one package you install.
 
-- a new **edit kind** → an `IEditApplier` (bake applies it, located by geometry)
-- a new **text-emit behavior** → an `ITextEmitStrategy` (`{ canHandle, emit }`)
-- a new **agent tool** → a `ToolDef` in `TOOL_DEFS` (a pure method on `EditSession`)
-- a new **extractor**, **node box**, **instant op**, **LLM transport**, or
-  **font provider** → its own interface, one `bind` line.
-
-Adding a capability is a new class plus one registration — never an edit to a
-sibling.
+Extensibility is by **contract, not modification**: a new edit kind is an
+`IEditApplier`, a new agent tool an `IAgentTool`, a new transport an
+`ILlmTransport` — each one a new file plus one registration, never an edit to a
+sibling. The full map is in **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
 ### Develop & test
 
 ```bash
 pnpm install
 pnpm dev          # reference app: server :4100 + editor :5190
-pnpm -r test      # the real round-trip
+pnpm build && pnpm test
 ```
 
 Tests run the *real* cycle: build a PDF → extract its graph → bake edits →

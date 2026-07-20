@@ -7,7 +7,7 @@
  * Es LA pieza que deduplica el ejemplo `examples/edit-in-browser` (audit-hosts
  * §2: la copia de 85 líneas de v1 muere — el ejemplo importa esto). Funciona en
  * DOS layouts:
- *   · paquete publicado (aldus-pdf) → server.mjs + editor/ están junto al
+ *   · paquete publicado (`aldus`) → server.mjs + editor/ están junto al
  *     bundle (dist/).
  *   · repo → corre apps/server con tsx y sirve packages/editor/dist-demo.
  */

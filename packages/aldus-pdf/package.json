@@ -1,6 +1,6 @@
 {
   "name": "aldus",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Pixel-perfect PDF editing over a PDF real content graph, plus a two-agent LLM (reader + editor). One package: the engine+agent (aldus), the embeddable React editor (aldus/editor), and a ready server (aldus/server). `aldus file.pdf` opens the full visual editor + AI in your browser.",
   "keywords": [
     "pdf",

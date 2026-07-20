@@ -101,9 +101,14 @@ Worth knowing, because it explains the UI:
   They're still undoable — Ctrl+Z calls `POST /:id/revert`, which restores the
   previous server revision.
 - **Highlights** accumulate as a preview layer and are baked with Aplicar.
-- The AI panel streams NDJSON from `POST /:id/agent` and either applies the
-  returned edits to local state or reloads the document if the agent baked
-  something the UI can't represent locally.
+- The AI panel (CASPER) streams NDJSON from `POST /:id/agent` and either applies
+  the returned edits to local state or reloads the document if the agent baked
+  something the UI can't represent locally. It has **two tabs, one per agent** —
+  **Lectura** (questions + filling form fields, whole document) and **Edición**
+  (every edit tool, scoped to the page you're viewing) — each its own
+  conversation, sent as `mode` on the wire. Both threads stay mounted, so a long
+  edit keeps running (and still applies its edits) while you read in the other
+  tab.
 
 ## Forensic mode 🐞
 

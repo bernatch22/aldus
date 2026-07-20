@@ -99,6 +99,7 @@ export {
   paraLinesOf,
   paragraphOf,
   paragraphToks,
+  ParagraphAnchorError,
   type LayoutEnv,
   type ParaLine,
   type Paragraph,

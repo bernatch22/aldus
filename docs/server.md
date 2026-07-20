@@ -107,8 +107,21 @@ Images must be PNG or JPEG.
 ### Agent
 
 ```
-POST /:id/agent   { prompt, edits?, imageEdits? }
+POST /:id/agent   { prompt, mode?, page?, edits?, imageEdits? }
 ```
+
+`mode` picks **which agent** runs the turn — the two are addressed separately,
+and the bundled UI exposes them as two chat tabs:
+
+| `mode` | Agent | Scope | Can |
+|---|---|---|---|
+| `reader` (default) | cheap, `readTurn` | the whole document | answer questions, **fill form fields** |
+| `editor` | strong, `editPages` | `page` only (all pages if omitted) | every edit tool |
+
+In `reader` mode the server does **not** wire the `editor` callback, so the
+reader never delegates and never offers `edit_document` — asked for an edit it
+says so. In `editor` mode there is no reader in front: `prompt` goes to the
+editor verbatim and the scope is `page`, not a page list a model guessed.
 
 Streams **NDJSON**, one event per line:
 
@@ -128,8 +141,9 @@ Two ways a turn ends, and the client must handle both:
 - **`edits` / `imageEdits`** — the turn only accumulated text/image edits. Apply
   them to local state; nothing was written.
 
-The agent keeps **conversational memory per document** (last 20 messages). Since
-document ids are per-visitor in scoped mode, that's naturally isolated.
+The **reader** keeps **conversational memory per document** (last 20 messages).
+Since document ids are per-visitor in scoped mode, that's naturally isolated. An
+`editor` turn is a self-contained order and carries no history.
 
 Closing the stream **cancels the turn** (the server watches `res.on('close')`).
 

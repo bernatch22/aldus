@@ -28,7 +28,9 @@ npm i aldus
 
 ```bash
 aldus doc.pdf                                         # visual editor + AI in your browser
-aldus doc.pdf "Highlight the totals" -o out.pdf       # one-shot agent
+aldus doc.pdf --chat                                  # conversation in the terminal
+aldus ask  doc.pdf "What are the payment terms?"      # reader → answer on stdout
+aldus edit doc.pdf "Highlight the totals" -o out.pdf  # editor → a new PDF
 aldus form.pdf --fields                               # dump fields + positions (no LLM)
 aldus form.pdf --fill '{"name":"Ana"}' -o filled.pdf  # fill by name (no LLM)
 ```

@@ -3,6 +3,94 @@
 Newest first; dates `YYYY-MM-DD`. This file is the source of truth for the notes
 of every GitHub Release.
 
+## 0.4.0 — 2026-07-20 — two agents you can address separately, and a CLI that matches its docs
+
+### The editor finally sees the document as it *is*
+
+The graph is extracted from the PDF on disk, but edits live in the session's
+ledger — so the editor was reading the document as it was **before its own
+changes**. On a second turn it would quote text it had already replaced and
+anchor to nodes it had deleted. Both agents now serialize an **effective view**:
+the graph with the pending ledger applied.
+
+Each successful tool call also returns a **diff of what actually changed**,
+replacing the old "±2 neighbours of the page in the `id` argument" snippet. That
+snippet failed precisely for the tools that move the document most:
+`placeholders_to_fields_batch` takes `groups[]` and `replace_section` takes
+`start_id`/`end_id` — neither has an `id` or `page` argument, so the model got
+*nothing* back and burned calls guessing at the new state.
+
+### Reader and editor are now two agents you address separately
+
+They were always two models, but only reachable as one pipeline: the reader read
+the document and decided whether to delegate. Now each is addressable on its own,
+because the useful distinction isn't which model runs — it's **what comes out the
+other end**.
+
+- **HTTP**: `POST /:id/agent` takes `mode: 'reader' | 'editor'`. In `reader` mode
+  the server doesn't wire the editor callback at all, so the reader has no
+  `edit_document` tool and can't pretend it edited something.
+- **The editor UI**: CASPER has two tabs (*Lectura* / *Edición*), one conversation
+  each. Both threads stay mounted, so a long edit keeps running — and still
+  applies its edits — while you read in the other tab. The editor tab is scoped to
+  the page you're looking at, instead of to a page list a cheap model guessed.
+- **The CLI**: one verb per agent — `aldus ask` writes text to stdout (so it
+  pipes), `aldus edit` writes a PDF (so it takes `-o` and `--pages`).
+
+Routing didn't go away: it's `aldus edit --auto`, and passing `editor:` to
+`readTurn` still gives the reader its `edit_document` tool. It's now a choice
+rather than the only path.
+
+### The reader fills form fields on its own
+
+`fill_field` / `fill_fields` moved to `level: 'both'`. Filling a form needs a
+field *name*, not the graph — so sending it to the expensive editor with the full
+page graph was wasted money. The reading view now lists each field with its
+current value and the text sitting next to it, because the raw field names are
+usually opaque (`id-1234`) and without that label the model can't tell which is
+which.
+
+Fixed alongside: a **document-less turn** (a host's org-level chat, no
+`doc`/`session`) was being offered those `'both'` tools, which would have failed
+against a session that doesn't exist. The registry now filters them out.
+
+### The CLI does what the READMEs said it did
+
+Three commands were documented — in the README that **ships to npm** — and did not
+exist. Anyone who installed `aldus` and followed it got an error. They exist now:
+
+- `aldus <pdf>` — the visual editor. The whole pipeline was already there
+  (`openInEditor`, the bundled server, the SPA in `dist/editor`); only the CLI
+  branch was missing.
+- `aldus <pdf> --fields` — every field as JSON on stdout, pipeable.
+- `aldus <pdf> --fill '{…}'` — fill by name, plus `--flatten`. Both are
+  deterministic: no model, no API key, and they resolve before the agent
+  container is even built.
+- `aldus <pdf> --chat` — a terminal conversation mirroring the two tabs, with
+  `/ask`, `/edit`, `/pages`, `/save`, `/status`.
+
+Also fixed: an **unknown flag is now an error**. It used to fall through as a
+positional argument, so `aldus doc.pdf --chat` didn't say "I don't know `--chat`",
+it said "`aldus <pdf>` takes no prompt" — an error that points nowhere.
+
+And a failing turn now explains itself. An expired session or an empty balance
+used to print a raw SDK stack trace; it now names the agent, the model, and the
+provider that model actually goes through, with the command to fix it.
+
+### Documentation that stopped lying
+
+- **`ARCHITECTURE.md`** (new) — the packages and which two are published, the
+  layering, the graph model, the bake, the two agents, and every extension point.
+- **The agent's environment variables were entirely fictional.** `ALDUS_PROVIDER`,
+  `ALDUS_MODEL`, `ALDUS_CHAT_MODEL`, `ALDUS_OPENROUTER_MODEL` and
+  `ALDUS_OPENROUTER_CHAT_MODEL` do not exist and never did. The real ones are
+  `ALDUS_READER_MODEL` and `ALDUS_EDITOR_MODEL` — and there is **no provider
+  knob**: the transport is derived from the model id (`vendor/slug` → OpenRouter,
+  `claude-*` → Claude SDK).
+- The README's first two code samples didn't compile — they imported
+  `extractPageGraph` and `mergeSegmentEdit`, neither of which `aldus` re-exports.
+  Every symbol in the README is now verified against the package's actual exports.
+
 ## 0.3.1 — 2026-07-19 — hotfix: never let the reasoning opt-out cost a turn
 
 `0.3.0` sent `reasoning: {enabled: false}` on every OpenRouter request. Endpoints

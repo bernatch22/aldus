@@ -1,5 +1,6 @@
 /**
- * build.mjs — empaqueta `aldus-pdf` para npm, ADELGAZADO vs v1 (audit §3.6):
+ * build.mjs — empaqueta `aldus` para npm (la CARPETA se llama aldus-pdf por
+ * historia; el paquete publicado es `aldus`), ADELGAZADO vs v1 (audit §3.6):
  * core y agent buildean su PROPIO dist tipado (tsup) y todo acá se bundlea
  * CONTRA esos dist resueltos por node_modules — muere el hack alias-a-source
  * con su gotcha de prefijos (§4.4). Deps de npm quedan EXTERNAL (el consumidor
@@ -94,12 +95,12 @@ await build({
   outfile: path.join(dir, 'dist/server-impl.mjs'),
 });
 writeFileSync(path.join(dir, 'dist/server.mjs'), `#!/usr/bin/env node
-// aldus-pdf server launcher — express/multer son optionalDependencies.
+// aldus server launcher — express/multer son optionalDependencies.
 try {
   await import('express');
   await import('multer');
 } catch {
-  console.error('aldus-pdf: el modo server necesita express y multer (optionalDependencies).');
+  console.error('aldus: el modo server necesita express y multer (optionalDependencies).');
   console.error('Instalalos en tu proyecto:  npm i express multer');
   process.exit(1);
 }

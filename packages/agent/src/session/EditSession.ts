@@ -95,6 +95,16 @@ export class EditSession {
    *  tool calls de flailing en un run real de Sonnet. El id es INMUTABLE (nace
    *  de la posición ORIGINAL del nodo); acá se lo decimos y le damos los ids
    *  verdaderos más cercanos a la posición que intentó, para cortar el loop en 1. */
+  /** Precondición de TODA operación de párrafo: el ancla tiene que seguir viva.
+   *  Un nodo ELIMINADO en esta sesión ya no está en su columna, y el motor de
+   *  layout no puede anclarse (antes reventaba con un TypeError que el registry
+   *  mostraba como "⚠️ error interno" — el modelo reintentaba, el dedupe lo
+   *  bloqueaba, y el turno moría en loop). Devuelve el ⚠️ accionable o null. */
+  private removedGuard(id: string, verb: string): string | null {
+    if (!this.isRemoved(id)) return null;
+    return `⚠️ No puedo ${verb} "${id}": ese nodo YA FUE ELIMINADO en esta sesión (el contenido de abajo subió a ocupar su lugar). No lo referencies más — mirá el estado actualizado y usá un id que siga vivo, o agregá el texto nuevo con add_text.`;
+  }
+
   private notFound(id: string, what = 'el nodo de texto'): string {
     let near = '';
     const m = /^p(\d+)-y(\d+)(?:-x(\d+))?/.exec(id);
@@ -185,6 +195,8 @@ export class EditSession {
     if (looksLikeLeaderRewrite(s.text, text)) {
       return `⚠️ ${id} contiene placeholders (puntos/guiones o rellenos XXXX/xxx/***). NO los reescribas con edit_text: escribir espacios, "DD/MM/AAAA" o "[Etiqueta]" NO crea un campo rellenable y rompe el layout. Usá placeholders_to_fields(id, fields=[{placeholder,name}]) — convierte cada hueco en un campo AcroForm real (los rellenos los elimina sola).`;
     }
+    const gone = this.removedGuard(id, 'editar');
+    if (gone) return gone;
     const styled = applyTextDiff(originalStyledRuns(s), text);
 
     // ¿Entra en el renglón? Estimo con el ancho medio REAL del segmento (incluye
@@ -469,6 +481,8 @@ export class EditSession {
   async replaceParagraph(id: string, text: string, endId?: string): Promise<string> {
     const s = this.index.seg(id); if (!s) return this.notFound(id);
     if (!text.trim()) return `⚠️ replace_paragraph necesita el texto nuevo (para borrar usá delete_text).`;
+    const gone = this.removedGuard(id, 'reemplazar el párrafo de') ?? (endId ? this.removedGuard(endId, 'usar como end_id') : null);
+    if (gone) return gone;
     const env = this.reflowEnv();
     let para = paragraphOf(this.pageOf(s), s, env);
     if (endId && endId !== id) {
@@ -503,8 +517,16 @@ export class EditSession {
         paraBottom: lines[lines.length - 1]!.baseline,
       };
     }
-    if (para.lines.some(l => this.isRestyled(l.seg.id))) {
-      return `↩︎ Ese párrafo/bloque ya fue modificado en esta sesión — no repitas la llamada (una sola llamada cubre toda la cláusula con end_id).`;
+    // GUARD DE IDEMPOTENCIA, no candado: repetir la MISMA llamada (mismo texto
+    // resultante) no hace nada; pedir un texto DISTINTO sobre un párrafo ya
+    // editado es una edición legítima y DEBE correr. Antes se bloqueaba por
+    // "ya fue tocado", así que un segundo cambio sobre el mismo párrafo era
+    // imposible en la sesión — el usuario editaba y "ya no lo encontraba".
+    const currentText = para.lines
+      .map(l => this.effectiveView()(l.seg.id)?.text ?? l.text)
+      .join(' ').replace(/\s+/g, ' ').trim();
+    if (currentText === text.replace(/\s+/g, ' ').trim()) {
+      return `↩︎ Ese párrafo ya dice exactamente eso — no repitas la llamada.`;
     }
     // GUARDRAIL a nivel BLOQUE (criterio de INTENCIÓN, no de pérdida — una
     // reescritura legítima de cláusula puede rozar leaders vecinos): párrafo con
@@ -585,6 +607,8 @@ export class EditSession {
     const s = this.index.seg(id);
     if (!s) return this.notFound(id);
     if (!fields.length) return `⚠️ placeholders_to_fields necesita al menos un {placeholder,name}.`;
+    const gone = this.removedGuard(id, 'convertir placeholders en');
+    if (gone) return gone;
     const page = this.pageOf(s);
     const env = this.reflowEnv();
     const para = paragraphOf(page, s, env);
@@ -700,6 +724,69 @@ export class EditSession {
         edited: !!e && e.remove !== true,
       };
     });
+  }
+
+  /**
+   * La vista EFECTIVA para SERIALIZAR el prompt: qué dice hoy cada nodo tocado
+   * y cuáles ya no están. El grafo se extrae del PDF en disco y no cambia
+   * durante el turno, así que sin esto el modelo ve el documento ANTES de sus
+   * propias ediciones — en el 2º turno cita textos que ya reemplazó y ancla en
+   * nodos que borró. `undefined` = ese nodo no fue tocado.
+   */
+  effectiveView(): (segmentId: string) => { text: string; removed: boolean } | undefined {
+    const snap = this.ledger.snapshot().segments;
+    return id => {
+      const e = snap.get(id);
+      if (!e) return undefined;
+      if (e.remove) return { text: '', removed: true };
+      const text = e.text ?? (e.runs ? e.runs.map(r2 => r2.text).join('') : undefined);
+      return text === undefined ? undefined : { text, removed: false };
+    };
+  }
+
+  /**
+   * Foto del texto EFECTIVO de la página (id → texto, o `null` si está
+   * eliminado). Se toma ANTES de una tool call para poder decir DESPUÉS qué
+   * cambió exactamente ({@link diffFrom}).
+   */
+  snapshotText(): Map<string, string | null> {
+    const eff = this.effectiveView();
+    const out = new Map<string, string | null>();
+    for (const p of this.doc.pages) {
+      for (const s of p.segments) {
+        const e = eff(s.id);
+        out.set(s.id, e?.removed ? null : (e?.text ?? s.text));
+      }
+    }
+    return out;
+  }
+
+  /**
+   * EL DIFF de una tool call: qué nodos cambiaron de texto y cuáles se
+   * eliminaron, comparado contra una foto previa. Es lo que el modelo necesita
+   * para NO tener que adivinar el estado en el turno siguiente: sin esto
+   * reemplazaba un párrafo, el reflow reacomodaba la zona, y después gastaba
+   * llamadas a ciegas ("parece que ese párrafo ya no contiene el texto
+   * original… reviso el estado actual"). Solo texto/existencia — un corrimiento
+   * de baseline no es información útil para el modelo (la geometría la maneja
+   * el código) y llenaría el diff de ruido.
+   */
+  diffFrom(before: Map<string, string | null>, limit = 12): string[] {
+    const now = this.snapshotText();
+    const lines: string[] = [];
+    let extra = 0;
+    for (const [id, after] of now) {
+      const prev = before.get(id);
+      if (prev === after) continue;
+      if (lines.length >= limit) { extra++; continue; }
+      const seg = this.index.seg(id);
+      const at = seg ? ` @(${Math.round(seg.x)},${Math.round(this.effBaseline(seg))})` : '';
+      lines.push(after === null
+        ? `- ${id}${at}: ELIMINADO`
+        : `- ${id}${at}: ${JSON.stringify(after.length > 90 ? `${after.slice(0, 90)}…` : after)}`);
+    }
+    if (extra) lines.push(`- (+${extra} nodo/s más cambiados)`);
+    return lines;
   }
 
   /** Ediciones de texto/imagen acumuladas (lo que el editor sabe aplicar a su

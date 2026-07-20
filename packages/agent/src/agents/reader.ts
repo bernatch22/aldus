@@ -194,7 +194,7 @@ export async function readTurn(
         return `⚠️ el editor no pudo correr: ${err instanceof Error ? err.message : 'error interno'}. Contale al usuario.`;
       }
     }
-    return dispatch(name, args);
+    return (await dispatch(name, args)).message;
   };
 
   const res = await transport.chat({

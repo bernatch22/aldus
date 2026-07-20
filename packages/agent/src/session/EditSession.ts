@@ -603,6 +603,38 @@ export class EditSession {
    *    imposible pisar texto.
    * `id` = cualquier línea del párrafo; `fields` en orden.
    */
+  /**
+   * El id ANCLA del PÁRRAFO al que pertenece una línea: dos ids distintos que
+   * caen en el mismo párrafo devuelven el MISMO ancla.
+   *
+   * {@link placeholdersToFields} trabaja por PÁRRAFO, no por línea — convierte
+   * TODOS sus huecos en una pasada porque el reflow es uno solo. Pero el modelo
+   * ve el grafo por LÍNEAS y no tiene cómo saber cuáles forman un párrafo, así
+   * que manda un grupo por línea. Las líneas 2..N chocaban entonces con el
+   * anti-recall (`↩︎ ya fue convertido`) y sus nombres semánticos se PERDÍAN:
+   * el barrido ya había convertido esos huecos como `campo_N`. Con esto el
+   * batch fusiona los grupos ANTES de ejecutar y los nombres se aprovechan.
+   */
+  /** Cuántos CAMPOS lleva encolados esta sesión. Permite contar lo que creó una
+   *  operación por DIFERENCIA (antes/después) en vez de sacarle el número al
+   *  mensaje con un regex — el batch hacía `/^✓ (\d+) campo/` sobre el texto que
+   *  la propia operación le devolvía. */
+  get queuedFieldCount(): number {
+    return this.creates.filter(c => c.kind === 'field').length;
+  }
+
+  paragraphAnchor(id: string): string | null {
+    const s = this.index.seg(id);
+    if (!s) return null;
+    try {
+      return paragraphOf(this.pageOf(s), s, this.reflowEnv()).lines[0]?.seg.id ?? s.id;
+    } catch {
+      // ParagraphAnchorError (el ancla no se puede resolver) → que quede como su
+      // propio párrafo; placeholdersToFields devolverá el ⚠️ concreto.
+      return s.id;
+    }
+  }
+
   async placeholdersToFields(id: string, fields: Array<{ placeholder: string; name: string; width?: number }>): Promise<string> {
     const s = this.index.seg(id);
     if (!s) return this.notFound(id);

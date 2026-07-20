@@ -105,10 +105,14 @@ Worth knowing, because it explains the UI:
   the returned edits to local state or reloads the document if the agent baked
   something the UI can't represent locally. It has **two tabs, one per agent** —
   **Lectura** (questions + filling form fields, whole document) and **Edición**
-  (every edit tool, scoped to the page you're viewing) — each its own
-  conversation, sent as `mode` on the wire. Both threads stay mounted, so a long
-  edit keeps running (and still applies its edits) while you read in the other
-  tab.
+  (every edit tool) — each its own conversation, sent as `mode` on the wire.
+  Both threads stay mounted, so a long edit keeps running (and still applies its
+  edits) while you read in the other tab.
+- The **Edición** tab picks its own scope: *esta* (the page you're viewing, the
+  default), *todas*, or *elegir* with a range like `1, 3, 5-7`. Past one page a
+  checkbox chooses between **one editor per page in parallel** (fast, small
+  prompts) and one editor that sees them all — which you need when the edit
+  crosses pages.
 
 ## Forensic mode 🐞
 

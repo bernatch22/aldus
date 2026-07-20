@@ -761,6 +761,7 @@ export function AldusEditor({
             api={api}
             docId={id}
             page={pageNum}
+            numPages={numPages}
             edits={view.edits}
             imageEdits={view.imageEdits}
             onApply={(segEdits, imgEdits) => adapter.applyAgentEdits(segEdits, imgEdits)}

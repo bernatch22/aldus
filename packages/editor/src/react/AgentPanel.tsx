@@ -19,7 +19,7 @@
  * ediciones al terminar — aunque te vayas a la pestaña del reader, y ninguna de
  * las dos conversaciones se pierde al cambiar de tab.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Sparkles, Send, X, Square, BookOpen, PenLine } from 'lucide-react';
 import { createLogger, type ImageEdit, type SegmentEdit } from '@aldus/core';
 import type { AgentMode, AgentRole, AldusApi } from '../core/index.js';
@@ -79,6 +79,26 @@ function appendText(parts: Part[], delta: string, agent: AgentRole): Part[] {
 type Row = { kind: 'text'; text: string } | { kind: 'tools'; names: string[] };
 type Block = { agent: AgentRole; rows: Row[] };
 
+/** Qué páginas puede tocar el editor. `custom` = las que el usuario escribió. */
+type Scope = 'page' | 'all' | 'custom';
+
+/** "1, 3, 5-7" → [1,3,5,6,7]. Acotado a [1..max], sin duplicados, ordenado.
+ *  Lo que no parsea se IGNORA en silencio: el usuario está tipeando, y la lista
+ *  resuelta se le muestra al lado — no hace falta gritarle a media palabra. */
+function parsePages(spec: string, max: number): number[] {
+  const out = new Set<number>();
+  for (const part of spec.split(',')) {
+    const range = /^\s*(\d+)\s*-\s*(\d+)\s*$/.exec(part);
+    if (range) {
+      const [a, b] = [Number(range[1]), Number(range[2])].sort((x, y) => x - y);
+      for (let i = a!; i <= b!; i++) out.add(i);
+    } else if (/^\s*\d+\s*$/.test(part)) {
+      out.add(Number(part));
+    }
+  }
+  return [...out].filter(n => n >= 1 && n <= max).sort((a, b) => a - b);
+}
+
 /** Agrupa las partes en BLOQUES contiguos por agente, y dentro de cada bloque
  *  en filas (texto suelto / fila de tools) en orden cronológico. */
 function groupParts(parts: Part[]): Block[] {
@@ -100,8 +120,10 @@ function groupParts(parts: Part[]): Block[] {
 interface Props {
   api: AldusApi;
   docId: string;
-  /** Página que el usuario está viendo → el agente solo recibe ESA página. */
+  /** Página que el usuario está viendo — el scope POR DEFECTO del editor. */
   page: number;
+  /** Total de páginas: habilita elegir "todas" o un rango en el tab de Edición. */
+  numPages: number;
   edits: ReadonlyMap<string, SegmentEdit>;
   imageEdits: ReadonlyMap<string, ImageEdit>;
   onApply: (edits: SegmentEdit[], imageEdits: ImageEdit[]) => void;
@@ -154,7 +176,7 @@ const MODES: Record<AgentMode, {
   },
 };
 
-export function AgentPanel({ api, docId, page, edits, imageEdits, onApply, onReload, onClose }: Props) {
+export function AgentPanel({ api, docId, page, numPages, edits, imageEdits, onApply, onReload, onClose }: Props) {
   const [mode, setMode] = useState<AgentMode>('reader');
 
   return (
@@ -200,7 +222,7 @@ export function AgentPanel({ api, docId, page, edits, imageEdits, onApply, onRel
           key={m}
           mode={m}
           active={m === mode}
-          api={api} docId={docId} page={page}
+          api={api} docId={docId} page={page} numPages={numPages}
           edits={edits} imageEdits={imageEdits}
           onApply={onApply} onReload={onReload}
         />
@@ -214,10 +236,18 @@ type ThreadProps = Omit<Props, 'onClose'> & { mode: AgentMode; active: boolean }
 /** UNA conversación con UN agente. Se monta una por modo y solo se oculta la
  *  inactiva — nunca se desmonta, así el turno en vuelo sobrevive al cambio de
  *  pestaña (y aplica sus ediciones al terminar). */
-function AgentThread({ mode, active, api, docId, page, edits, imageEdits, onApply, onReload }: ThreadProps) {
+function AgentThread({ mode, active, api, docId, page, numPages, edits, imageEdits, onApply, onReload }: ThreadProps) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  // SCOPE del editor. Default 'page': lo que estás mirando es lo que se edita,
+  // y una edición no se dispara nunca sobre páginas que no tenías a la vista.
+  const [scope, setScope] = useState<Scope>('page');
+  const [spec, setSpec] = useState('');
+  // Con varias páginas, un editor POR PÁGINA en paralelo mantiene chico el
+  // prompt de cada uno (y es mucho más rápido). Se apaga para una edición que
+  // CRUZA páginas, donde un editor tiene que ver ambos extremos.
+  const [parallel, setParallel] = useState(true);
   const [nowTick, setNowTick] = useState(0); // re-render mientras esperamos, para el aviso de 5s
   const sessionId = useRef<string | undefined>(undefined);
   const turns = useRef(0); // cuántos turnos van (para saber si es el primero)
@@ -227,6 +257,17 @@ function AgentThread({ mode, active, api, docId, page, edits, imageEdits, onAppl
    *  desde acá — antes había que esperar a que se agotara el presupuesto. */
   const abort = useRef<AbortController | null>(null);
   const copy = MODES[mode];
+
+  /** Las páginas que va a recibir el editor, ya resueltas. */
+  const targetPages = useMemo(() => {
+    if (mode !== 'editor') return [];
+    if (scope === 'all') return Array.from({ length: numPages }, (_, i) => i + 1);
+    if (scope === 'custom') return parsePages(spec, numPages);
+    return [page];
+  }, [mode, scope, spec, page, numPages]);
+  // Un rango escrito que no resuelve a nada = no hay dónde editar: mejor
+  // bloquear el envío que mandar un turno que el server interpreta como "todas".
+  const badScope = mode === 'editor' && targetPages.length === 0;
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -251,7 +292,7 @@ function AgentThread({ mode, active, api, docId, page, edits, imageEdits, onAppl
 
   async function send(text: string) {
     const prompt = text.trim();
-    if (!prompt || busy) return;
+    if (!prompt || busy || badScope) return;
     const firstTurn = turns.current === 0;
     turns.current++;
     setMessages(m => [...m, { role: 'user', text: prompt }, { role: 'assistant', parts: [], streaming: true, startedAt: Date.now(), firstTurn }]);
@@ -262,9 +303,16 @@ function AgentThread({ mode, active, api, docId, page, edits, imageEdits, onAppl
     const patchLast = (fn: (msg: Msg) => Msg) =>
       setMessages(m => { const c = [...m]; c[c.length - 1] = fn(c[c.length - 1]!); return c; });
     try {
-      const res = await api.agentStream(
-        docId, prompt, [...edits.values()], [...imageEdits.values()], sessionId.current,
-        ev => {
+      const res = await api.agentStream(docId, prompt, {
+        edits: [...edits.values()],
+        imageEdits: [...imageEdits.values()],
+        resume: sessionId.current,
+        mode,
+        // El reader siempre ve el documento entero: el scope es cosa del editor.
+        pages: mode === 'editor' ? targetPages : undefined,
+        parallel: mode === 'editor' && targetPages.length > 1 && parallel,
+        signal: ctrl.signal,
+        onEvent: ev => {
           const agent: AgentRole = ev.agent ?? 'chat';
           if (ev.type === 'text') patchLast(msg => ({ ...msg, parts: appendText(msg.parts ?? [], ev.delta, agent) }));
           else if (ev.type === 'tool') {
@@ -272,10 +320,7 @@ function AgentThread({ mode, active, api, docId, page, edits, imageEdits, onAppl
             patchLast(msg => ({ ...msg, parts: [...(msg.parts ?? []), { kind: 'tool', name: ev.name, agent }] }));
           }
         },
-        page,
-        ctrl.signal,
-        mode,
-      );
+      });
       sessionId.current = res.sessionId ?? sessionId.current;
       log('done [%s]: toolCalls=%d edits=%d reloaded=%s', mode, res.toolCalls, res.edits.length + res.imageEdits.length, !!res.reloaded);
       if (res.reloaded) onReload(); else onApply(res.edits, res.imageEdits);
@@ -408,10 +453,62 @@ function AgentThread({ mode, active, api, docId, page, edits, imageEdits, onAppl
       </div>
 
       <div className="shrink-0 border-t border-neutral-200 p-2.5">
-        {/* El editor trabaja sobre la página ABIERTA: decirlo evita el pedido
-            "cambiá el título de la página 4" desde la 1, que no tendría scope. */}
+        {/* SCOPE explícito: qué páginas puede tocar el editor. Sin esto el
+            editor trabajaba siempre sobre la página abierta y no había forma de
+            pedir "convertí los placeholders de TODO el documento". */}
         {mode === 'editor' && (
-          <div className="px-0.5 pb-1.5 text-[10.5px] text-neutral-400">Edita la página {page}</div>
+          <div className="flex flex-col gap-1 px-0.5 pb-1.5">
+            <div className="flex items-center gap-1">
+              <span className="text-[10.5px] text-neutral-400">Editar en:</span>
+              {([
+                ['page', `esta (${page})`],
+                ['all', `todas (${numPages})`],
+                ['custom', 'elegir'],
+              ] as Array<[Scope, string]>).map(([k, label]) => (
+                <button
+                  key={k}
+                  onClick={() => setScope(k)}
+                  className={cx(
+                    'rounded px-1.5 py-0.5 text-[10.5px] font-medium transition-colors',
+                    scope === k ? 'bg-blue-100 text-blue-700' : 'text-neutral-500 hover:bg-neutral-100',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {scope === 'custom' && (
+              <input
+                value={spec}
+                onChange={e => setSpec(e.target.value)}
+                placeholder="1, 3, 5-7"
+                className={cx(
+                  'w-full rounded border px-1.5 py-0.5 text-[11px] outline-none',
+                  badScope ? 'border-red-300 focus:border-red-500' : 'border-neutral-200 focus:border-blue-500',
+                )}
+              />
+            )}
+
+            {badScope ? (
+              <span className="text-[10.5px] text-red-500">
+                Escribí al menos una página entre 1 y {numPages}.
+              </span>
+            ) : targetPages.length > 1 ? (
+              <label
+                className="flex cursor-pointer items-center gap-1 text-[10.5px] text-neutral-500"
+                title="Cada página se edita por separado y en paralelo: mucho más rápido, y cada editor ve un prompt más chico. Desactivalo si el cambio CRUZA páginas (por ejemplo reemplazar una sección que empieza en una y termina en otra), porque ahí un solo editor tiene que ver los dos extremos."
+              >
+                <input
+                  type="checkbox"
+                  checked={parallel}
+                  onChange={e => setParallel(e.target.checked)}
+                  className="h-3 w-3 accent-blue-600"
+                />
+                una por una, en paralelo ({targetPages.length} pág.)
+              </label>
+            ) : null}
+          </div>
         )}
         <div className="flex items-end gap-2">
           <textarea
@@ -436,8 +533,8 @@ function AgentThread({ mode, active, api, docId, page, edits, imageEdits, onAppl
           ) : (
             <button
               onClick={() => void send(input)}
-              disabled={!input.trim()}
-              title="Enviar (Enter)"
+              disabled={!input.trim() || badScope}
+              title={badScope ? 'Elegí al menos una página válida' : 'Enviar (Enter)'}
               className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:bg-neutral-200 disabled:text-neutral-400"
             >
               <Send size={16} />

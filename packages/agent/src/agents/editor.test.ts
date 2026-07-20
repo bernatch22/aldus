@@ -192,9 +192,38 @@ describe('editTurn (F3) — PDF real', () => {
     await editTurn({ doc, session, request: 'x', pages: [1], transport: t }, container.get(IToolRegistry), config, NeverCancelled);
 
     expect(passes).toBe(1);                                  // UNA sola llamada del modelo
-    expect(toolResult).toMatch(/^✓ \d+ campo\(s\) creados en 2 párrafo/);
+    // Párrafos DISTINTOS → no se fusionan: 2 de 2 convertidos.
+    expect(toolResult).toMatch(/^✓ \d+ campo\(s\) creados en 2\/2 párrafo/);
+    expect(toolResult).not.toContain('MISMO párrafo');
     expect(session.hasBakedOps).toBe(true);
     expect(session.count).toBeGreaterThanOrEqual(2);         // los campos de AMBOS párrafos
+  });
+
+  it('placeholders_to_fields_batch: dos grupos del MISMO párrafo se FUSIONAN (no un ↩︎ que parece fallo)', async () => {
+    const container = createAgentContainer({ config });
+    const session = new EditSession(doc);
+    const fecha = doc.pages[0].segments.find(s => s.text.startsWith('FECHA:'))!;
+    let toolResult = '';
+    const t: ILlmTransport = {
+      async chat(req) {
+        // El MISMO id dos veces = el caso real del modelo mandando dos líneas
+        // del mismo párrafo. Sin fusión, el 2º grupo devolvía ↩︎ y el head
+        // igual lo contaba como párrafo convertido.
+        toolResult = String(await req.onToolCall('placeholders_to_fields_batch', {
+          groups: [
+            { id: fecha.id, fields: [{ placeholder: 'FECHA: ....', name: 'fecha_firma' }] },
+            { id: fecha.id, fields: [{ placeholder: 'FECHA: ....', name: 'fecha_firma_dup' }] },
+          ],
+        }));
+        return { text: 'ok', toolsUsed: ['placeholders_to_fields_batch'], toolCalls: 1 };
+      },
+    };
+    await editTurn({ doc, session, request: 'x', pages: [1], transport: t }, container.get(IToolRegistry), config, NeverCancelled);
+
+    // UN solo párrafo real: el head lo dice, y no hay ningún ↩︎ que interpretar.
+    expect(toolResult).toMatch(/^✓ \d+ campo\(s\) creados en 1\/1 párrafo/);
+    expect(toolResult).toContain('MISMO párrafo');           // explicado, no escondido
+    expect(toolResult).not.toContain('↩︎');
   });
 
   it('placeholders_to_fields_batch: un grupo malo NO tumba a los buenos', async () => {
@@ -215,7 +244,8 @@ describe('editTurn (F3) — PDF real', () => {
     };
     await editTurn({ doc, session, request: 'x', pages: [1], transport: t }, container.get(IToolRegistry), config, NeverCancelled);
 
-    expect(toolResult).toContain('1/2 párrafos');            // el bueno entró
+    expect(toolResult).toContain('1/2 párrafo');             // el bueno entró
+    expect(toolResult).toContain('1 con problema');          // y el malo se cuenta como tal
     expect(toolResult).toContain('p1-y9999-x0');             // el malo reportado
     expect(session.count).toBeGreaterThanOrEqual(1);
   });

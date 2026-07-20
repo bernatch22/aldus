@@ -25,8 +25,15 @@ export interface ToolOutcome {
   message: string;
 }
 
-/** message del protocolo → outcome (la tool habla texto; el código, data). */
-function classify(message: string): ToolOutcome {
+/**
+ * message del protocolo → outcome (la tool habla texto; el código, data).
+ *
+ * ESTE es el ÚNICO lugar que sabe qué significan los prefijos ✓/↩︎/⚠️. Todo lo
+ * demás consume {@link ToolOutcome}: si necesitás saber cómo salió una tool,
+ * mirá `code`/`ok` — nunca `message.startsWith('✓')`, que acopla el control de
+ * flujo a cómo está redactado un texto para el modelo.
+ */
+export function classify(message: string): ToolOutcome {
   if (message.startsWith('↩︎')) return { ok: true, code: 'skipped', retriable: false, message };
   if (message.startsWith('⚠️')) return { ok: false, code: 'warning', retriable: true, message };
   return { ok: true, code: 'ok', retriable: false, message };

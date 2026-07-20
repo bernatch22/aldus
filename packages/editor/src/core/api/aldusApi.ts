@@ -68,6 +68,29 @@ export interface AldusApiOptions {
   apiBase: string;
 }
 
+/** Todo lo opcional de un turno del agente. */
+export interface AgentTurnOptions {
+  /** Ediciones pendientes del editor: se siembran en la sesión del turno para
+   *  que el agente vea el documento COMO LO ESTÁS VIENDO, no como está en disco. */
+  edits?: SegmentEdit[];
+  imageEdits?: ImageEdit[];
+  /** Continúa la conversación previa (multi-turno). */
+  resume?: string;
+  /** Qué agente corre el turno. Default `reader`. */
+  mode?: AgentMode;
+  /** Las páginas que el EDITOR puede tocar (1-based). Vacío/omitido = TODAS.
+   *  Ignorado por el reader, que siempre ve el documento entero. */
+  pages?: number[];
+  /** Con varias páginas: `true` = un editor POR PÁGINA en paralelo — rápido, y
+   *  mantiene chico el prompt de cada uno, pero ninguno ve a los otros. `false` =
+   *  UN editor con todas las páginas a la vista, necesario para una edición que
+   *  CRUZA páginas (reemplazar una sección). Default `false`. */
+  parallel?: boolean;
+  onEvent?: (ev: AgentEvent) => void;
+  /** Corta el turno (y lo cancela de verdad en el server). */
+  signal?: AbortSignal;
+}
+
 export class AldusApi {
   private base: string;
 
@@ -137,28 +160,22 @@ export class AldusApi {
   /** Corre un turno del agente LLM STREAMEADO (NDJSON). `onEvent` recibe los
    *  deltas de texto y las tool calls en vivo; la promesa resuelve con el
    *  resultado final: el SET COMPLETO de ediciones (las pendientes enviadas + las
-   *  que agregó) para que el editor reemplace su estado. `resume` continúa el chat.
-   *  `mode` elige el agente ({@link AgentMode}); `page` es el scope del editor.
+   *  que agregó) para que el editor reemplace su estado.
+   *
+   *  Las opciones van en UN objeto: la firma posicional había llegado a nueve
+   *  parámetros (cuatro de ellos opcionales), donde agregar uno más significaba
+   *  contar comas en el call site.
    *
    *  `signal` CORTA el turno: abortar el fetch cierra la respuesta, y el server
    *  lo convierte en cancelación real del turno (`res.on('close') → cts.cancel()`,
    *  routes/agent.ts) — el modelo deja de girar y no se sigue gastando. Sin él,
    *  un turno que entra en loop no se podía parar desde la UI. */
-  async agentStream(
-    id: string,
-    prompt: string,
-    edits: SegmentEdit[] = [],
-    imageEdits: ImageEdit[] = [],
-    resume: string | undefined,
-    onEvent: (ev: AgentEvent) => void,
-    page?: number,
-    signal?: AbortSignal,
-    mode: AgentMode = 'reader',
-  ): Promise<AgentDone> {
+  async agentStream(id: string, prompt: string, opts: AgentTurnOptions = {}): Promise<AgentDone> {
+    const { edits = [], imageEdits = [], resume, mode = 'reader', pages, parallel, onEvent, signal } = opts;
     const res = await fetch(`${this.base}/documents/${id}/agent`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt, edits, imageEdits, resume, page, mode }),
+      body: JSON.stringify({ prompt, edits, imageEdits, resume, mode, pages, parallel }),
       signal,
     });
     if (!res.ok || !res.body) {

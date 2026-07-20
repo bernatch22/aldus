@@ -107,7 +107,7 @@ Images must be PNG or JPEG.
 ### Agent
 
 ```
-POST /:id/agent   { prompt, mode?, page?, edits?, imageEdits? }
+POST /:id/agent   { prompt, mode?, pages?, parallel?, edits?, imageEdits? }
 ```
 
 `mode` picks **which agent** runs the turn — the two are addressed separately,
@@ -116,12 +116,24 @@ and the bundled UI exposes them as two chat tabs:
 | `mode` | Agent | Scope | Can |
 |---|---|---|---|
 | `reader` (default) | cheap, `readTurn` | the whole document | answer questions, **fill form fields** |
-| `editor` | strong, `editPages` | `page` only (all pages if omitted) | every edit tool |
+| `editor` | strong, `editPages` | `pages` (all of them if omitted) | every edit tool |
 
 In `reader` mode the server does **not** wire the `editor` callback, so the
 reader never delegates and never offers `edit_document` — asked for an edit it
 says so. In `editor` mode there is no reader in front: `prompt` goes to the
-editor verbatim and the scope is `page`, not a page list a model guessed.
+editor verbatim and the scope is whatever `pages` you send, not a page list a
+model guessed.
+
+`pages` is an array of 1-based page numbers; anything that isn't a positive
+integer is dropped, and duplicates collapse. (`page`, singular, is still
+accepted for compatibility and is merged in.) With more than one page,
+`parallel` picks the shape of the run:
+
+- **`true`** — one editor **per page, in parallel**. Latency becomes the slowest
+  page instead of the sum, and each editor gets a small prompt.
+- **`false`** (default) — **one** editor with every selected page in view.
+  Required when the edit *crosses* pages, e.g. replacing a section that starts
+  on one and ends on another; a fan-out would cut it in half.
 
 Streams **NDJSON**, one event per line:
 

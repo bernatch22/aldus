@@ -3,6 +3,43 @@
 Newest first; dates `YYYY-MM-DD`. This file is the source of truth for the notes
 of every GitHub Release.
 
+## Unreleased
+
+### The editor edits the pages *you* choose
+
+The Edición tab was hard-wired to the page you happened to be viewing, so
+"convert the placeholders in the whole contract" was impossible from the UI. It
+now picks its scope — *esta* / *todas* / a range like `1, 3, 5-7` — and past one
+page, a checkbox chooses between one editor per page in parallel (fast, small
+prompts) and a single editor that sees them all, which is what an edit crossing
+pages needs. On the wire: `pages[]` and `parallel` (`page` still accepted).
+
+`AldusApi.agentStream` now takes `(id, prompt, options)`. **Breaking**: the
+positional form had reached nine parameters, four of them optional, and adding
+one more meant counting commas at the call site.
+
+### A tool's outcome stops being guessed from its text
+
+`dedupedDispatch` computed a structured `ToolOutcome` — `ok`, `code`,
+`retriable` — and then threw everything but `.message` away, so callers
+re-derived the result by sniffing the prefix (`msg.startsWith('✓')`). The ✓ is
+presentation for the model; making control flow depend on it means a tool that
+rewords its message breaks a caller across the package. Dispatch now returns the
+outcome, and `classify()` is the only place that knows what the prefixes mean.
+
+### `placeholders_to_fields_batch` stops reporting work it didn't do
+
+Conversion works per **paragraph**, but the model sends one group per **line**,
+so its sibling lines came back `↩︎ already converted` — correct, since the first
+call converts the whole paragraph. The batch counted those as converted anyway:
+"✓ N fields in 3 paragraphs" while two did nothing, contradicting its own
+per-group lines. The model noticed and burned turns re-verifying.
+
+Groups that resolve to the same paragraph are now **merged before running**, so
+the semantic names the model chose for those lines get used instead of being
+swept up as `campo_N`. Skips are counted separately from failures, and the field
+count comes from the session, not a regex over the previous message.
+
 ## 0.4.0 — 2026-07-20 — two agents you can address separately, and a CLI that matches its docs
 
 ### The editor finally sees the document as it *is*

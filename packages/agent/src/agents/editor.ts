@@ -138,10 +138,12 @@ export async function editTurn(
     // `start_id`/`end_id`: sin `id` ni `page`, el modelo no recibía NADA y
     // gastaba llamadas a ciegas para adivinar el estado).
     const before = opts.session.snapshotText();
-    const msg = await dispatch(name, args);
-    if (!msg.startsWith('✓')) return msg;
+    const res = await dispatch(name, args);
+    // `code === 'ok'` = se aplicó algo. Un 'skipped' (↩︎) o un 'warning' (⚠️) no
+    // tocaron el documento, así que no hay diff que mostrar.
+    if (res.code !== 'ok') return res.message;
     const diff = opts.session.diffFrom(before);
-    return diff.length ? `${msg}\n\n[cambió en el documento]\n${diff.join('\n')}` : msg;
+    return diff.length ? `${res.message}\n\n[cambió en el documento]\n${diff.join('\n')}` : res.message;
   });
 
   const res = await transport.chat({

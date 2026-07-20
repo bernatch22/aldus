@@ -62,14 +62,22 @@ export function agentRouter(sinkFor: AgentSinkFactory): Router {
     const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : '';
     if (!prompt) throw badRequest('Body esperado: { prompt } (+ mode, edits, imageEdits, page opcionales).');
     const mode: 'reader' | 'editor' = req.body?.mode === 'editor' ? 'editor' : 'reader';
-    // La página que el usuario está viendo: EL scope del editor. Sin ella el
-    // editor recibe el documento entero (docs chicos), que es el default de
-    // editPages.
-    const page = Number.isInteger(req.body?.page) && req.body.page > 0 ? req.body.page as number : undefined;
+    // EL SCOPE del editor: las páginas que puede tocar. Vacío = todas.
+    // `page` (singular) sigue aceptándose por compatibilidad.
+    const one = Number.isInteger(req.body?.page) && req.body.page > 0 ? [req.body.page as number] : [];
+    const pages = (Array.isArray(req.body?.pages) ? req.body.pages as unknown[] : [])
+      .filter((n): n is number => Number.isInteger(n) && (n as number) > 0)
+      .concat(one)
+      .filter((n, i, a) => a.indexOf(n) === i)
+      .sort((a, b) => a - b);
+    // Con varias páginas: un editor POR PÁGINA (rápido, prompts chicos) vs UNO
+    // que las ve todas (necesario si la edición cruza páginas). Default seguro:
+    // uno solo — una edición que cruza páginas con fan-out se parte al medio.
+    const parallel = req.body?.parallel === true;
     const edits = Array.isArray(req.body?.edits) ? req.body.edits : [];
     const imageEdits = Array.isArray(req.body?.imageEdits) ? req.body.imageEdits : [];
     const t0 = Date.now();
-    log(`← id=${id.slice(0, 8)} mode=${mode}${page ? ` p${page}` : ''} prompt=${JSON.stringify(prompt.slice(0, 60))} seed=${edits.length}+${imageEdits.length}`);
+    log(`← id=${id.slice(0, 8)} mode=${mode}${pages.length ? ` p${pages.join(',')}${parallel ? ' ∥' : ''}` : ''} prompt=${JSON.stringify(prompt.slice(0, 60))} seed=${edits.length}+${imageEdits.length}`);
 
     const sink = sinkFor(res);
     // Cliente que corta el stream (cierra el panel, recarga) → cancelar el
@@ -88,7 +96,7 @@ export function agentRouter(sinkFor: AgentSinkFactory): Router {
         // DIRECTO al editor: el scope son las páginas que la UI dice (la abierta),
         // y el pedido es el prompt tal cual. Sin reader que reescriba ni decida.
         const r = await editPages(
-          { doc, session, request: prompt, pages: page ? [page] : undefined, onEvent: ev => sink.send(ev) },
+          { doc, session, request: prompt, pages: pages.length ? pages : undefined, parallel, onEvent: ev => sink.send(ev) },
           registry, config, cts.token,
         );
         toolCalls += r.toolCalls;

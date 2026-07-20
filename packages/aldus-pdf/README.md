@@ -20,10 +20,6 @@ npm i aldus
 | `aldus/server` | a ready-to-run backend — [Server](https://github.com/bernatch22/aldus/blob/main/docs/server.md) |
 | `aldus` (bin) | the CLI — [CLI](https://github.com/bernatch22/aldus/blob/main/docs/cli.md) |
 
-> **Migrating?** `aldus` replaces **`aldus-pdf`** (now `aldus`) and
-> **`aldus-editor`** (now the `aldus/editor` subpath). Both are deprecated — the
-> APIs are the same, just swap the import.
-
 ## Quick start
 
 ```bash

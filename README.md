@@ -18,10 +18,6 @@ npm i aldus        # library + editor + server + the `aldus` CLI
 aldus contract.pdf # opens the visual editor in your browser
 ```
 
-> **Migrating from `aldus-pdf` / `aldus-editor`?** Both are deprecated in favour
-> of the single **`aldus`** package: `aldus-pdf` → `aldus`, and `aldus-editor` →
-> the `aldus/editor` subpath. Same APIs, just swap the import.
-
 ## Documentation
 
 | Doc | What's in it |
@@ -152,7 +148,7 @@ import { loadDoc, EditSession } from 'aldus';
 const doc = await loadDoc('contract.pdf');
 const session = new EditSession(doc);
 
-session.editText('p1-y708-x72', 'FINAL');
+await session.editText('p1-y708-x72', 'FINAL');   // async: it may reflow the paragraph
 session.fillFields([{ name: 'signer', value: 'Jane Doe' }]);
 
 const { applied, warnings } = await session.save('out.pdf');

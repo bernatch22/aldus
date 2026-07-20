@@ -166,11 +166,15 @@ const { pdf, applied, warnings } = await bake(bytes, edits);
 
 **Forms**: `readFormFields` · `setFieldValues` · `flattenForm`
 
+These take **bytes**, not a path — they're the stateless layer:
+
 ```ts
-const fields = await readFormFields('form.pdf');
+const bytes = new Uint8Array(await readFile('form.pdf'));
+
+const fields = await readFormFields(bytes);
 // → [{ name, type, value, options, readOnly, rects: [{ page, x, y, width, height }] }, …]
 
-const { pdf } = await setFieldValues(bytes, { name: 'Jane Doe', agrees: 'true' });
+const { pdf } = await setFieldValues(bytes, { name: 'Jane Doe', agrees: true });
 ```
 
 Field types: `text · checkbox · radio · select · list · button · signature`.
@@ -181,7 +185,7 @@ Field types: `text · checkbox · radio · select · list · button · signature
 
 ## What the root re-exports
 
-Verified against the published `aldus@0.1.0` type declarations:
+Verified against `packages/agent/src/index.ts`, which *is* the published root:
 
 **Nodes & graph** — `PageGraph`, `SegmentNode`, `TextRunNode`, `LineNode`,
 `ImageNode`, `ShapeNode`, `LinkNode`, `HighlightNode`, `WidgetNode`,

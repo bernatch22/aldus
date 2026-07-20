@@ -1,6 +1,7 @@
 {
   "name": "@aldus/core",
   "version": "0.0.1",
+  "private": true,
   "type": "module",
   "description": "El motor de Aldus v2: common (Layer 0), container, errores estructurados, modelo tipado del grafo (model/), extracción (graph/) y protocolo PDF (pdf/). El bake/edit/layout llegan en F3-F4.",
   "exports": {

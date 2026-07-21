@@ -33,7 +33,7 @@ export function probe(step: string, extra?: Record<string, unknown>): void {
   if (step === 'render:start') {
     const now = Date.now();
     startWindow.push(now);
-    while (startWindow.length && now - startWindow[0] > 10_000) startWindow.shift();
+    while (startWindow.length && now - startWindow[0]! > 10_000) startWindow.shift();
     if (startWindow.length > 6 && !loopFlagged) {
       loopFlagged = true;
       trail.push({ t: now, step: 'loop:suspect', startsIn10s: startWindow.length });
@@ -49,7 +49,7 @@ function reportPreviousSession(): void {
   let prev: ProbeEntry[] = [];
   try { prev = JSON.parse(localStorage.getItem(KEY) ?? '[]') as ProbeEntry[]; } catch { prev = []; }
   if (prev.length === 0) return;
-  const last = prev[prev.length - 1];
+  const last = prev[prev.length - 1]!;
   if (last.step !== 'render:done') {
     const tail = prev.slice(-15).map(e => `${new Date(e.t).toISOString().slice(11, 23)} ${e.step} ${JSON.stringify({ ...e, t: undefined, step: undefined })}`);
     // eslint-disable-next-line no-console

@@ -14,7 +14,7 @@
  */
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
-import { cpSync, rmSync, writeFileSync, readFileSync, statSync } from 'node:fs';
+import { cpSync, rmSync, writeFileSync, readFileSync, statSync, readdirSync, mkdirSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import path from 'node:path';
 
@@ -117,4 +117,48 @@ cpSync(path.join(repo, 'packages/editor/dist-demo'), path.join(dir, 'dist/editor
 run('pnpm --filter aldus-editor build');
 cpSync(path.join(repo, 'packages/editor/dist-lib'), path.join(dir, 'dist/editor-lib'), { recursive: true });
 
-console.log('✓ dist/index.js (+d.ts) + dist/cli.js + dist/server.mjs(+impl) + dist/editor/ (SPA) + dist/editor-lib/ (React)');
+// 6b. Los TIPOS del editor (dist/editor-lib/types/**) — hasta 0.5.1 el subpath
+//     `aldus/editor` se publicaba SIN .d.ts: en el host TODO era `any` (TS7016)
+//     y un breaking del wire (agentStream 0.4.0) pasó sin que tsc chistara.
+//     tsc emite el árbol 1:1 (no hay flattener que sobreviva a este monorepo —
+//     ver 2b) y acá se reescriben los specifiers `@aldus/core*` a rutas
+//     RELATIVAS al `dist/_core` que YA viaja en el paquete. CSS side-effect
+//     imports fuera (un `.d.ts` no puede importar css). Tests y la entry demo
+//     no son superficie: no viajan.
+assembleEditorTypes();
+function assembleEditorTypes() {
+  const editorDir = path.join(repo, 'packages/editor');
+  const typesOut = path.join(editorDir, 'dist-lib-types');
+  rmSync(typesOut, { recursive: true, force: true });
+  run('pnpm exec tsc -p tsconfig.json --noEmit false --emitDeclarationOnly --declaration --outDir dist-lib-types --rootDir src', { cwd: editorDir });
+
+  const destRoot = path.join(dir, 'dist/editor-lib/types');
+  const walk = (d) => readdirSync(d, { withFileTypes: true }).flatMap(e =>
+    e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]);
+  for (const abs of walk(typesOut)) {
+    const rel = path.relative(typesOut, abs);
+    if (!abs.endsWith('.d.ts') || /\.test\.d\.ts$/.test(rel) || rel === 'index.d.ts') continue; // tests + entry demo: fuera
+    // Cuántos niveles hay que subir desde este archivo hasta dist/ (donde vive _core).
+    const up = '../'.repeat(rel.split(path.sep).length + 1); // +1: el propio dir `types/`
+    let src = readFileSync(abs, 'utf8');
+    src = src
+      .replace(/^import '[^']*\.css';\n/gm, '')
+      .replaceAll("'@aldus/core/bake'", `'${up}_core/bake/index.js'`)
+      .replaceAll("'@aldus/core/node'", `'${up}_core/node/index.js'`)
+      .replaceAll("'@aldus/core'", `'${up}_core/index.js'`);
+    const dest = path.join(destRoot, rel);
+    mkdirSync(path.dirname(dest), { recursive: true });
+    writeFileSync(dest, src);
+  }
+
+  // El build MIENTE si esto no se cumple — mejor que reviente acá que en el host.
+  const entry = path.join(destRoot, 'react/lib.d.ts');
+  const entrySrc = readFileSync(entry, 'utf8'); // throws si no existe
+  if (!entrySrc.includes('AldusEditorProps')) throw new Error('types: react/lib.d.ts no re-exporta AldusEditorProps');
+  for (const abs of walk(destRoot)) {
+    const leftover = readFileSync(abs, 'utf8').match(/'@aldus\/[^']*'/);
+    if (leftover) throw new Error(`types: specifier sin reescribir ${leftover[0]} en ${path.relative(destRoot, abs)}`);
+  }
+}
+
+console.log('✓ dist/index.js (+d.ts) + dist/cli.js + dist/server.mjs(+impl) + dist/editor/ (SPA) + dist/editor-lib/ (React, +d.ts)');

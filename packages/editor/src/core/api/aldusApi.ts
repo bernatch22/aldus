@@ -187,7 +187,7 @@ export class AldusApi {
     await readNdjson<AgentWireEvent>(res.body, ev => {
       if (ev.type === 'done') final = { sessionId: ev.sessionId, toolCalls: ev.toolCalls ?? 0, edits: ev.edits ?? [], imageEdits: ev.imageEdits ?? [], reloaded: ev.reloaded };
       else if (ev.type === 'error') failure = new Error(ev.error || 'El agente falló.');
-      else onEvent(ev);
+      else onEvent?.(ev);
     });
     if (failure) throw failure;
     if (!final) throw new Error('El agente no devolvió un resultado.');

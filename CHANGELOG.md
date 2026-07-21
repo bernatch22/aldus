@@ -3,6 +3,35 @@
 Newest first; dates `YYYY-MM-DD`. This file is the source of truth for the notes
 of every GitHub Release.
 
+## 0.6.0 — 2026-07-21 — `aldus/editor` ships its types
+
+### The editor subpath is no longer `any`
+
+`aldus/editor` published a 1.8 MB bundle and **zero** `.d.ts`: in every host,
+`AldusEditor`, `configureAldusApi`, `aldusApi` and `HostBox` were `any` (TS7016).
+That is how the 0.4.0 `agentStream` breaking change (positional → options
+object) sailed through a host's compiler unnoticed — the exact class of bug
+types exist to catch.
+
+The root cause was upstream of packaging: `tsconfig.base.json` never set `jsx`,
+so the React half of the editor **had never been through `tsc` at all**. Turning
+it on surfaced 30 dormant strictness errors (`noUncheckedIndexedAccess` — all
+`lines[i]`-style accesses already guarded by `i < lines.length` one token
+earlier, plus one real find: `agentStream` called its **optional** `onEvent`
+unguarded). All fixed; none changed behaviour.
+
+The build now emits the declaration tree next to the bundle
+(`dist/editor-lib/types/**`), rewrites `@aldus/core*` specifiers to the
+`dist/_core` types that already ship in the package (same trick as the main
+entry), strips CSS side-effect imports, and **fails loudly** if the entry
+`.d.ts` is missing, doesn't re-export `AldusEditorProps`, or any `@aldus/*`
+specifier survives — a package that lies about its types should not build.
+
+Verified with a real consumer probe: a scratch project that installs the
+tarball and compiles `import { AldusEditor } from 'aldus/editor'` under
+`strict` — including two `@ts-expect-error` lines proving that a bad
+`agentStream` mode and the pre-0.4.0 positional call now FAIL to compile.
+
 ## 0.5.1 — 2026-07-21 — the host hears about what the agent did
 
 ### `onAgentApplied`: the embedding host gets told when the agent writes

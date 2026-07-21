@@ -4,6 +4,7 @@ dist/
 .DS_Store
 *.actual
 dist-lib/
+dist-lib-types/
 dist-demo/
 
 # Datos de sesión del server local (uploads/revisiones de prueba, NUNCA código)

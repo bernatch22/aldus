@@ -62,13 +62,15 @@ export function Markdown({ text, caret }: { text: string; caret?: boolean }) {
   let i = 0;
   let key = 0;
 
+  // `lines[i]!`: cada acceso está guardado por `i < lines.length` en la misma
+  // expresión — noUncheckedIndexedAccess no puede verlo, el runtime sí.
   while (i < lines.length) {
-    const line = lines[i];
+    const line = lines[i]!;
 
     if (RE_FENCE.test(line.trim())) {
       const buf: string[] = [];
       i++;
-      while (i < lines.length && !RE_FENCE.test(lines[i].trim())) { buf.push(lines[i]); i++; }
+      while (i < lines.length && !RE_FENCE.test(lines[i]!.trim())) { buf.push(lines[i]!); i++; }
       i++;
       blocks.push(<pre key={key++} className="ai-pre"><code>{buf.join('\n')}</code></pre>);
       continue;
@@ -76,16 +78,16 @@ export function Markdown({ text, caret }: { text: string; caret?: boolean }) {
 
     const h = RE_HEADING.exec(line);
     if (h) {
-      const Tag = (`h${Math.min(h[1].length + 2, 6)}`) as keyof React.JSX.IntrinsicElements;
-      blocks.push(<Tag key={key} className="ai-h">{renderInline(h[2], `h${key++}`)}</Tag>);
+      const Tag = (`h${Math.min(h[1]!.length + 2, 6)}`) as keyof React.JSX.IntrinsicElements;
+      blocks.push(<Tag key={key} className="ai-h">{renderInline(h[2]!, `h${key++}`)}</Tag>);
       i++;
       continue;
     }
 
     if (RE_UL.test(line)) {
       const items: React.ReactNode[] = [];
-      while (i < lines.length && RE_UL.test(lines[i])) {
-        const content = lines[i].replace(RE_UL, '');
+      while (i < lines.length && RE_UL.test(lines[i]!)) {
+        const content = lines[i]!.replace(RE_UL, '');
         items.push(<li key={items.length}>{renderInline(content, `ul${key}-${items.length}`)}</li>);
         i++;
       }
@@ -95,8 +97,8 @@ export function Markdown({ text, caret }: { text: string; caret?: boolean }) {
 
     if (RE_OL.test(line)) {
       const items: React.ReactNode[] = [];
-      while (i < lines.length && RE_OL.test(lines[i])) {
-        const content = lines[i].replace(RE_OL, '');
+      while (i < lines.length && RE_OL.test(lines[i]!)) {
+        const content = lines[i]!.replace(RE_OL, '');
         items.push(<li key={items.length}>{renderInline(content, `ol${key}-${items.length}`)}</li>);
         i++;
       }
@@ -105,13 +107,13 @@ export function Markdown({ text, caret }: { text: string; caret?: boolean }) {
     }
 
     // Tabla GFM: fila de header con pipes seguida de un separador.
-    if (line.includes('|') && i + 1 < lines.length && RE_TABLE_SEP.test(lines[i + 1])) {
+    if (line.includes('|') && i + 1 < lines.length && RE_TABLE_SEP.test(lines[i + 1]!)) {
       const headers = splitRow(line);
-      const aligns = parseAligns(lines[i + 1]);
+      const aligns = parseAligns(lines[i + 1]!);
       i += 2;
       const rows: string[][] = [];
-      while (i < lines.length && lines[i].includes('|') && lines[i].trim() !== '') {
-        rows.push(splitRow(lines[i]));
+      while (i < lines.length && lines[i]!.includes('|') && lines[i]!.trim() !== '') {
+        rows.push(splitRow(lines[i]!));
         i++;
       }
       const tk = key++;
@@ -138,11 +140,11 @@ export function Markdown({ text, caret }: { text: string; caret?: boolean }) {
 
     const para: string[] = [];
     while (
-      i < lines.length && lines[i].trim() !== '' &&
-      !RE_FENCE.test(lines[i].trim()) && !RE_HEADING.test(lines[i]) &&
-      !RE_UL.test(lines[i]) && !RE_OL.test(lines[i])
+      i < lines.length && lines[i]!.trim() !== '' &&
+      !RE_FENCE.test(lines[i]!.trim()) && !RE_HEADING.test(lines[i]!) &&
+      !RE_UL.test(lines[i]!) && !RE_OL.test(lines[i]!)
     ) {
-      para.push(lines[i]);
+      para.push(lines[i]!);
       i++;
     }
     const pk = key++;

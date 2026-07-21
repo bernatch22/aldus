@@ -141,6 +141,11 @@ export interface AldusEditorProps {
   onHostToolPlace?: (toolId: string, at: { page: number; x: number; y: number }) => void;
   /** Bump = recargar el documento del server (el host lo editó por fuera). */
   refreshKey?: number;
+  /** El AGENTE horneó y persistió una versión nueva. El editor ya se recarga
+   *  solo; esto es para el HOST, que casi siempre tiene estado DERIVADO del
+   *  documento y no se enteraría: un e-sign host refresca sus firmantes y sus
+   *  campos, que el agente pudo crear o reasignar en ese mismo turno. */
+  onAgentApplied?: () => void;
 }
 
 /** El paquete de servicios de UNA sesión de documento — construido en orden de
@@ -201,7 +206,7 @@ export function AldusEditor({
   docId, api: apiProp, onExit, brand, agent = true, formTools = true, panelTabs, inspectorTab = true,
   panelTab, onPanelTabChange, panelFooter, headerActions,
   hostBoxes, selectedHostBoxId, onHostBoxSelect, onHostBoxChange, onHostBoxContextMenu,
-  hostTools, onHostToolPlace, refreshKey,
+  hostTools, onHostToolPlace, refreshKey, onAgentApplied,
 }: AldusEditorProps) {
   const id = docId;
   const api = apiProp ?? aldusApi;
@@ -765,7 +770,10 @@ export function AldusEditor({
             edits={view.edits}
             imageEdits={view.imageEdits}
             onApply={(segEdits, imgEdits) => adapter.applyAgentEdits(segEdits, imgEdits)}
-            onReload={() => { adapter.clearAll(); setSelectedId(null); setDocVersion(v => v + 1); }}
+            onReload={() => {
+              adapter.clearAll(); setSelectedId(null); setDocVersion(v => v + 1);
+              onAgentApplied?.();
+            }}
             onClose={() => setAiOpen(false)}
           />
         )}

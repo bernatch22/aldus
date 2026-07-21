@@ -3,6 +3,28 @@
 Newest first; dates `YYYY-MM-DD`. This file is the source of truth for the notes
 of every GitHub Release.
 
+## 0.5.1 — 2026-07-21 — the host hears about what the agent did
+
+### `onAgentApplied`: the embedding host gets told when the agent writes
+
+When the agent bakes and persists, the editor reloads itself — but the **host**
+never heard about it. That is fine for a host whose only state is the PDF, and
+wrong for every real one: an e-sign host keeps signers and fields alongside the
+document, and a single edit turn can create fields, assign them to a party, or
+add a signer. The host kept showing the state from before the turn until
+something else happened to refresh it.
+
+`<AldusEditor onAgentApplied={() => …}>` fires right after the internal reload.
+No behaviour changes without it — hosts that don't pass it are unaffected.
+
+It is a callback and not a `refreshKey`-style bump because the host already owns
+`refreshKey` for the opposite direction (host edited → tell the editor); reusing
+one channel for both would make "who reloads whom" ambiguous.
+
+Not unit-tested: rendering `AldusEditor` needs pdf.js, a canvas and a live API,
+and standing that up to assert a one-line pass-through would test the harness,
+not the code. It is covered where it actually matters — the host that consumes it.
+
 ## 0.5.0 — 2026-07-20 — a transport that can force a tool
 
 ### The transport can force a tool, and lift its output cap

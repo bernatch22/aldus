@@ -3,6 +3,20 @@
 Newest first; dates `YYYY-MM-DD`. This file is the source of truth for the notes
 of every GitHub Release.
 
+## 0.6.1 — 2026-07-21 — the agent wears the host's name
+
+### `agentBrand`: the panel stops saying CASPER inside someone else's product
+
+The panel header hardcoded **CASPER** — right for the standalone editor, wrong
+inside an embedding host: the host already has a name for its assistant
+(signwax calls it *Wax AI*), and a second brand inside the same screen reads as
+somebody else's software bolted on. `<AldusEditor agentBrand={…}>` names the
+agent; default stays CASPER.
+
+(Meant to ride in 0.6.0, but that version was published to npm minutes before
+the prop landed — npm versions are immutable, so it ships one patch later. The
+`v0.6.0` git tag was moved back to match the published artifact exactly.)
+
 ## 0.6.0 — 2026-07-21 — `aldus/editor` ships its types
 
 ### The editor subpath is no longer `any`
@@ -31,14 +45,6 @@ Verified with a real consumer probe: a scratch project that installs the
 tarball and compiles `import { AldusEditor } from 'aldus/editor'` under
 `strict` — including two `@ts-expect-error` lines proving that a bad
 `agentStream` mode and the pre-0.4.0 positional call now FAIL to compile.
-
-### The agent wears the host's name
-
-The panel header hardcoded **CASPER** — right for the standalone editor, wrong
-inside someone else's product: an embedding host already has a name for its
-assistant (signwax calls it *Wax AI*), and a second brand inside the same
-screen reads as somebody else's software bolted on.
-`<AldusEditor agentBrand={…}>` names the agent; default stays CASPER.
 
 ## 0.5.1 — 2026-07-21 — the host hears about what the agent did
 

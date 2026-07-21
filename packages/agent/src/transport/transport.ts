@@ -53,6 +53,16 @@ export interface PassRequest {
    *  loop de function-calling hasta que no queden tools (fase EDITOR). El SDK
    *  lo ignora (query() loopea solo); el OpenRouter lo respeta. */
   loop: boolean;
+  /** FORZAR una tool concreta (por nombre) en vez de dejar elegir al modelo.
+   *  Para las pasadas de "extracción estructurada": el llamador no quiere una
+   *  respuesta en prosa, quiere el objeto — sin esto el modelo puede contestar
+   *  texto y el parseo aguas abajo se queda sin nada. Ausente = `'auto'`.
+   *  OpenRouter: `tool_choice: {type:'function', function:{name}}`. */
+  toolChoice?: string;
+  /** Tope de tokens de SALIDA. Default 8192 — alcanza de sobra para un turno de
+   *  tool calls + reporte, y mantiene chica la reserva de crédito que OpenRouter
+   *  hace por request. Subirlo solo para generación larga (un contrato entero). */
+  maxOutputTokens?: number;
   /** Handle OPACO de una pasada previa (misma conversación): el SDK lo mapea a
    *  su session resume; el OpenRouter a su array de mensajes acumulado. El
    *  orquestador NUNCA lo inspecciona — lo re-pasa tal cual a la pasada correctiva. */

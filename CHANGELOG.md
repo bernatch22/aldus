@@ -3,7 +3,24 @@
 Newest first; dates `YYYY-MM-DD`. This file is the source of truth for the notes
 of every GitHub Release.
 
-## Unreleased
+## 0.5.0 — 2026-07-20 — a transport that can force a tool
+
+### The transport can force a tool, and lift its output cap
+
+Two optional fields on `PassRequest`, both aimed at hosts that use the transport
+for something other than the agent loop:
+
+- **`toolChoice`** — force one named tool instead of letting the model pick. A
+  caller doing *structured extraction* doesn't want prose, it wants the object;
+  without this the model is free to answer in text and the parse downstream gets
+  nothing. It is sent **only on the first pass**: keep forcing it and the model
+  calls the same tool until the turn runs out of budget. Never sent when there
+  are no tools — the endpoint rejects a `tool_choice` it cannot satisfy.
+- **`maxOutputTokens`** — raise the 8192 default for long generation (a whole
+  contract). The cap exists because OpenRouter *reserves* credit against it.
+
+`ClaudeSdkTransport` ignores both, and says so: it runs the agentic loop inside
+the SDK and exposes neither knob per pass.
 
 ### The editor edits the pages *you* choose
 

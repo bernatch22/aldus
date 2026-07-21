@@ -55,6 +55,9 @@ export class OpenRouterTransport implements ILlmTransport {
     agent: AgentRole,
     onEvent: ((ev: AgentEvent) => void) | undefined,
     ct: CancellationToken,
+    /** Knobs por-request de {@link PassRequest} (tool forzada / tope de salida).
+     *  Van en un objeto: la firma ya tenía seis posicionales. */
+    opts: { toolChoice?: string; maxOutputTokens?: number } = {},
   ): Promise<{ content: string; toolCalls: ToolCall[] }> {
     const abort = new AbortController();
     const sub = ct.onCancellationRequested(() => abort.abort());
@@ -73,7 +76,12 @@ export class OpenRouterTransport implements ILlmTransport {
           model,
           messages: withSystemCache(messages, model),
           tools,
-          tool_choice: 'auto',
+          // Tool FORZADA cuando el llamador la pide (extracción estructurada:
+          // quiere el objeto, no prosa). Sin tools no se manda nunca — el
+          // endpoint rechaza un tool_choice que no puede satisfacer.
+          tool_choice: tools.length && opts.toolChoice
+            ? { type: 'function', function: { name: opts.toolChoice } }
+            : 'auto',
           stream: true,
           // Contabilidad REAL: el último chunk del stream trae usage con el
           // COSTO en USD de este request — se loguea (gateado) para que "cuánto
@@ -90,8 +98,9 @@ export class OpenRouterTransport implements ILlmTransport {
           // Cap explícito: sin esto OpenRouter RESERVA el máximo de output del
           // modelo (Sonnet = 64k) para el chequeo de crédito y devuelve 402 aunque
           // el turno emita 200 tokens. Un turno (tool calls + reporte corto) nunca
-          // se acerca a 8k — y el chequeo de crédito pasa holgado.
-          max_tokens: 8192,
+          // se acerca a 8k — y el chequeo de crédito pasa holgado. El llamador lo
+          // sube solo para generación larga (un contrato entero).
+          max_tokens: opts.maxOutputTokens ?? 8192,
           // Sesgo a proveedores de alta throughput — OpenRouter a veces rutea a
           // un backend encolado (primera llamada de minutos); esto lo evita.
           provider: { sort: 'throughput' },
@@ -109,7 +118,7 @@ export class OpenRouterTransport implements ILlmTransport {
       if (res.status === 400 && /reasoning is mandatory/i.test(body) && !REASONING_MANDATORY.has(model)) {
         REASONING_MANDATORY.add(model);
         log(`${model} exige reasoning → reintento sin la flag (y no la vuelvo a mandar para este modelo)`);
-        return this.streamCompletion(model, messages, tools, agent, onEvent, ct);
+        return this.streamCompletion(model, messages, tools, agent, onEvent, ct, opts);
       }
       throw new Error(`OpenRouter ${res.status}: ${body.slice(0, 300)}`);
     }
@@ -181,7 +190,12 @@ export class OpenRouterTransport implements ILlmTransport {
 
     for (let turn = 0; turn < maxTurns; turn++) {
       const t0 = Date.now();
-      const { content, toolCalls: calls } = await this.streamCompletion(req.model, messages, tools, req.role, req.onEvent, ct);
+      const { content, toolCalls: calls } = await this.streamCompletion(
+        req.model, messages, tools, req.role, req.onEvent, ct,
+        // La tool forzada solo en la PRIMERA pasada: una vez que el modelo la
+        // llamó, seguir forzándola lo haría llamarla en loop hasta agotar turnos.
+        { toolChoice: turn === 0 ? req.toolChoice : undefined, maxOutputTokens: req.maxOutputTokens },
+      );
       log(`pasada ${turn + 1}/${maxTurns} (${req.role}): ${Date.now() - t0}ms · ${content.length} chars · ${calls.length} tool_call/s`);
       text += content;
       if (!calls.length) break; // el modelo terminó (sin tools)
@@ -208,7 +222,11 @@ export class OpenRouterTransport implements ILlmTransport {
       log(`turno terminó MUDO tras ${toolCalls} tool/s → pasada final forzada sin tools`);
       messages.push({ role: 'user', content: 'Respondé AHORA al pedido original con lo que ya averiguaste con las tools (si no encontraste algo, decilo). Solo texto — no llames más tools.' });
       const t0 = Date.now();
-      const { content } = await this.streamCompletion(req.model, messages, [], req.role, req.onEvent, ct);
+      // Sin tools: nada de tool_choice (el endpoint lo rechazaría).
+      const { content } = await this.streamCompletion(
+        req.model, messages, [], req.role, req.onEvent, ct,
+        { maxOutputTokens: req.maxOutputTokens },
+      );
       log(`pasada final: ${Date.now() - t0}ms · ${content.length} chars`);
       text += content;
     }

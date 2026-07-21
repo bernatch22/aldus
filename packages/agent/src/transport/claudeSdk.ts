@@ -55,6 +55,10 @@ export class ClaudeSdkTransport implements ILlmTransport {
               ? { behavior: 'allow', updatedInput: input }
               : { behavior: 'deny', message: 'Aldus solo permite sus propias tools de edición.' },
           maxTurns: req.maxTurns,
+          // `req.toolChoice` / `req.maxOutputTokens` NO se propagan: el SDK corre
+          // el loop agéntico entero adentro y no expone ni el tool_choice ni el
+          // max_tokens de cada pasada. Los consumen los llamadores que van por
+          // OpenRouter (el único transporte con extracción estructurada).
           abortController: abort,
           ...(typeof req.resume === 'string' ? { resume: req.resume } : {}),
         },

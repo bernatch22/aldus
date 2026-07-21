@@ -112,6 +112,9 @@ export interface AldusEditorProps {
   brand?: ReactNode;
   /** Botón/panel del agente LLM (default true). */
   agent?: boolean;
+  /** Nombre del agente en el header del panel — el host embebedor le pone su
+   *  marca ("Wax AI" en signwax). Default: CASPER. */
+  agentBrand?: ReactNode;
   /** Grupo de herramientas de CAMPOS del rail (default true — un e-sign host
    *  coloca campos con su propia semántica de firmantes y lo apaga). */
   formTools?: boolean;
@@ -203,7 +206,7 @@ export function configureAldusApi(opts: { apiBase: string }): void {
  * El EDITOR como componente. Router-free: el host provee docId/salida.
  */
 export function AldusEditor({
-  docId, api: apiProp, onExit, brand, agent = true, formTools = true, panelTabs, inspectorTab = true,
+  docId, api: apiProp, onExit, brand, agent = true, agentBrand, formTools = true, panelTabs, inspectorTab = true,
   panelTab, onPanelTabChange, panelFooter, headerActions,
   hostBoxes, selectedHostBoxId, onHostBoxSelect, onHostBoxChange, onHostBoxContextMenu,
   hostTools, onHostToolPlace, refreshKey, onAgentApplied,
@@ -764,6 +767,7 @@ export function AldusEditor({
         {agent && aiOpen && adapter && (
           <AgentPanel
             api={api}
+            agentBrand={agentBrand}
             docId={id}
             page={pageNum}
             numPages={numPages}

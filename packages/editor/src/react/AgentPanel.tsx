@@ -19,7 +19,7 @@
  * ediciones al terminar — aunque te vayas a la pestaña del reader, y ninguna de
  * las dos conversaciones se pierde al cambiar de tab.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Sparkles, Send, X, Square, BookOpen, PenLine } from 'lucide-react';
 import { createLogger, type ImageEdit, type SegmentEdit } from '@aldus/core';
 import type { AgentMode, AgentRole, AldusApi } from '../core/index.js';
@@ -131,6 +131,9 @@ interface Props {
    *  documento desde el server (descarta el estado local, ya horneado). */
   onReload: () => void;
   onClose: () => void;
+  /** Nombre del agente en el header — el HOST le pone el suyo ("Wax AI" en
+   *  signwax). Default: CASPER, la marca del editor standalone. */
+  agentBrand?: ReactNode;
 }
 
 /** Qué le ofrece cada pestaña al usuario. La copia importa: el reader NO puede
@@ -176,7 +179,7 @@ const MODES: Record<AgentMode, {
   },
 };
 
-export function AgentPanel({ api, docId, page, numPages, edits, imageEdits, onApply, onReload, onClose }: Props) {
+export function AgentPanel({ api, docId, page, numPages, edits, imageEdits, onApply, onReload, onClose, agentBrand }: Props) {
   const [mode, setMode] = useState<AgentMode>('reader');
 
   return (
@@ -187,7 +190,7 @@ export function AgentPanel({ api, docId, page, numPages, edits, imageEdits, onAp
       </style>
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-3">
         <Sparkles size={16} className="text-blue-600" />
-        <span className="text-[13px] font-semibold tracking-wide text-neutral-900">CASPER</span>
+        <span className="text-[13px] font-semibold tracking-wide text-neutral-900">{agentBrand ?? 'CASPER'}</span>
         <span className="text-[11px] text-neutral-400">· {MODES[mode].hint}</span>
         <div className="flex-1" />
         <button onClick={onClose} title="Cerrar" className="grid h-7 w-7 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100">

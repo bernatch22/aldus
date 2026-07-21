@@ -32,6 +32,14 @@ tarball and compiles `import { AldusEditor } from 'aldus/editor'` under
 `strict` — including two `@ts-expect-error` lines proving that a bad
 `agentStream` mode and the pre-0.4.0 positional call now FAIL to compile.
 
+### The agent wears the host's name
+
+The panel header hardcoded **CASPER** — right for the standalone editor, wrong
+inside someone else's product: an embedding host already has a name for its
+assistant (signwax calls it *Wax AI*), and a second brand inside the same
+screen reads as somebody else's software bolted on.
+`<AldusEditor agentBrand={…}>` names the agent; default stays CASPER.
+
 ## 0.5.1 — 2026-07-21 — the host hears about what the agent did
 
 ### `onAgentApplied`: the embedding host gets told when the agent writes
